@@ -454,6 +454,7 @@ function openTaskModal(task, defaultDate) {
 
   document.getElementById('task-modal').classList.remove('hidden');
   document.getElementById('task-title').focus();
+  refreshTeamDatalist();
   maybeShowCalDavCheckbox(task);
 }
 

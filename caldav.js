@@ -48,47 +48,89 @@ function httpRequest({ method, url: href, username, password, extraHeaders = {},
 // ─── CalDAV discovery ─────────────────────────────────────────────────────────
 
 /**
- * Given a server host (e.g. "dav.strato.de") and credentials,
- * return the URL of the user's default calendar collection.
+ * Given a server host and credentials, return the URL of the user's calendar collection.
+ * Tries multiple strategies so it works with Strato, iCloud, Google, etc.
  */
 async function discoverCalendarUrl({ serverHost, username, password }) {
-  const base = `https://${serverHost}`;
+  const base   = `https://${serverHost}`;
+  const encUser = encodeURIComponent(username); // info%40vonkenvorm.com
+  const log = [];
 
-  // 1. Try well-known autodiscovery → principal → calendar-home
-  try {
-    const wellKnown = `${base}/.well-known/caldav`;
-    const redir = await httpRequest({ method: 'PROPFIND', url: wellKnown, username, password, body: PROPFIND_PRINCIPAL });
-    if (redir.status === 301 || redir.status === 302 || redir.status === 207) {
-      const principal = redir.headers.location || wellKnown;
-      const home = await getPrincipalHomeUrl(principal, username, password);
-      if (home) return await firstCalendarCollection(home, username, password);
-    }
-  } catch (_) {}
-
-  // 2. Try Strato-style /principals/{user}
-  try {
-    const principalUrl = `${base}/principals/${encodeURIComponent(username)}/`;
-    const home = await getPrincipalHomeUrl(principalUrl, username, password);
-    if (home) return await firstCalendarCollection(home, username, password) || home;
-  } catch (_) {}
-
-  // 3. Try common Strato CalDAV path patterns
-  const candidates = [
-    `${base}/caldav/v2/${encodeURIComponent(username)}/calendar/`,
-    `${base}/caldav/${encodeURIComponent(username)}/calendar/`,
-    `${base}/${encodeURIComponent(username)}/`,
+  // ── Strategy 1: direct known URL patterns (Strato SabreDAV) ──────────────
+  // Try BOTH literal @ and encoded @ because Strato accepts either.
+  const directCandidates = [
+    `${base}/caldav/v2/${username}/calendar/`,
+    `${base}/caldav/v2/${encUser}/calendar/`,
+    `${base}/caldav/v2/${username}/`,
+    `${base}/calendars/${username}/`,
+    `${base}/calendars/${encUser}/`,
   ];
-  for (const url of candidates) {
+
+  for (const url of directCandidates) {
     try {
-      const r = await httpRequest({ method: 'PROPFIND', url, username, password, extraHeaders: { Depth: '0' }, body: PROPFIND_PRINCIPAL });
-      if (r.status === 207 || r.status === 200) return url;
-    } catch (_) {}
+      const r = await httpRequest({
+        method: 'PROPFIND', url, username, password,
+        extraHeaders: { Depth: '0' },
+        body: PROPFIND_RESOURCETYPE,
+      });
+      console.log(`[CalDAV] PROPFIND ${url} → ${r.status}`);
+      if (r.status === 207) return url;
+      if (r.status === 401) throw new Error('Authenticatie mislukt (401). Controleer gebruikersnaam en wachtwoord.');
+    } catch (e) {
+      if (e.message.includes('401')) throw e;
+      log.push(`${url}: ${e.message}`);
+    }
   }
 
-  throw new Error(`Kon geen kalender vinden op ${serverHost}. Controleer de instellingen.`);
+  // ── Strategy 2: well-known with redirect following ────────────────────────
+  try {
+    let url = `${base}/.well-known/caldav`;
+    for (let hop = 0; hop < 5; hop++) {
+      const r = await httpRequest({
+        method: 'PROPFIND', url, username, password,
+        extraHeaders: { Depth: '0' },
+        body: PROPFIND_RESOURCETYPE,
+      });
+      console.log(`[CalDAV] well-known hop ${hop}: ${url} → ${r.status}`);
+      if (r.status === 207) { url = await resolveToCalendar(url, r.body, username, password); return url; }
+      if (r.status === 301 || r.status === 302 || r.status === 308) {
+        const loc = r.headers.location;
+        if (!loc) break;
+        url = loc.startsWith('http') ? loc : new URL(loc, base).href;
+      } else { break; }
+    }
+  } catch (e) { log.push(`well-known: ${e.message}`); }
+
+  // ── Strategy 3: principal discovery ──────────────────────────────────────
+  const principalCandidates = [
+    `${base}/principals/${username}/`,
+    `${base}/principals/${encUser}/`,
+    `${base}/principals/users/${username}/`,
+    `${base}/principals/users/${encUser}/`,
+  ];
+
+  for (const pUrl of principalCandidates) {
+    try {
+      const calHome = await getCalendarHomeFromPrincipal(pUrl, username, password, base);
+      if (calHome) {
+        console.log(`[CalDAV] calendar-home-set: ${calHome}`);
+        return calHome;
+      }
+    } catch (e) { log.push(`${pUrl}: ${e.message}`); }
+  }
+
+  throw new Error(
+    `Kon geen kalender vinden op ${serverHost}.\n` +
+    `Open DevTools (Ctrl+Shift+I) voor details.\n` +
+    log.slice(0, 3).join('\n')
+  );
 }
 
-async function getPrincipalHomeUrl(principalUrl, username, password) {
+/**
+ * PROPFIND a principal URL and extract the calendar-home-set href.
+ * Bug fix: extract href from INSIDE <calendar-home-set>, not the first href overall.
+ */
+async function getCalendarHomeFromPrincipal(principalUrl, username, password, base) {
   const res = await httpRequest({
     method: 'PROPFIND', url: principalUrl, username, password,
     extraHeaders: { Depth: '0' },
@@ -97,45 +139,66 @@ async function getPrincipalHomeUrl(principalUrl, username, password) {
   <D:prop><C:calendar-home-set/></D:prop>
 </D:propfind>`,
   });
-  const href = xmlText(res.body, 'href');
+  console.log(`[CalDAV] principal ${principalUrl} → ${res.status}`);
+  if (res.status !== 207) return null;
+
+  // Extract href specifically from inside <calendar-home-set> — not the first href in the doc
+  const calHomeBlock = /<[^:>]*:?calendar-home-set[^>]*>([\s\S]*?)<\/[^:>]*:?calendar-home-set>/i.exec(res.body);
+  if (!calHomeBlock) return null;
+  const href = xmlText(calHomeBlock[1], 'href');
   if (!href) return null;
-  const u = new URL(principalUrl);
+
+  const u = new URL(base);
   return href.startsWith('http') ? href : `${u.protocol}//${u.host}${href}`;
+}
+
+/**
+ * When we got a 207 from a non-collection URL, resolve it to the actual calendar.
+ */
+async function resolveToCalendar(url, body, username, password) {
+  // If the response contains a calendar-home-set, follow it
+  const calHomeBlock = /<[^:>]*:?calendar-home-set[^>]*>([\s\S]*?)<\/[^:>]*:?calendar-home-set>/i.exec(body);
+  if (calHomeBlock) {
+    const href = xmlText(calHomeBlock[1], 'href');
+    if (href) {
+      const u = new URL(url);
+      const homeUrl = href.startsWith('http') ? href : `${u.protocol}//${u.host}${href}`;
+      return await firstCalendarCollection(homeUrl, username, password) || homeUrl;
+    }
+  }
+  return url;
 }
 
 async function firstCalendarCollection(homeUrl, username, password) {
   const res = await httpRequest({
     method: 'PROPFIND', url: homeUrl, username, password,
     extraHeaders: { Depth: '1' },
-    body: `<?xml version="1.0" encoding="utf-8"?>
-<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
-  <D:prop><D:resourcetype/><D:displayname/></D:prop>
-</D:propfind>`,
+    body: PROPFIND_RESOURCETYPE,
   });
+  if (res.status !== 207) return homeUrl;
 
-  // Find first href that is a calendar collection (not the home itself)
-  const hrefRe = /<[^:>]*:?href[^>]*>([^<]+)<\/[^:>]*:?href>/gi;
-  const calendarRe = /calendar(?!-home)/i;
-  const responses = res.body.split(/<[^:>]*:?response[^>]*>/i).slice(1);
+  // Split into response blocks; find first one with calendar resourcetype that isn't the home itself
+  const blocks = res.body.split(/<[^:>]*:?response[^>]*>/i).slice(1);
+  const homeU = new URL(homeUrl);
 
-  for (const block of responses) {
+  for (const block of blocks) {
+    if (!block.includes('calendar')) continue;  // fast skip
     const hm = /<[^:>]*:?href[^>]*>([^<]+)<\/[^:>]*:?href>/i.exec(block);
     if (!hm) continue;
     const href = hm[1].trim();
-    // Skip the home collection itself
-    const homeU = new URL(homeUrl);
-    if (href === homeU.pathname || href === homeUrl) continue;
-    // Must contain calendar resource type OR look like a calendar path
-    if (block.includes('calendar') || calendarRe.test(href)) {
-      const u = new URL(homeUrl);
-      return href.startsWith('http') ? href : `${u.protocol}//${u.host}${href}`;
-    }
+    if (href === homeU.pathname || href === homeUrl) continue; // skip home itself
+    const absUrl = href.startsWith('http') ? href : `${homeU.protocol}//${homeU.host}${href}`;
+    console.log(`[CalDAV] Found calendar collection: ${absUrl}`);
+    return absUrl;
   }
-  return homeUrl; // fall back to home
+  return homeUrl;
 }
 
 const PROPFIND_PRINCIPAL = `<?xml version="1.0" encoding="utf-8"?>
 <D:propfind xmlns:D="DAV:"><D:prop><D:current-user-principal/></D:prop></D:propfind>`;
+
+const PROPFIND_RESOURCETYPE = `<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/><D:displayname/></D:prop></D:propfind>`;
 
 // ─── Fetch events (CalDAV REPORT) ─────────────────────────────────────────────
 
@@ -161,12 +224,30 @@ async function fetchEvents({ calendarUrl, username, password, monthsBack = 1, mo
 
   const res = await httpRequest({
     method: 'REPORT', url: calendarUrl, username, password,
-    extraHeaders: { Depth: '1', Prefer: 'return-minimal' },
+    extraHeaders: { Depth: '1' },
     body,
   });
 
-  if (res.status !== 207) throw new Error(`CalDAV REPORT mislukt: HTTP ${res.status}`);
-  return parseMultiStatus(res.body);
+  console.log(`[CalDAV] REPORT ${calendarUrl} → ${res.status}`);
+  if (res.status === 207) return parseMultiStatus(res.body);
+
+  // Some servers need the calendar URL without trailing slash, or need different depth
+  if (res.status === 400 || res.status === 403 || res.status === 501) {
+    // Fall back: fetch all events without time-range filter
+    const bodyAll = `<?xml version="1.0" encoding="utf-8"?>
+<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <D:prop><D:getetag/><C:calendar-data/></D:prop>
+  <C:filter><C:comp-filter name="VCALENDAR"><C:comp-filter name="VEVENT"/></C:comp-filter></C:filter>
+</C:calendar-query>`;
+    const res2 = await httpRequest({
+      method: 'REPORT', url: calendarUrl, username, password,
+      extraHeaders: { Depth: '1' }, body: bodyAll,
+    });
+    console.log(`[CalDAV] REPORT (no time-range) → ${res2.status}`);
+    if (res2.status === 207) return parseMultiStatus(res2.body);
+  }
+
+  throw new Error(`CalDAV REPORT mislukt: HTTP ${res.status}. URL: ${calendarUrl}`);
 }
 
 // ─── Push event (CalDAV PUT) ──────────────────────────────────────────────────
