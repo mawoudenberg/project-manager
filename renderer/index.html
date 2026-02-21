@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Project Manager</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ─── Setup Wizard ──────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="wizard-overlay">
+  <div class="modal wide">
+    <div class="wizard-logo">📋</div>
+    <div class="wizard-steps-indicator">
+      <div class="step-dot done" id="dot-0"></div>
+      <div class="step-dot" id="dot-1"></div>
+      <div class="step-dot" id="dot-2"></div>
+    </div>
+
+    <!-- Step 0: Welcome -->
+    <div class="wizard-step active" id="step-0">
+      <h2 style="text-align:center">Welcome to Project Manager</h2>
+      <p class="wizard-subtitle">Shared task management for your team. Let's get you set up.</p>
+      <div class="form-group">
+        <label>Your name</label>
+        <input type="text" id="wiz-name" placeholder="e.g. Maurits" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="wiz-next-0">Next →</button>
+      </div>
+    </div>
+
+    <!-- Step 1: Database location -->
+    <div class="wizard-step" id="step-1">
+      <h2>Choose database location</h2>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:18px">
+        Point to a shared folder everyone has access to — for example your Google Drive folder.
+        The app will create <strong>project-manager.db</strong> there.
+      </p>
+      <div class="form-group">
+        <label>Shared folder</label>
+        <div style="display:flex;gap:8px">
+          <div class="path-display" id="wiz-path-display" style="flex:1">No folder selected</div>
+          <button class="btn btn-secondary" id="wiz-pick-folder">Browse…</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="wiz-back-1">← Back</button>
+        <button class="btn btn-primary" id="wiz-next-1">Next →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Done -->
+    <div class="wizard-step" id="step-2">
+      <h2 style="text-align:center">You're all set! 🎉</h2>
+      <p style="color:var(--text2);font-size:13px;text-align:center;margin-bottom:18px">
+        Share the same folder path with your team. Each person runs this app and selects the same shared folder.
+      </p>
+      <div class="path-display" id="wiz-final-path" style="margin-bottom:20px"></div>
+      <div class="modal-actions" style="justify-content:center">
+        <button class="btn btn-primary" id="wiz-finish">Start using Project Manager</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Task Modal ─────────────────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="task-modal">
+  <div class="modal">
+    <h2 id="task-modal-title">Add Task</h2>
+    <div class="form-group">
+      <label>Title *</label>
+      <input type="text" id="task-title" placeholder="Task title" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <textarea id="task-desc" placeholder="Optional details…"></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Date</label>
+        <input type="date" id="task-date" />
+      </div>
+      <div class="form-group">
+        <label>Assigned to</label>
+        <input type="text" id="task-assigned" placeholder="Name" list="team-datalist" autocomplete="off" />
+        <datalist id="team-datalist"></datalist>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Status</label>
+        <select id="task-status">
+          <option value="pending">Pending</option>
+          <option value="in_progress">In Progress</option>
+          <option value="done">Done</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Priority</label>
+        <select id="task-priority">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Color</label>
+      <div class="color-swatches" id="task-color-swatches"></div>
+    </div>
+    <div class="form-group hidden" id="task-caldav-group">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
+        <input type="checkbox" id="task-caldav-push" style="accent-color:var(--accent)">
+        📅 Ook toevoegen aan kalender
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="task-cancel">Cancel</button>
+      <button class="btn btn-danger hidden" id="task-delete">Delete</button>
+      <button class="btn btn-primary" id="task-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Todo List Modal ────────────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="list-modal">
+  <div class="modal">
+    <h2 id="list-modal-title">New List</h2>
+    <div class="form-group">
+      <label>List name *</label>
+      <input type="text" id="list-name" placeholder="e.g. Sprint 1" />
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input type="text" id="list-desc" placeholder="Optional" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="list-cancel">Cancel</button>
+      <button class="btn btn-danger hidden" id="list-delete">Delete List</button>
+      <button class="btn btn-primary" id="list-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Team Members Modal ─────────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="team-modal">
+  <div class="modal wide">
+    <h2>Team beheren</h2>
+    <div id="team-list" style="margin-bottom:18px"></div>
+    <div style="display:flex;gap:8px;align-items:flex-end">
+      <div class="form-group" style="flex:1;margin:0">
+        <label>Naam</label>
+        <input type="text" id="new-member-name" placeholder="Naam teamlid" />
+      </div>
+      <div class="form-group" style="flex:1;margin:0">
+        <label>E-mail (optioneel)</label>
+        <input type="email" id="new-member-email" placeholder="naam@vonkenvorm.com" />
+      </div>
+      <button class="btn btn-primary" id="add-member-btn">Toevoegen</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="team-close">Sluiten</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Settings Modal ────────────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="settings-modal">
+  <div class="modal wide">
+    <h2>Settings</h2>
+    <div class="settings-section">
+      <h3>Your profile</h3>
+      <div class="form-group">
+        <label>Your name</label>
+        <input type="text" id="cfg-name" placeholder="Name" />
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>Database mode</h3>
+      <div class="radio-group">
+        <label class="radio-card selected" id="radio-file">
+          <input type="radio" name="mode" value="file" checked />
+          <div>
+            <div style="font-weight:600">📁 File (Google Drive)</div>
+            <div style="font-size:11px;color:var(--text2)">SQLite on shared folder</div>
+          </div>
+        </label>
+        <label class="radio-card" id="radio-api">
+          <input type="radio" name="mode" value="api" />
+          <div>
+            <div style="font-weight:600">🍓 API (Raspberry Pi)</div>
+            <div style="font-size:11px;color:var(--text2)">REST server mode</div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="settings-section" id="cfg-file-section">
+      <h3>Shared folder</h3>
+      <div style="display:flex;gap:8px">
+        <div class="path-display" id="cfg-path-display" style="flex:1">Not set</div>
+        <button class="btn btn-secondary" id="cfg-pick-folder">Browse…</button>
+      </div>
+    </div>
+    <div class="settings-section hidden" id="cfg-api-section">
+      <h3>Raspberry Pi URL</h3>
+      <div class="form-group">
+        <input type="text" id="cfg-api-url" placeholder="http://raspberrypi.local:5000" />
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>Agenda synchronisatie (CalDAV)</h3>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
+          <input type="checkbox" id="cfg-caldav-enabled" style="accent-color:var(--accent);width:16px;height:16px">
+          Synchroniseer kalender automatisch (elke 10 min)
+        </label>
+      </div>
+      <div id="cfg-caldav-fields">
+        <div class="form-row">
+          <div class="form-group">
+            <label>CalDAV server</label>
+            <input type="text" id="cfg-caldav-host" placeholder="dav.strato.de" />
+          </div>
+          <div class="form-group">
+            <label>Gebruikersnaam</label>
+            <input type="email" id="cfg-caldav-user" placeholder="info@vonkenvorm.com" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Wachtwoord <span style="color:var(--text2);font-weight:400">(veilig opgeslagen in macOS Sleutelhanger)</span></label>
+          <input type="password" id="cfg-caldav-pass" placeholder="Laat leeg om huidig wachtwoord te behouden" autocomplete="new-password" />
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
+            <input type="checkbox" id="cfg-caldav-push-default" style="accent-color:var(--accent)">
+            Standaard: nieuwe taken ook naar kalender sturen
+          </label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="btn btn-ghost btn-sm" id="cfg-caldav-test">Verbinding testen</button>
+          <button class="btn btn-ghost btn-sm" id="cfg-caldav-sync-now">Nu synchroniseren</button>
+        </div>
+        <div id="cfg-caldav-status" style="font-size:12px;margin-top:8px;min-height:18px"></div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="settings-cancel">Cancel</button>
+      <button class="btn btn-primary" id="settings-save">Save settings</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Main App Shell ─────────────────────────────────────────────────────── -->
+<div id="app" style="display:none">
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div id="sidebar-header">
+      <h1>Project Manager</h1>
+      <div id="sidebar-user"></div>
+    </div>
+    <div id="nav">
+      <button class="nav-btn active" data-view="monthly">
+        <span class="icon">📅</span><span>Monthly</span>
+      </button>
+      <button class="nav-btn" data-view="weekly">
+        <span class="icon">📆</span><span>Weekly</span>
+      </button>
+      <button class="nav-btn" data-view="daily">
+        <span class="icon">☀️</span><span>Daily</span>
+      </button>
+      <button class="nav-btn" data-view="todo">
+        <span class="icon">✅</span><span>Todo Lists</span>
+      </button>
+      <button class="nav-btn" data-view="quotes">
+        <span class="icon">💶</span><span>Offertes</span>
+      </button>
+      <button class="nav-btn" id="team-btn">
+        <span class="icon">👥</span><span>Team</span>
+      </button>
+    </div>
+    <div id="sidebar-footer">
+      <div id="sync-status-pill" class="hidden"></div>
+      <button class="nav-btn" id="refresh-btn">
+        <span class="icon">🔄</span><span>Refresh</span>
+      </button>
+      <button class="nav-btn" id="settings-btn">
+        <span class="icon">⚙️</span><span>Settings</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Main area -->
+  <div id="main">
+    <div id="toolbar">
+      <h2 id="toolbar-title">Monthly View</h2>
+      <div id="toolbar-controls"></div>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

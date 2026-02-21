@@ -1,0 +1,44 @@
+{
+  "name": "project-manager",
+  "version": "1.0.0",
+  "description": "Shared project management app for teams",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:all": "electron-builder --mac --win",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.maurits.project-manager",
+    "productName": "Project Manager",
+    "icon": "assets/icon",
+    "files": [
+      "main.js",
+      "preload.js",
+      "db.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3"
+  },
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3"
+  }
+}
