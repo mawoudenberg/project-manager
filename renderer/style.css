@@ -660,6 +660,40 @@ tr:hover .qi-del { opacity: 1; }
 .team-member-row:hover .team-member-delete { opacity: 1; }
 .team-member-delete:hover { color: var(--red); }
 
+/* ─── Multi-assignee picker ────────────────────────────────────────────────── */
+#assignee-picker { display: flex; flex-direction: column; gap: 6px; }
+#assignee-picker #assignee-custom-input { width: 100%; box-sizing: border-box; }
+
+.assignee-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.assignee-pill {
+  padding: 4px 12px;
+  border-radius: 99px;
+  border: 1.5px solid var(--border);
+  background: var(--surface2);
+  color: var(--text1);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.assignee-pill:hover { border-color: var(--accent); color: var(--accent); }
+.assignee-pill.selected { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.assignee-custom-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.assignee-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: var(--surface3, var(--surface2));
+  border: 1.5px solid var(--border);
+  font-size: 13px;
+}
+.chip-remove {
+  background: none; border: none; cursor: pointer;
+  color: var(--text2); font-size: 14px; line-height: 1;
+  padding: 0 2px;
+}
+.chip-remove:hover { color: var(--red, #e55); }
+
 /* ─── Autocomplete dropdown ────────────────────────────────────────────────── */
 .ac-wrap { position: relative; }
 .ac-wrap input { width: 100%; }

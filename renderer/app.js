@@ -819,44 +819,73 @@ async function deleteTodoItem(listId, itemId) {
   renderTodo();
 }
 
-/* ─── Assigned-to Autocomplete ─────────────────────────────────────────────── */
-function wireAssignedAutoComplete() {
-  const input = document.getElementById('task-assigned');
-  const list  = document.getElementById('assigned-ac-list');
-  if (!input || !list) return;
+/* ─── Multi-assignee Picker ─────────────────────────────────────────────────── */
+let pickerAssignees = [];  // names currently selected in the open task modal
 
-  async function showSuggestions(filter) {
-    const members = await api.dbQuery({ action: 'select', table: 'team_members' });
-    const q = filter.toLowerCase();
-    const filtered = q ? members.filter(m => m.name.toLowerCase().includes(q)) : members;
-    if (filtered.length === 0) { list.classList.add('hidden'); return; }
+function openAssigneePicker(initialValue) {
+  pickerAssignees = initialValue ? initialValue.split(', ').map(s => s.trim()).filter(Boolean) : [];
+  renderAssigneePicker();
+}
 
-    list.innerHTML = filtered.map(m =>
-      `<div class="ac-item" data-name="${escHtml(m.name)}">${escHtml(m.name)}</div>`
-    ).join('');
+async function renderAssigneePicker() {
+  const container = document.getElementById('assignee-picker');
+  if (!container) return;
 
-    list.querySelectorAll('.ac-item').forEach(item => {
-      item.addEventListener('mousedown', e => {
-        e.preventDefault(); // keep focus on input
-        input.value = item.dataset.name;
-        list.classList.add('hidden');
-      });
-    });
+  const members = await api.dbQuery({ action: 'select', table: 'team_members' });
+  const memberNames = members.map(m => m.name);
 
-    // Position using fixed coords so it escapes the modal's overflow clipping
-    const rect = input.getBoundingClientRect();
-    list.style.top   = (rect.bottom + 4) + 'px';
-    list.style.left  = rect.left + 'px';
-    list.style.width = rect.width + 'px';
-    list.classList.remove('hidden');
-  }
+  // Team member toggle pills
+  const pillsHtml = members.length
+    ? `<div class="assignee-pills">${members.map(m => {
+        const sel = pickerAssignees.includes(m.name);
+        return `<button type="button" class="assignee-pill${sel ? ' selected' : ''}"
+                  data-name="${escHtml(m.name)}">${escHtml(m.name)}</button>`;
+      }).join('')}</div>`
+    : '';
 
-  input.addEventListener('focus', () => showSuggestions(''));   // show all on focus
-  input.addEventListener('input', () => showSuggestions(input.value)); // filter as you type
-  input.addEventListener('blur',  () => setTimeout(() => list.classList.add('hidden'), 150));
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Escape' || e.key === 'Enter' || e.key === 'Tab')
-      list.classList.add('hidden');
+  // Chips for custom names (not in team_members)
+  const customNames = pickerAssignees.filter(n => !memberNames.includes(n));
+  const customChipsHtml = customNames.length
+    ? `<div class="assignee-custom-chips">${customNames.map(n =>
+        `<span class="assignee-chip">${escHtml(n)
+        }<button type="button" class="chip-remove" data-name="${escHtml(n)}">×</button></span>`
+      ).join('')}</div>`
+    : '';
+
+  container.innerHTML = `
+    ${pillsHtml}
+    ${customChipsHtml}
+    <input type="text" id="assignee-custom-input" placeholder="Andere naam…" autocomplete="off" />`;
+
+  // Toggle team member pills
+  container.querySelectorAll('.assignee-pill').forEach(btn => {
+    btn.onclick = () => {
+      const name = btn.dataset.name;
+      pickerAssignees = pickerAssignees.includes(name)
+        ? pickerAssignees.filter(n => n !== name)
+        : [...pickerAssignees, name];
+      renderAssigneePicker();
+    };
+  });
+
+  // Remove custom name chips
+  container.querySelectorAll('.chip-remove').forEach(btn => {
+    btn.onclick = () => {
+      pickerAssignees = pickerAssignees.filter(n => n !== btn.dataset.name);
+      renderAssigneePicker();
+    };
+  });
+
+  // Add custom name on Enter
+  const customInput = container.querySelector('#assignee-custom-input');
+  customInput.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const name = customInput.value.trim();
+    if (name && !pickerAssignees.includes(name)) {
+      pickerAssignees = [...pickerAssignees, name];
+      renderAssigneePicker();
+    }
   });
 }
 
@@ -870,7 +899,7 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
   document.getElementById('task-desc').value     = task?.description || '';
   document.getElementById('task-date').value     = task?.date || defaultDate || toDateStr(state.cursor);
   document.getElementById('task-end-date').value = task?.end_date || '';
-  document.getElementById('task-assigned').value = task?.assigned_to || state.config.name || '';
+  openAssigneePicker(task?.assigned_to ?? state.config.name ?? '');
   document.getElementById('task-status').value = task?.status || 'pending';
   document.getElementById('task-priority').value = task?.priority || 'medium';
   document.getElementById('task-delete').classList.toggle('hidden', !isEdit);
@@ -891,7 +920,6 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
 
   document.getElementById('task-modal').classList.remove('hidden');
   document.getElementById('task-title').focus();
-  refreshTeamDatalist();
   maybeShowCalDavCheckbox(task);
 }
 
@@ -918,7 +946,6 @@ async function saveTask(taskData) {
 }
 
 function wireTaskModal() {
-  wireAssignedAutoComplete();
   document.getElementById('task-cancel').onclick = closeTaskModal;
   // Show/hide calendar checkbox when date changes
   document.getElementById('task-date').addEventListener('change', () => maybeShowCalDavCheckbox(state.editingTask));
@@ -936,7 +963,7 @@ function wireTaskModal() {
       description: document.getElementById('task-desc').value.trim(),
       date:        document.getElementById('task-date').value,
       end_date:    document.getElementById('task-end-date').value || '',
-      assigned_to: document.getElementById('task-assigned').value.trim(),
+      assigned_to: pickerAssignees.join(', '),
       project_id:  projVal ? parseInt(projVal) : null,
       status:      document.getElementById('task-status').value,
       priority:    document.getElementById('task-priority').value,
