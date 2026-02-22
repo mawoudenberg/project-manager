@@ -242,7 +242,7 @@ ipcMain.handle('caldav:save-config', async (_e, { serverHost, username, password
   const passwordEncrypted = password ? encryptPassword(password) : cfg.caldav?.passwordEncrypted || '';
   cfg.caldav = {
     enabled:          !!enabled,
-    serverHost:       serverHost || 'dav.strato.de',
+    serverHost:       serverHost || 'dav.webmail.strato.de',
     username:         username || '',
     passwordEncrypted,
     pushByDefault:    !!pushByDefault,
@@ -258,7 +258,7 @@ ipcMain.handle('caldav:get-config', () => {
   const c = cfg?.caldav || {};
   return {
     enabled:       c.enabled      || false,
-    serverHost:    c.serverHost   || 'dav.strato.de',
+    serverHost:    c.serverHost   || 'dav.webmail.strato.de',
     username:      c.username     || '',
     pushByDefault: c.pushByDefault || false,
     hasPassword:   !!c.passwordEncrypted,
@@ -268,7 +268,14 @@ ipcMain.handle('caldav:get-config', () => {
 ipcMain.handle('caldav:test', async (_e, { serverHost, username, password }) => {
   try {
     const caldav = getCalDav();
-    const url = await caldav.discoverCalendarUrl({ serverHost, username, password });
+    // If no password provided, use the stored one (user re-testing without re-typing password)
+    let effectivePassword = password;
+    if (!effectivePassword) {
+      const cfg = loadConfig();
+      if (cfg?.caldav?.passwordEncrypted) effectivePassword = decryptPassword(cfg.caldav.passwordEncrypted);
+    }
+    if (!effectivePassword) return { ok: false, error: 'Vul een wachtwoord in' };
+    const url = await caldav.discoverCalendarUrl({ serverHost, username, password: effectivePassword });
     return { ok: true, calendarUrl: url };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -283,7 +290,8 @@ ipcMain.handle('caldav:sync-now', async () => {
 ipcMain.handle('caldav:push-task', async (_e, task) => {
   const cfg = loadConfig();
   const c = cfg?.caldav;
-  if (!c?.enabled) return { ok: false, error: 'CalDAV niet geconfigureerd' };
+  // Allow push as long as credentials are stored, even if auto-sync is disabled
+  if (!c?.username || !c?.passwordEncrypted) return { ok: false, error: 'CalDAV niet geconfigureerd' };
 
   const caldav = getCalDav();
   const password = decryptPassword(c.passwordEncrypted);

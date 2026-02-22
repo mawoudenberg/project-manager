@@ -83,10 +83,22 @@
         <input type="date" id="task-date" />
       </div>
       <div class="form-group">
-        <label>Assigned to</label>
-        <input type="text" id="task-assigned" placeholder="Name" list="team-datalist" />
-        <datalist id="team-datalist"></datalist>
+        <label>End date <span style="color:var(--text2);font-weight:400;font-size:11px">(optioneel, voor Gantt)</span></label>
+        <input type="date" id="task-end-date" />
       </div>
+    </div>
+    <div class="form-group">
+      <label>Assigned to</label>
+      <div class="ac-wrap">
+        <input type="text" id="task-assigned" placeholder="Name" autocomplete="off" />
+        <div class="ac-list hidden" id="assigned-ac-list"></div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Project</label>
+      <select id="task-project">
+        <option value="">— Geen project —</option>
+      </select>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -221,7 +233,7 @@
         <div class="form-row">
           <div class="form-group">
             <label>CalDAV server</label>
-            <input type="text" id="cfg-caldav-host" placeholder="dav.strato.de" />
+            <input type="text" id="cfg-caldav-host" placeholder="dav.webmail.strato.de" />
           </div>
           <div class="form-group">
             <label>Gebruikersnaam</label>
@@ -253,6 +265,50 @@
   </div>
 </div>
 
+<!-- ─── Project Modal ────────────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="project-modal">
+  <div class="modal">
+    <h2 id="project-modal-title">Nieuw project</h2>
+    <div class="form-group">
+      <label>Naam *</label>
+      <input type="text" id="proj-name" placeholder="Projectnaam" />
+    </div>
+    <div class="form-group">
+      <label>Omschrijving</label>
+      <input type="text" id="proj-desc" placeholder="Optioneel" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Startdatum</label>
+        <input type="date" id="proj-start" />
+      </div>
+      <div class="form-group">
+        <label>Einddatum</label>
+        <input type="date" id="proj-end" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Status</label>
+        <select id="proj-status">
+          <option value="active">Actief</option>
+          <option value="on_hold">On hold</option>
+          <option value="done">Afgerond</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Kleur</label>
+        <div class="color-swatches" id="proj-color-swatches"></div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="proj-cancel">Annuleer</button>
+      <button class="btn btn-danger hidden" id="proj-delete">Verwijder</button>
+      <button class="btn btn-primary" id="proj-save">Opslaan</button>
+    </div>
+  </div>
+</div>
+
 <!-- ─── Main App Shell ─────────────────────────────────────────────────────── -->
 <div id="app" style="display:none">
   <!-- Sidebar -->
@@ -276,6 +332,12 @@
       </button>
       <button class="nav-btn" data-view="quotes">
         <span class="icon">💶</span><span>Offertes</span>
+      </button>
+      <button class="nav-btn" data-view="projects">
+        <span class="icon">📁</span><span>Projecten</span>
+      </button>
+      <button class="nav-btn" data-view="gantt">
+        <span class="icon">📊</span><span>Gantt</span>
       </button>
       <button class="nav-btn" id="team-btn">
         <span class="icon">👥</span><span>Team</span>

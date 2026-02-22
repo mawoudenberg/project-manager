@@ -66,6 +66,18 @@ function createSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS projects (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL,
+      color       TEXT DEFAULT '#4f8ef7',
+      description TEXT DEFAULT '',
+      status      TEXT DEFAULT 'active',
+      start_date  TEXT DEFAULT '',
+      end_date    TEXT DEFAULT '',
+      created_by  TEXT DEFAULT '',
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS quotes (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       name        TEXT NOT NULL,
@@ -97,6 +109,8 @@ function migrateSchema() {
   const cols = db.pragma('table_info(tasks)').map(c => c.name);
   if (!cols.includes('caldav_uid'))  db.exec("ALTER TABLE tasks ADD COLUMN caldav_uid  TEXT DEFAULT ''");
   if (!cols.includes('caldav_etag')) db.exec("ALTER TABLE tasks ADD COLUMN caldav_etag TEXT DEFAULT ''");
+  if (!cols.includes('end_date'))    db.exec("ALTER TABLE tasks ADD COLUMN end_date    TEXT DEFAULT ''");
+  if (!cols.includes('project_id')) db.exec("ALTER TABLE tasks ADD COLUMN project_id  INTEGER DEFAULT NULL");
 }
 
 // ─── Generic query dispatcher ─────────────────────────────────────────────────
@@ -159,7 +173,7 @@ function deleteRow(table, where) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members']);
+const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects']);
 
 function validateTable(table) {
   if (!ALLOWED_TABLES.has(table)) throw new Error(`Table not allowed: ${table}`);
@@ -170,6 +184,7 @@ function orderFor(table) {
   if (table === 'todo_lists')  return ' ORDER BY created_at DESC';
   if (table === 'todo_items')  return ' ORDER BY created_at ASC';
   if (table === 'team_members') return ' ORDER BY name ASC';
+  if (table === 'projects')    return ' ORDER BY start_date ASC, name ASC';
   if (table === 'quotes')      return ' ORDER BY created_at DESC';
   if (table === 'quote_items') return ' ORDER BY sort_order ASC, id ASC';
   return '';

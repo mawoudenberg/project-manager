@@ -52,11 +52,148 @@ function httpRequest({ method, url: href, username, password, extraHeaders = {},
  * Tries multiple strategies so it works with Strato, iCloud, Google, etc.
  */
 async function discoverCalendarUrl({ serverHost, username, password }) {
-  const base   = `https://${serverHost}`;
+  const base    = `https://${serverHost}`;
   const encUser = encodeURIComponent(username); // info%40vonkenvorm.com
   const log = [];
 
-  // ── Strategy 1: direct known URL patterns (Strato SabreDAV) ──────────────
+  // ── Strategy 0: dav.webmail.strato.de (Strato's actual CalDAV endpoint) ──
+  // Strato routes CalDAV through dav.webmail.strato.de. We first do a root
+  // PROPFIND to get the current-user-principal (definitive auth check), then
+  // try direct URL patterns. Only throw 401 if the root check itself fails.
+  const stratoBase = 'https://dav.webmail.strato.de';
+  let stratoGot401 = false;
+
+  // Step 0a: Root PROPFIND → current-user-principal → calendar-home-set
+  try {
+    const rootRes = await httpRequest({
+      method: 'PROPFIND', url: `${stratoBase}/`, username, password,
+      extraHeaders: { Depth: '0' },
+      body: PROPFIND_PRINCIPAL,
+    });
+    console.log(`[CalDAV] strato root PROPFIND → ${rootRes.status}`);
+    if (rootRes.status === 401) {
+      stratoGot401 = true;
+    } else if (rootRes.status === 207) {
+      // Extract current-user-principal href
+      const cpBlock = /<[^:>]*:?current-user-principal[^>]*>([\s\S]*?)<\/[^:>]*:?current-user-principal>/i.exec(rootRes.body);
+      if (cpBlock) {
+        const cpHref = xmlText(cpBlock[1], 'href');
+        if (cpHref) {
+          const u = new URL(stratoBase);
+          const principalUrl = cpHref.startsWith('http') ? cpHref : `${u.protocol}//${u.host}${cpHref}`;
+          console.log(`[CalDAV] strato principal: ${principalUrl}`);
+          const calHome = await getCalendarHomeFromPrincipal(principalUrl, username, password, stratoBase);
+          if (calHome) {
+            const calCol = await firstCalendarCollection(calHome, username, password);
+            return calCol || calHome;
+          }
+          // calendar-home-set not found in principal response.
+          // Try URL patterns derived from the numeric user ID in the principal path.
+          // e.g. /principals/users/3 → try /caldav/v2/3/calendar/
+          const uidMatch = /\/(\d+)\/?$/.exec(cpHref);
+          if (uidMatch) {
+            const uid = uidMatch[1];
+            console.log(`[CalDAV] strato trying numeric uid: ${uid}`);
+            const uidCandidates = [
+              `${stratoBase}/caldav/v2/${uid}/calendar/`,
+              `${stratoBase}/caldav/v2/${uid}/`,
+              `${stratoBase}/calendars/${uid}/`,
+              `${stratoBase}/dav/${uid}/`,
+            ];
+            for (const url of uidCandidates) {
+              try {
+                const r = await httpRequest({
+                  method: 'PROPFIND', url, username, password,
+                  extraHeaders: { Depth: '0' }, body: PROPFIND_RESOURCETYPE,
+                });
+                console.log(`[CalDAV] strato uid PROPFIND ${url} → ${r.status}`);
+                if (r.status === 207) return url;
+              } catch (e) { log.push(`strato uid ${url}: ${e.message}`); }
+            }
+          }
+          // Also try a Depth:1 PROPFIND on the principal to list its children
+          try {
+            const r = await httpRequest({
+              method: 'PROPFIND', url: principalUrl, username, password,
+              extraHeaders: { Depth: '1' }, body: PROPFIND_RESOURCETYPE,
+            });
+            console.log(`[CalDAV] strato principal Depth:1 → ${r.status} body: ${r.body.slice(0, 600)}`);
+            if (r.status === 207) {
+              // Look for any href containing 'calendar' or 'caldav'
+              const hrefRe = /<[^:>]*:?href[^>]*>([^<]*(?:calendar|caldav)[^<]*)<\/[^:>]*:?href>/gi;
+              let hm;
+              while ((hm = hrefRe.exec(r.body)) !== null) {
+                const href = hm[1].trim();
+                const absUrl = href.startsWith('http') ? href : `${u.protocol}//${u.host}${href}`;
+                console.log(`[CalDAV] strato candidate href: ${absUrl}`);
+                const r2 = await httpRequest({
+                  method: 'PROPFIND', url: absUrl, username, password,
+                  extraHeaders: { Depth: '0' }, body: PROPFIND_RESOURCETYPE,
+                });
+                if (r2.status === 207) return absUrl;
+              }
+            }
+          } catch (e) { log.push(`strato principal depth1: ${e.message}`); }
+        }
+      }
+    }
+  } catch (e) { log.push(`strato root: ${e.message}`); }
+
+  // Step 0b: .well-known/caldav on dav.webmail.strato.de
+  if (!stratoGot401) {
+    try {
+      const wk = `${stratoBase}/.well-known/caldav`;
+      const r = await httpRequest({
+        method: 'PROPFIND', url: wk, username, password,
+        extraHeaders: { Depth: '0' },
+        body: PROPFIND_RESOURCETYPE,
+      });
+      console.log(`[CalDAV] strato well-known → ${r.status}`);
+      if (r.status === 401) { stratoGot401 = true; }
+      else if (r.status === 207) { return await resolveToCalendar(wk, r.body, username, password); }
+      else if (r.status === 301 || r.status === 302 || r.status === 308) {
+        const loc = r.headers.location;
+        if (loc) {
+          const redir = loc.startsWith('http') ? loc : new URL(loc, stratoBase).href;
+          const r2 = await httpRequest({
+            method: 'PROPFIND', url: redir, username, password,
+            extraHeaders: { Depth: '0' }, body: PROPFIND_RESOURCETYPE,
+          });
+          if (r2.status === 207) return await resolveToCalendar(redir, r2.body, username, password);
+        }
+      }
+    } catch (e) { log.push(`strato well-known: ${e.message}`); }
+  }
+
+  // Step 0c: Direct URL pattern candidates (don't throw on 401 — URL may not exist)
+  if (!stratoGot401) {
+    const stratoDirectCandidates = [
+      `${stratoBase}/caldav/v2/${username}/calendar/`,
+      `${stratoBase}/caldav/v2/${encUser}/calendar/`,
+      `${stratoBase}/caldav/v2/${username}/`,
+      `${stratoBase}/calendars/${username}/`,
+      `${stratoBase}/calendars/${encUser}/`,
+    ];
+    for (const url of stratoDirectCandidates) {
+      try {
+        const r = await httpRequest({
+          method: 'PROPFIND', url, username, password,
+          extraHeaders: { Depth: '0' },
+          body: PROPFIND_RESOURCETYPE,
+        });
+        console.log(`[CalDAV] strato PROPFIND ${url} → ${r.status}`);
+        if (r.status === 207) return url;
+        if (r.status === 401) stratoGot401 = true;
+      } catch (e) { log.push(`strato ${url}: ${e.message}`); }
+    }
+  }
+
+  // If every strato request got 401, credentials are wrong
+  if (stratoGot401) {
+    throw new Error('Authenticatie mislukt (401). Controleer gebruikersnaam en wachtwoord.');
+  }
+
+  // ── Strategy 1: direct known URL patterns (configured serverHost) ─────────
   // Try BOTH literal @ and encoded @ because Strato accepts either.
   const directCandidates = [
     `${base}/caldav/v2/${username}/calendar/`,
@@ -139,7 +276,7 @@ async function getCalendarHomeFromPrincipal(principalUrl, username, password, ba
   <D:prop><C:calendar-home-set/></D:prop>
 </D:propfind>`,
   });
-  console.log(`[CalDAV] principal ${principalUrl} → ${res.status}`);
+  console.log(`[CalDAV] principal ${principalUrl} → ${res.status} body: ${res.body.slice(0, 800)}`);
   if (res.status !== 207) return null;
 
   // Extract href specifically from inside <calendar-home-set> — not the first href in the doc

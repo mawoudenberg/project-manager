@@ -19,10 +19,12 @@ let state = {
   today: new Date(),
   cursor: new Date(),        // tracks month/week/day
   tasks: [],
+  projects: [],
   todoLists: [],
   todoItems: {},             // { listId: [...items] }
   editingTask: null,
   editingList: null,
+  editingProject: null,
 };
 
 /* ─── Startup ──────────────────────────────────────────────────────────────── */
@@ -34,6 +36,7 @@ async function init() {
   wireSettings();
   wireNav();
   wireTeam();
+  wireProjectModal();
   initCalDavListeners();
 
   const config = await api.configGet();
@@ -51,7 +54,11 @@ async function init() {
 
 /* ─── Data Loading ─────────────────────────────────────────────────────────── */
 async function loadAll() {
-  await Promise.all([loadTasks(), loadTodoLists()]);
+  await Promise.all([loadTasks(), loadTodoLists(), loadProjects()]);
+}
+
+async function loadProjects() {
+  state.projects = await api.dbQuery({ action: 'select', table: 'projects' });
 }
 
 async function loadTasks() {
@@ -84,11 +91,13 @@ async function loadTodoLists() {
 /* ─── View routing ─────────────────────────────────────────────────────────── */
 function renderView() {
   const views = {
-    monthly: renderMonthly,
-    weekly:  renderWeekly,
-    daily:   renderDaily,
-    todo:    renderTodo,
-    quotes:  renderQuoteList,
+    monthly:  renderMonthly,
+    weekly:   renderWeekly,
+    daily:    renderDaily,
+    todo:     renderTodo,
+    quotes:   renderQuoteList,
+    gantt:    renderGantt,
+    projects: renderProjectsView,
   };
   (views[state.view] || renderMonthly)();
 }
@@ -98,7 +107,7 @@ function setView(view) {
   document.querySelectorAll('.nav-btn[data-view]').forEach(b =>
     b.classList.toggle('active', b.dataset.view === view)
   );
-  const titles = { monthly:'Monthly View', weekly:'Weekly View', daily:'Daily View', todo:'Todo Lists', quotes:'Offertes' };
+  const titles = { monthly:'Monthly View', weekly:'Weekly View', daily:'Daily View', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
   document.getElementById('toolbar-title').textContent = titles[view] || '';
   renderView();
 }
@@ -177,7 +186,7 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
 
   let chips = dayTasks.slice(0, 3).map(t =>
     `<div class="cal-chip ${t.status==='done'?'done':''}" data-id="${t.id}"
-         style="background:${t.color||'#4f8ef7'}"
+         style="background:${taskColor(t)}"
          title="${escHtml(t.title)}">${escHtml(t.title)}</div>`
   ).join('');
 
@@ -232,7 +241,7 @@ function renderWeekly() {
     const dayTasks = state.tasks.filter(t => t.date === dateStr);
     const cards = dayTasks.map(t => `
       <div class="week-task-card ${t.status==='done'?'done':''}" data-id="${t.id}"
-           style="background:${t.color||'#4f8ef7'}">
+           style="background:${taskColor(t)}">
         <div class="wt-title">${escHtml(t.title)}</div>
         ${t.assigned_to ? `<div class="wt-who">→ ${escHtml(t.assigned_to)}</div>` : ''}
       </div>`).join('');
@@ -327,6 +336,292 @@ function renderDaily() {
       if (task) openTaskModal(task);
     };
   });
+}
+
+/* ─── Gantt View ───────────────────────────────────────────────────────────── */
+function renderGantt() {
+  renderGanttWeek();
+}
+
+function ganttToolbarNav(label, prevFn, nextFn) {
+  const ctrl = document.getElementById('toolbar-controls');
+  ctrl.innerHTML = `
+    <div class="cal-nav">
+      <button class="btn-icon" id="gnt-prev">‹</button>
+      <span>${label}</span>
+      <button class="btn-icon" id="gnt-next">›</button>
+    </div>`;
+  document.getElementById('gnt-prev').onclick = prevFn;
+  document.getElementById('gnt-next').onclick = nextFn;
+}
+
+/* ─── Gantt Week View (Projects, multi-week overview) ──────────────────────── */
+function renderGanttWeek() {
+  const N_WEEKS  = 12;   // columns visible at once
+  const NAV_STEP = 4;    // weeks to jump per prev/next click
+  const content  = document.getElementById('content');
+
+  // Anchor = Monday of cursor's week
+  const d   = new Date(state.cursor);
+  const dow = d.getDay();
+  const anchor = new Date(d);
+  anchor.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+
+  // Build array of N_WEEKS week-objects
+  const weeks = Array.from({ length: N_WEEKS }, (_, i) => {
+    const mon = new Date(anchor);
+    mon.setDate(anchor.getDate() + i * 7);
+    const sun = new Date(mon);
+    sun.setDate(mon.getDate() + 6);
+    return { mon, sun, start: toDateStr(mon), end: toDateStr(sun) };
+  });
+
+  const rangeStart = weeks[0].start;
+  const rangeEnd   = weeks[N_WEEKS - 1].end;
+  const totalDays  = N_WEEKS * 7;
+  const todayStr   = toDateStr(state.today);
+
+  const fmt = (date) => `${date.getDate()} ${MONTHS[date.getMonth()].slice(0,3)}`;
+  const rangeLabel = `${fmt(weeks[0].mon)} – ${fmt(weeks[N_WEEKS-1].sun)} ${weeks[N_WEEKS-1].sun.getFullYear()}`;
+
+  ganttToolbarNav(
+    rangeLabel,
+    () => { state.cursor = new Date(anchor); state.cursor.setDate(anchor.getDate() - NAV_STEP * 7); renderGantt(); },
+    () => { state.cursor = new Date(anchor); state.cursor.setDate(anchor.getDate() + NAV_STEP * 7); renderGantt(); }
+  );
+
+  // Compute effective dates for each project (explicit or derived from tasks)
+  function projectEffectiveDates(p) {
+    let start = p.start_date;
+    let end   = p.end_date;
+    if (!start || !end) {
+      const pt = state.tasks.filter(t => t.project_id == p.id && t.date);
+      if (pt.length === 0 && (!start && !end)) return null;
+      if (!start) start = pt.reduce((m, t) => t.date < m ? t.date : m, pt[0]?.date || '');
+      if (!end)   end   = pt.reduce((m, t) => { const te = t.end_date || t.date; return te > m ? te : m; }, pt[0]?.end_date || pt[0]?.date || '');
+    }
+    if (!start || !end) return null;
+    if (start > rangeEnd || end < rangeStart) return null;
+    return { effectiveStart: start, effectiveEnd: end };
+  }
+
+  const visibleProjects = state.projects
+    .map(p => { const dates = projectEffectiveDates(p); return dates ? { ...p, ...dates } : null; })
+    .filter(Boolean);
+
+  if (visibleProjects.length === 0) {
+    content.innerHTML = `<div class="empty"><div class="empty-icon">📁</div><p>Geen projecten in dit bereik. Maak een project aan via <strong>Projecten</strong> en stel start/einddatum in.</p></div>`;
+    return;
+  }
+
+  function dayOffset(fromStr, toStr) {
+    return Math.round((new Date(toStr) - new Date(fromStr)) / 86400000);
+  }
+
+  // Week column headers
+  const headerCells = weeks.map(w => {
+    const isCurrent = todayStr >= w.start && todayStr <= w.end;
+    const mon = w.mon;
+    // Show month name when it's the first week of a month
+    const showMonth = mon.getDate() <= 7;
+    return `<div class="gnt-day-h gnt-week-h${isCurrent?' today-h':''}">
+      ${showMonth ? `<span class="gnt-wk-month">${MONTHS[mon.getMonth()].slice(0,3)}</span>` : ''}
+      <span class="gnt-wk-date">${mon.getDate()}</span>
+    </div>`;
+  }).join('');
+
+  // Background cells (one per week)
+  const bgCells = weeks.map(w => {
+    const isCurrent = todayStr >= w.start && todayStr <= w.end;
+    return `<div class="gnt-day-cell${isCurrent?' today-cell':''}"></div>`;
+  }).join('');
+
+  // Today vertical line (day-precision within the 12-week range)
+  const todayOffDays = dayOffset(rangeStart, todayStr);
+  const todayLine = (todayOffDays >= 0 && todayOffDays < totalDays)
+    ? `<div class="gnt-today-line" style="left:${((todayOffDays + 0.5) / totalDays * 100).toFixed(2)}%"></div>`
+    : '';
+
+  const rowsHtml = visibleProjects.map(p => {
+    const clampStart = p.effectiveStart < rangeStart ? rangeStart : p.effectiveStart;
+    const clampEnd   = p.effectiveEnd   > rangeEnd   ? rangeEnd   : p.effectiveEnd;
+    const startOff   = dayOffset(rangeStart, clampStart);
+    const endOff     = dayOffset(rangeStart, clampEnd);
+    const leftPct    = (startOff / totalDays * 100).toFixed(2);
+    const widthPct   = ((endOff - startOff + 1) / totalDays * 100).toFixed(2);
+    const done       = p.status === 'done';
+    const taskCount  = state.tasks.filter(t => t.project_id == p.id).length;
+    const doneCount  = state.tasks.filter(t => t.project_id == p.id && t.status === 'done').length;
+    const pct        = taskCount ? Math.round(doneCount / taskCount * 100) : 0;
+
+    return `<div class="gnt-row" data-proj-id="${p.id}">
+      <div class="gnt-lbl">
+        <div class="gnt-task-name${done?' done':''}">${escHtml(p.name)}</div>
+        <div class="gnt-task-who">${doneCount}/${taskCount} taken · ${pct}%</div>
+      </div>
+      <div class="gnt-timeline">
+        ${bgCells}
+        ${todayLine}
+        <div class="gnt-bar${done?' done':''}" data-proj-id="${p.id}"
+             style="left:${leftPct}%;width:${widthPct}%;background:${p.color||'#4f8ef7'}"
+             title="${escHtml(p.name)}">${escHtml(p.name)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  content.innerHTML = `
+    <div id="gantt-wrap">
+      <div class="gnt-head">
+        <div class="gnt-lbl-h"></div>
+        <div class="gnt-timeline-h">${headerCells}</div>
+      </div>
+      ${rowsHtml}
+    </div>`;
+
+  content.querySelectorAll('.gnt-bar[data-proj-id], .gnt-row[data-proj-id]').forEach(el => {
+    el.addEventListener('click', e => {
+      if (el.classList.contains('gnt-bar')) e.stopPropagation();
+      const proj = state.projects.find(p => p.id == el.dataset.projId);
+      if (proj) openProjectModal(proj);
+    });
+  });
+}
+
+/* ─── Projects View ────────────────────────────────────────────────────────── */
+function renderProjectsView() {
+  const content = document.getElementById('content');
+  const ctrl    = document.getElementById('toolbar-controls');
+
+  ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-proj-btn">+ Nieuw project</button>`;
+  document.getElementById('new-proj-btn').onclick = () => openProjectModal(null);
+
+  if (state.projects.length === 0) {
+    content.innerHTML = `<div class="empty"><div class="empty-icon">📁</div><p>Nog geen projecten. Maak een project aan om te beginnen.</p></div>`;
+    return;
+  }
+
+  const html = `<div class="proj-grid">` +
+    state.projects.map(p => {
+      const taskCount = state.tasks.filter(t => t.project_id == p.id).length;
+      const doneCount = state.tasks.filter(t => t.project_id == p.id && t.status === 'done').length;
+      const pct = taskCount ? Math.round(doneCount / taskCount * 100) : 0;
+      const dateRange = (p.start_date && p.end_date)
+        ? `${p.start_date} → ${p.end_date}`
+        : p.start_date ? `vanaf ${p.start_date}` : '';
+      return `<div class="proj-card" data-proj-id="${p.id}">
+        <div class="proj-card-bar" style="background:${p.color||'#4f8ef7'}"></div>
+        <div class="proj-card-body">
+          <div class="proj-card-header">
+            <div class="proj-card-name">${escHtml(p.name)}</div>
+            <span class="badge badge-proj-${p.status}">${fmtProjStatus(p.status)}</span>
+          </div>
+          ${p.description ? `<div class="proj-card-desc">${escHtml(p.description)}</div>` : ''}
+          ${dateRange ? `<div class="proj-card-dates">📅 ${dateRange}</div>` : ''}
+          <div class="proj-progress">
+            <div class="proj-progress-bar" style="width:${pct}%;background:${p.color||'#4f8ef7'}"></div>
+          </div>
+          <div class="proj-card-meta">${doneCount}/${taskCount} taken afgerond</div>
+        </div>
+      </div>`;
+    }).join('') + `</div>`;
+
+  content.innerHTML = html;
+  content.querySelectorAll('.proj-card').forEach(card => {
+    card.onclick = () => {
+      const proj = state.projects.find(p => p.id == card.dataset.projId);
+      if (proj) openProjectModal(proj);
+    };
+  });
+}
+
+/* ─── Project Modal ────────────────────────────────────────────────────────── */
+function buildProjColorSwatches(selectedColor) {
+  const container = document.getElementById('proj-color-swatches');
+  if (!container) return;
+  container.innerHTML = '';
+  COLORS.forEach(color => {
+    const sw = document.createElement('div');
+    sw.className = 'color-swatch' + (color === selectedColor ? ' selected' : '');
+    sw.style.background = color;
+    sw.dataset.color = color;
+    sw.title = color;
+    sw.addEventListener('click', () => {
+      container.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      sw.classList.add('selected');
+    });
+    container.appendChild(sw);
+  });
+}
+
+function openProjectModal(proj) {
+  state.editingProject = proj || null;
+  const isEdit = !!proj;
+  document.getElementById('project-modal-title').textContent = isEdit ? 'Project bewerken' : 'Nieuw project';
+  document.getElementById('proj-name').value   = proj?.name        || '';
+  document.getElementById('proj-desc').value   = proj?.description || '';
+  document.getElementById('proj-start').value  = proj?.start_date  || '';
+  document.getElementById('proj-end').value    = proj?.end_date    || '';
+  document.getElementById('proj-status').value = proj?.status      || 'active';
+  document.getElementById('proj-delete').classList.toggle('hidden', !isEdit);
+  buildProjColorSwatches(proj?.color || COLORS[0]);
+  document.getElementById('project-modal').classList.remove('hidden');
+  document.getElementById('proj-name').focus();
+}
+
+function closeProjectModal() {
+  document.getElementById('project-modal').classList.add('hidden');
+  state.editingProject = null;
+}
+
+function wireProjectModal() {
+  document.getElementById('proj-cancel').onclick = closeProjectModal;
+
+  document.getElementById('project-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('project-modal')) closeProjectModal();
+  });
+
+  document.getElementById('proj-save').onclick = async () => {
+    const name = document.getElementById('proj-name').value.trim();
+    if (!name) { shake(document.getElementById('proj-name')); return; }
+    const selectedSwatch = document.querySelector('#proj-color-swatches .color-swatch.selected');
+    const data = {
+      name,
+      description: document.getElementById('proj-desc').value.trim(),
+      start_date:  document.getElementById('proj-start').value || '',
+      end_date:    document.getElementById('proj-end').value   || '',
+      status:      document.getElementById('proj-status').value,
+      color:       selectedSwatch?.dataset.color || COLORS[0],
+      created_by:  state.config?.name || '',
+    };
+    if (state.editingProject) {
+      await api.dbQuery({ action: 'update', table: 'projects', data, where: { id: state.editingProject.id } });
+    } else {
+      await api.dbQuery({ action: 'insert', table: 'projects', data });
+    }
+    await loadProjects();
+    closeProjectModal();
+    renderView();
+    toast('Project opgeslagen');
+  };
+
+  document.getElementById('proj-delete').onclick = async () => {
+    if (!state.editingProject) return;
+    if (!confirm(`Project "${state.editingProject.name}" verwijderen?`)) return;
+    await api.dbQuery({ action: 'delete', table: 'projects', where: { id: state.editingProject.id } });
+    // Unlink tasks from this project
+    const linked = state.tasks.filter(t => t.project_id == state.editingProject.id);
+    for (const t of linked) {
+      await api.dbQuery({ action: 'update', table: 'tasks', data: { project_id: null }, where: { id: t.id } });
+    }
+    await Promise.all([loadProjects(), loadTasks()]);
+    closeProjectModal();
+    renderView();
+    toast('Project verwijderd');
+  };
+}
+
+function fmtProjStatus(s) {
+  return { active: 'Actief', done: 'Afgerond', on_hold: 'On hold' }[s] || s;
 }
 
 /* ─── Todo Lists View ──────────────────────────────────────────────────────── */
@@ -432,15 +727,57 @@ async function deleteTodoItem(listId, itemId) {
   renderTodo();
 }
 
+/* ─── Assigned-to Autocomplete ─────────────────────────────────────────────── */
+function wireAssignedAutoComplete() {
+  const input = document.getElementById('task-assigned');
+  const list  = document.getElementById('assigned-ac-list');
+  if (!input || !list) return;
+
+  async function showSuggestions(filter) {
+    const members = await api.dbQuery({ action: 'select', table: 'team_members' });
+    const q = filter.toLowerCase();
+    const filtered = q ? members.filter(m => m.name.toLowerCase().includes(q)) : members;
+    if (filtered.length === 0) { list.classList.add('hidden'); return; }
+
+    list.innerHTML = filtered.map(m =>
+      `<div class="ac-item" data-name="${escHtml(m.name)}">${escHtml(m.name)}</div>`
+    ).join('');
+
+    list.querySelectorAll('.ac-item').forEach(item => {
+      item.addEventListener('mousedown', e => {
+        e.preventDefault(); // keep focus on input
+        input.value = item.dataset.name;
+        list.classList.add('hidden');
+      });
+    });
+
+    // Position using fixed coords so it escapes the modal's overflow clipping
+    const rect = input.getBoundingClientRect();
+    list.style.top   = (rect.bottom + 4) + 'px';
+    list.style.left  = rect.left + 'px';
+    list.style.width = rect.width + 'px';
+    list.classList.remove('hidden');
+  }
+
+  input.addEventListener('focus', () => showSuggestions(''));   // show all on focus
+  input.addEventListener('input', () => showSuggestions(input.value)); // filter as you type
+  input.addEventListener('blur',  () => setTimeout(() => list.classList.add('hidden'), 150));
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape' || e.key === 'Enter' || e.key === 'Tab')
+      list.classList.add('hidden');
+  });
+}
+
 /* ─── Task Modal ───────────────────────────────────────────────────────────── */
 function openTaskModal(task, defaultDate) {
   state.editingTask = task || null;
   const isEdit = !!task;
 
   document.getElementById('task-modal-title').textContent = isEdit ? 'Edit Task' : 'Add Task';
-  document.getElementById('task-title').value  = task?.title || '';
-  document.getElementById('task-desc').value   = task?.description || '';
-  document.getElementById('task-date').value   = task?.date || defaultDate || toDateStr(state.cursor);
+  document.getElementById('task-title').value    = task?.title || '';
+  document.getElementById('task-desc').value     = task?.description || '';
+  document.getElementById('task-date').value     = task?.date || defaultDate || toDateStr(state.cursor);
+  document.getElementById('task-end-date').value = task?.end_date || '';
   document.getElementById('task-assigned').value = task?.assigned_to || state.config.name || '';
   document.getElementById('task-status').value = task?.status || 'pending';
   document.getElementById('task-priority').value = task?.priority || 'medium';
@@ -451,6 +788,13 @@ function openTaskModal(task, defaultDate) {
   document.querySelectorAll('.color-swatch').forEach(sw => {
     sw.classList.toggle('selected', sw.dataset.color === selectedColor);
   });
+
+  // Populate project dropdown
+  const projSel = document.getElementById('task-project');
+  projSel.innerHTML = '<option value="">— Geen project —</option>' +
+    state.projects.map(p =>
+      `<option value="${p.id}" ${task?.project_id == p.id ? 'selected' : ''}>${escHtml(p.name)}</option>`
+    ).join('');
 
   document.getElementById('task-modal').classList.remove('hidden');
   document.getElementById('task-title').focus();
@@ -481,6 +825,7 @@ async function saveTask(taskData) {
 }
 
 function wireTaskModal() {
+  wireAssignedAutoComplete();
   document.getElementById('task-cancel').onclick = closeTaskModal;
   // Show/hide calendar checkbox when date changes
   document.getElementById('task-date').addEventListener('change', () => maybeShowCalDavCheckbox(state.editingTask));
@@ -492,15 +837,18 @@ function wireTaskModal() {
     const selectedSwatch = document.querySelector('.color-swatch.selected');
     const color = selectedSwatch?.dataset.color || COLORS[0];
 
+    const projVal = document.getElementById('task-project').value;
     const taskData = {
       title,
       description: document.getElementById('task-desc').value.trim(),
-      date: document.getElementById('task-date').value,
+      date:        document.getElementById('task-date').value,
+      end_date:    document.getElementById('task-end-date').value || '',
       assigned_to: document.getElementById('task-assigned').value.trim(),
-      status: document.getElementById('task-status').value,
-      priority: document.getElementById('task-priority').value,
+      project_id:  projVal ? parseInt(projVal) : null,
+      status:      document.getElementById('task-status').value,
+      priority:    document.getElementById('task-priority').value,
       color,
-      created_by: state.config.name || '',
+      created_by:  state.config.name || '',
       ...(state.editingTask ? { id: state.editingTask.id, created_at: state.editingTask.created_at } : {}),
     };
 
@@ -754,6 +1102,15 @@ function buildColorSwatches() {
 }
 
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
+// Returns the display color for a task: project color if assigned, else own color
+function taskColor(task) {
+  if (task.project_id) {
+    const proj = state.projects.find(p => p.id == task.project_id);
+    if (proj?.color) return proj.color;
+  }
+  return task.color || '#4f8ef7';
+}
+
 function toDateStr(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -1377,10 +1734,7 @@ async function addMember() {
 }
 
 async function refreshTeamDatalist() {
-  const members = await api.dbQuery({ action: 'select', table: 'team_members' });
-  const dl = document.getElementById('team-datalist');
-  if (!dl) return;
-  dl.innerHTML = members.map(m => `<option value="${escHtml(m.name)}">`).join('');
+  // Autocomplete now uses the custom wireAssignedAutoComplete dropdown — no-op
 }
 
 /* ─── CalDAV UI ──────────────────────────────────────────────────────────────── */
@@ -1393,11 +1747,13 @@ async function wireCalDavSettings() {
 
   // Patch settings open to also populate CalDAV fields
   const origOpen = document.getElementById('settings-btn').onclick;
+  let caldavHasPassword = false;
   document.getElementById('settings-btn').onclick = async function (...args) {
     if (origOpen) origOpen.apply(this, args);
     const cfg = await api.caldavGetConfig();
+    caldavHasPassword = cfg.hasPassword;
     document.getElementById('cfg-caldav-enabled').checked     = cfg.enabled;
-    document.getElementById('cfg-caldav-host').value          = cfg.serverHost;
+    document.getElementById('cfg-caldav-host').value          = cfg.serverHost || 'dav.webmail.strato.de';
     document.getElementById('cfg-caldav-user').value          = cfg.username;
     document.getElementById('cfg-caldav-pass').value          = '';  // never pre-fill password
     document.getElementById('cfg-caldav-push-default').checked = cfg.pushByDefault;
@@ -1413,11 +1769,21 @@ async function wireCalDavSettings() {
     const host = document.getElementById('cfg-caldav-host').value.trim();
     const user = document.getElementById('cfg-caldav-user').value.trim();
     const pass = document.getElementById('cfg-caldav-pass').value;
-    if (!host || !user || !pass) { setCalDavStatus('Vul alle velden in', 'error'); return; }
+    // Allow empty password if one is already stored in keychain
+    if (!host || !user || (!pass && !caldavHasPassword)) { setCalDavStatus('Vul server, gebruikersnaam en wachtwoord in', 'error'); return; }
     setCalDavStatus('Verbinding testen…', 'syncing');
     const result = await api.caldavTest({ serverHost: host, username: user, password: pass });
     if (result.ok) {
       setCalDavStatus(`✓ Verbonden — kalender: ${result.calendarUrl}`, 'ok');
+      caldavHasPassword = true;
+      // Auto-save credentials so they persist across sessions
+      await api.caldavSaveConfig({
+        enabled:       document.getElementById('cfg-caldav-enabled').checked,
+        serverHost:    host,
+        username:      user,
+        password:      pass || undefined,
+        pushByDefault: document.getElementById('cfg-caldav-push-default').checked,
+      });
     } else {
       setCalDavStatus(`✕ ${result.error}`, 'error');
     }
@@ -1439,15 +1805,18 @@ async function wireCalDavSettings() {
   // Patch the settings-save button to also save CalDAV config
   const origSaveClick = document.getElementById('settings-save').onclick;
   document.getElementById('settings-save').onclick = async function (...args) {
-    // Save CalDAV config
-    const pass = document.getElementById('cfg-caldav-pass').value;
-    await api.caldavSaveConfig({
-      enabled:       document.getElementById('cfg-caldav-enabled').checked,
-      serverHost:    document.getElementById('cfg-caldav-host').value.trim() || 'dav.strato.de',
-      username:      document.getElementById('cfg-caldav-user').value.trim(),
-      password:      pass || undefined,  // undefined = keep existing
-      pushByDefault: document.getElementById('cfg-caldav-push-default').checked,
-    });
+    // Only save CalDAV config if the username field is filled in.
+    // Skipping when empty preserves any existing stored credentials
+    // (password is never pre-filled for security, so an empty form
+    // would otherwise wipe the stored credentials on every save).
+    const user = document.getElementById('cfg-caldav-user').value.trim();
+    if (user) {
+      const enabled       = document.getElementById('cfg-caldav-enabled').checked;
+      const serverHost    = document.getElementById('cfg-caldav-host').value.trim() || 'dav.webmail.strato.de';
+      const password      = document.getElementById('cfg-caldav-pass').value || undefined;
+      const pushByDefault = document.getElementById('cfg-caldav-push-default').checked;
+      await api.caldavSaveConfig({ enabled, serverHost, username: user, password, pushByDefault });
+    }
     // Run original settings save
     if (origSaveClick) origSaveClick.apply(this, args);
   };
