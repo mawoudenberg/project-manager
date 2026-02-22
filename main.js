@@ -283,10 +283,24 @@ ipcMain.handle('caldav:sync-now', async () => {
 ipcMain.handle('caldav:push-task', async (_e, task) => {
   const cfg = loadConfig();
   const c = cfg?.caldav;
-  if (!c?.enabled || !c.calendarUrl) return { ok: false, error: 'CalDAV niet geconfigureerd' };
+  if (!c?.enabled) return { ok: false, error: 'CalDAV niet geconfigureerd' };
 
   const caldav = getCalDav();
   const password = decryptPassword(c.passwordEncrypted);
+  if (!password) return { ok: false, error: 'Geen wachtwoord opgeslagen' };
+
+  // Discover calendar URL on-demand if not yet cached
+  let calendarUrl = c.calendarUrl;
+  if (!calendarUrl) {
+    try {
+      calendarUrl = await caldav.discoverCalendarUrl({ serverHost: c.serverHost, username: c.username, password });
+      const freshCfg = loadConfig();
+      freshCfg.caldav.calendarUrl = calendarUrl;
+      saveConfig(freshCfg);
+    } catch (err) {
+      return { ok: false, error: `Kalender niet gevonden: ${err.message}` };
+    }
+  }
   const uid = task.caldav_uid || `pm-task-${task.id}@vonkenvorm.com`;
   const ics = caldav.generateICS({
     uid,
@@ -298,7 +312,7 @@ ipcMain.handle('caldav:push-task', async (_e, task) => {
 
   try {
     const result = await caldav.putEvent({
-      calendarUrl: c.calendarUrl,
+      calendarUrl,
       username: c.username,
       password,
       uid,
