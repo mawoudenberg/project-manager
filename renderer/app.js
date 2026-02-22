@@ -25,6 +25,7 @@ let state = {
   editingTask: null,
   editingList: null,
   editingProject: null,
+  activeProject: null,
 };
 
 /* ─── Startup ──────────────────────────────────────────────────────────────── */
@@ -104,6 +105,7 @@ function renderView() {
 
 function setView(view) {
   state.view = view;
+  state.activeProject = null;
   document.querySelectorAll('.nav-btn[data-view]').forEach(b =>
     b.classList.toggle('active', b.dataset.view === view)
   );
@@ -529,7 +531,97 @@ function renderProjectsView() {
   content.querySelectorAll('.proj-card').forEach(card => {
     card.onclick = () => {
       const proj = state.projects.find(p => p.id == card.dataset.projId);
-      if (proj) openProjectModal(proj);
+      if (proj) renderProjectDetail(proj);
+    };
+  });
+}
+
+/* ─── Project Detail Page ──────────────────────────────────────────────────── */
+function renderProjectDetail(proj) {
+  state.activeProject = proj;
+  const content = document.getElementById('content');
+  const ctrl    = document.getElementById('toolbar-controls');
+
+  // Toolbar: back | edit | add task
+  ctrl.innerHTML = `
+    <button class="btn btn-ghost btn-sm" id="proj-back-btn">← Projecten</button>
+    <button class="btn btn-ghost btn-sm" id="proj-edit-btn">✏ Bewerken</button>
+    <button class="btn btn-primary btn-sm" id="proj-add-task-btn">+ Taak</button>`;
+  document.getElementById('proj-back-btn').onclick = () => setView('projects');
+  document.getElementById('proj-edit-btn').onclick = () => openProjectModal(proj);
+  document.getElementById('proj-add-task-btn').onclick = () => openTaskModal(null, null, proj.id);
+
+  // Update toolbar title
+  document.getElementById('toolbar-title').textContent = proj.name;
+
+  const projTasks = state.tasks.filter(t => t.project_id == proj.id);
+  const doneCount = projTasks.filter(t => t.status === 'done').length;
+  const pct       = projTasks.length ? Math.round(doneCount / projTasks.length * 100) : 0;
+  const dateRange = (proj.start_date && proj.end_date)
+    ? `${proj.start_date} → ${proj.end_date}`
+    : proj.start_date ? `vanaf ${proj.start_date}` : '';
+
+  // Header card
+  let html = `<div class="proj-detail-header" style="border-left: 4px solid ${proj.color || '#4f8ef7'}">
+    <div class="proj-detail-meta">
+      <span class="badge badge-proj-${proj.status}">${fmtProjStatus(proj.status)}</span>
+      ${dateRange ? `<span class="proj-card-dates">📅 ${dateRange}</span>` : ''}
+    </div>
+    ${proj.description ? `<div class="proj-card-desc">${escHtml(proj.description)}</div>` : ''}
+    <div class="proj-progress" style="margin-top:8px">
+      <div class="proj-progress-bar" style="width:${pct}%;background:${proj.color || '#4f8ef7'}"></div>
+    </div>
+    <div class="proj-card-meta">${doneCount}/${projTasks.length} taken afgerond</div>
+  </div>`;
+
+  // Task list grouped: open first, then done
+  const open = projTasks.filter(t => t.status !== 'done');
+  const done = projTasks.filter(t => t.status === 'done');
+
+  function taskRow(t) {
+    const isDone = t.status === 'done';
+    return `<div class="daily-task-row" data-id="${t.id}">
+      <div class="priority-dot priority-${t.priority || 'medium'}"></div>
+      <input type="checkbox" class="status-cb" data-id="${t.id}" ${isDone ? 'checked' : ''} title="Toggle done" />
+      <div class="daily-task-info">
+        <div class="daily-task-title ${isDone ? 'done' : ''}">${escHtml(t.title)}</div>
+        <div class="daily-task-meta">
+          ${t.date ? `<span>📅 ${t.date}</span> · ` : ''}
+          ${t.assigned_to ? `<span>→ ${escHtml(t.assigned_to)}</span> · ` : ''}
+          <span class="badge badge-${t.status === 'in_progress' ? 'progress' : t.status}">${fmtStatus(t.status)}</span>
+          ${t.description ? ` · ${escHtml(t.description).slice(0, 60)}${t.description.length > 60 ? '…' : ''}` : ''}
+        </div>
+      </div>
+      <div class="daily-task-actions">
+        <button class="btn btn-sm btn-ghost edit-task-btn" data-id="${t.id}">Edit</button>
+      </div>
+    </div>`;
+  }
+
+  html += '<div id="daily-list">';
+  if (projTasks.length === 0) {
+    html += `<div class="empty"><div class="empty-icon">📋</div><p>Nog geen taken. Klik "+ Taak" om te beginnen.</p></div>`;
+  } else {
+    if (open.length)  html += open.map(taskRow).join('');
+    if (done.length)  html += `<div class="proj-done-divider">Afgerond</div>` + done.map(taskRow).join('');
+  }
+  html += '</div>';
+  content.innerHTML = html;
+
+  // Checkbox toggles
+  content.querySelectorAll('.status-cb').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const task = state.tasks.find(t => t.id == cb.dataset.id);
+      if (!task) return;
+      await saveTask({ ...task, status: cb.checked ? 'done' : 'pending' });
+      await loadTasks();
+      renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
+    });
+  });
+  content.querySelectorAll('.edit-task-btn').forEach(btn => {
+    btn.onclick = () => {
+      const task = state.tasks.find(t => t.id == btn.dataset.id);
+      if (task) openTaskModal(task);
     };
   });
 }
@@ -769,7 +861,7 @@ function wireAssignedAutoComplete() {
 }
 
 /* ─── Task Modal ───────────────────────────────────────────────────────────── */
-function openTaskModal(task, defaultDate) {
+function openTaskModal(task, defaultDate, defaultProjectId) {
   state.editingTask = task || null;
   const isEdit = !!task;
 
@@ -791,9 +883,10 @@ function openTaskModal(task, defaultDate) {
 
   // Populate project dropdown
   const projSel = document.getElementById('task-project');
+  const preselProject = task?.project_id ?? defaultProjectId ?? null;
   projSel.innerHTML = '<option value="">— Geen project —</option>' +
     state.projects.map(p =>
-      `<option value="${p.id}" ${task?.project_id == p.id ? 'selected' : ''}>${escHtml(p.name)}</option>`
+      `<option value="${p.id}" ${preselProject == p.id ? 'selected' : ''}>${escHtml(p.name)}</option>`
     ).join('');
 
   document.getElementById('task-modal').classList.remove('hidden');
@@ -861,7 +954,11 @@ function wireTaskModal() {
       (taskData.id ? t.id === taskData.id : true)
     );
     closeTaskModal();
-    renderView();
+    if (state.activeProject) {
+      renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
+    } else {
+      renderView();
+    }
     toast('Task saved');
     if (saved) await maybePushTaskToCalDav(saved);
   };
@@ -872,7 +969,11 @@ function wireTaskModal() {
     await api.dbQuery({ action: 'delete', table: 'tasks', where: { id: state.editingTask.id } });
     await loadTasks();
     closeTaskModal();
-    renderView();
+    if (state.activeProject) {
+      renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
+    } else {
+      renderView();
+    }
     toast('Task deleted');
   };
 
