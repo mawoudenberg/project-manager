@@ -96,6 +96,7 @@ a { color: var(--accent); text-decoration: none; }
 .nav-btn:hover { background: var(--bg3); color: var(--text); }
 .nav-btn.active { background: var(--accent); color: #fff; }
 .nav-btn .icon { font-size: 16px; line-height: 1; }
+.nav-divider { height: 1px; background: var(--border); margin: 6px 4px; }
 
 #sidebar-footer {
   padding: 12px 10px;
@@ -310,10 +311,15 @@ a { color: var(--accent); text-decoration: none; }
 .todo-items { flex: 1; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
 .todo-item-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .todo-item-row input[type=checkbox] { accent-color: var(--green); width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; }
-.todo-item-text { flex: 1; font-size: 13px; }
+.todo-item-text { flex: 1; font-size: 13px; cursor: default; }
 .todo-item-text.done { text-decoration: line-through; color: var(--text2); }
 .todo-item-delete { background: none; border: none; color: var(--text2); font-size: 14px; opacity: 0; transition: opacity .15s; cursor: pointer; padding: 2px 4px; }
 .todo-item-row:hover .todo-item-delete { opacity: 1; }
+.todo-drag-handle { cursor: grab; color: var(--text2); font-size: 15px; line-height: 1; opacity: 0; transition: opacity .15s; flex-shrink: 0; user-select: none; }
+.todo-item-row:hover .todo-drag-handle { opacity: 0.5; }
+.todo-item-row.dragging { opacity: 0.35; }
+.todo-drag-placeholder { height: 30px; background: var(--accent); opacity: 0.2; border-radius: 6px; margin: 2px 0; pointer-events: none; }
+.todo-item-edit-input { flex: 1; font-size: 13px; border: 1px solid var(--accent); border-radius: 4px; padding: 1px 5px; background: var(--bg2); color: var(--text); outline: none; }
 .todo-add-item-form {
   padding: 8px 12px 12px;
   border-top: 1px solid var(--border);

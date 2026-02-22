@@ -48,7 +48,6 @@ async function init() {
     showApp();
     await loadAll();
     renderView();
-    wireCalDavSettings();
     refreshTeamDatalist();
   }
 }
@@ -736,10 +735,11 @@ function renderTodo() {
     const pct = items.length ? Math.round((done/items.length)*100) : 0;
 
     const itemsHtml = items.map(item => `
-      <div class="todo-item-row" data-item-id="${item.id}" data-list-id="${list.id}">
+      <div class="todo-item-row" data-item-id="${item.id}" data-list-id="${list.id}" draggable="true">
+        <span class="todo-drag-handle" title="Slepen">⠿</span>
         <input type="checkbox" ${item.completed?'checked':''} class="todo-cb" data-item-id="${item.id}" data-list-id="${list.id}" />
-        <span class="todo-item-text ${item.completed?'done':''}">${escHtml(item.text)}</span>
-        <button class="todo-item-delete" data-item-id="${item.id}" data-list-id="${list.id}" title="Delete">✕</button>
+        <span class="todo-item-text ${item.completed?'done':''}" title="Dubbelklik om te bewerken">${escHtml(item.text)}</span>
+        <button class="todo-item-delete" data-item-id="${item.id}" data-list-id="${list.id}" title="Verwijder">✕</button>
       </div>`).join('');
 
     html += `<div class="todo-card" data-list-id="${list.id}">
@@ -751,7 +751,7 @@ function renderTodo() {
         </div>
         <div style="font-size:11px;color:var(--text2);margin-top:4px">${done}/${items.length} done</div>
       </div>
-      <div class="todo-items">${itemsHtml}</div>
+      <div class="todo-items" data-list-id="${list.id}">${itemsHtml}</div>
       <form class="todo-add-item-form" data-list-id="${list.id}">
         <input type="text" placeholder="Add item…" class="add-item-input" autocomplete="off" />
         <button type="submit" class="btn btn-primary btn-sm">Add</button>
@@ -796,6 +796,119 @@ function renderTodo() {
       const list = state.todoLists.find(l => l.id == btn.dataset.listId);
       if (list) openListModal(list);
     };
+  });
+
+  // ── Drag-and-drop reordering ──────────────────────────────────────────────
+  let dragListId = null;
+  let placeholder = null;
+
+  function getAfterElement(zone, y) {
+    const rows = [...zone.querySelectorAll('.todo-item-row:not(.dragging)')];
+    return rows.reduce((closest, row) => {
+      const box = row.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) return { offset, element: row };
+      return closest;
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+  }
+
+  async function persistOrder(zoneListId) {
+    const zone = content.querySelector(`.todo-items[data-list-id="${zoneListId}"]`);
+    if (!zone) return;
+    const rows = [...zone.querySelectorAll('.todo-item-row[data-item-id]')];
+    for (let i = 0; i < rows.length; i++) {
+      const itemId = Number(rows[i].dataset.itemId);
+      await api.dbQuery({ action: 'update', table: 'todo_items',
+        data: { sort_order: i, list_id: Number(zoneListId) },
+        where: { id: itemId } });
+    }
+  }
+
+  content.querySelectorAll('.todo-item-row').forEach(row => {
+    row.addEventListener('dragstart', (e) => {
+      dragListId = row.dataset.listId;
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      placeholder = document.createElement('div');
+      placeholder.className = 'todo-drag-placeholder';
+    });
+
+    row.addEventListener('dragend', async () => {
+      row.classList.remove('dragging');
+      if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+
+      const newListId = row.dataset.listId;
+      const toUpdate = new Set([dragListId, newListId].filter(Boolean));
+      for (const id of toUpdate) await persistOrder(id);
+      dragListId = null;
+      placeholder = null;
+      await loadTodoLists();
+      renderTodo();
+    });
+  });
+
+  content.querySelectorAll('.todo-items').forEach(zone => {
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (!placeholder) return;
+      const after = getAfterElement(zone, e.clientY);
+      if (after) zone.insertBefore(placeholder, after);
+      else zone.appendChild(placeholder);
+    });
+
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const dragging = content.querySelector('.todo-item-row.dragging');
+      if (!dragging) return;
+      dragging.dataset.listId = zone.dataset.listId;
+      if (placeholder && placeholder.parentNode === zone) {
+        zone.insertBefore(dragging, placeholder);
+      } else {
+        zone.appendChild(dragging);
+      }
+      if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+    });
+  });
+
+  // ── Inline editing (double-click) ─────────────────────────────────────────
+  content.querySelectorAll('.todo-item-text').forEach(span => {
+    span.addEventListener('dblclick', () => {
+      const row      = span.closest('.todo-item-row');
+      const itemId   = Number(row.dataset.itemId);
+      const original = span.textContent;
+
+      const input = document.createElement('input');
+      input.type      = 'text';
+      input.value     = original;
+      input.className = 'todo-item-edit-input';
+      span.replaceWith(input);
+      input.focus();
+      input.select();
+
+      let committed = false;
+      async function commit() {
+        if (committed) return;
+        committed = true;
+        const newText = input.value.trim();
+        if (newText && newText !== original) {
+          await api.dbQuery({ action: 'update', table: 'todo_items', data: { text: newText }, where: { id: itemId } });
+          await loadTodoLists();
+          renderTodo();
+        } else {
+          input.replaceWith(span);
+        }
+      }
+
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') {
+          committed = true;  // prevent blur from saving
+          input.replaceWith(span);
+        }
+      });
+    });
   });
 }
 
@@ -993,15 +1106,27 @@ function wireTaskModal() {
   document.getElementById('task-delete').onclick = async () => {
     if (!state.editingTask) return;
     if (!confirm('Delete this task?')) return;
-    await api.dbQuery({ action: 'delete', table: 'tasks', where: { id: state.editingTask.id } });
-    await loadTasks();
-    closeTaskModal();
-    if (state.activeProject) {
-      renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
-    } else {
-      renderView();
+    try {
+      const task = state.editingTask;
+      await api.dbQuery({ action: 'delete', table: 'tasks', where: { id: task.id } });
+
+      // If this task was pushed to the calendar, delete it there too
+      if (task.caldav_uid) {
+        const result = await api.caldavDeleteTask(task.caldav_uid);
+        if (!result.ok) console.warn('CalDAV delete failed:', result.error);
+      }
+
+      await loadTasks();
+      closeTaskModal();
+      if (state.activeProject) {
+        renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
+      } else {
+        renderView();
+      }
+      toast('Task deleted');
+    } catch (err) {
+      toast('Verwijderen mislukt: ' + err.message);
     }
-    toast('Task deleted');
   };
 
   // Close on overlay click
@@ -1867,95 +1992,6 @@ async function refreshTeamDatalist() {
 
 /* ─── CalDAV UI ──────────────────────────────────────────────────────────────── */
 
-// ── Settings panel wiring ─────────────────────────────────────────────────────
-async function wireCalDavSettings() {
-  // Populate fields when settings open
-  const origSettingsBtn = document.getElementById('settings-btn');
-  const originalSettingsBtnClick = origSettingsBtn.onclick;
-
-  // Patch settings open to also populate CalDAV fields
-  const origOpen = document.getElementById('settings-btn').onclick;
-  let caldavHasPassword = false;
-  document.getElementById('settings-btn').onclick = async function (...args) {
-    if (origOpen) origOpen.apply(this, args);
-    const cfg = await api.caldavGetConfig();
-    caldavHasPassword = cfg.hasPassword;
-    document.getElementById('cfg-caldav-enabled').checked     = cfg.enabled;
-    document.getElementById('cfg-caldav-host').value          = cfg.serverHost || 'dav.webmail.strato.de';
-    document.getElementById('cfg-caldav-user').value          = cfg.username;
-    document.getElementById('cfg-caldav-pass').value          = '';  // never pre-fill password
-    document.getElementById('cfg-caldav-push-default').checked = cfg.pushByDefault;
-    if (cfg.enabled && cfg.hasPassword) {
-      setCalDavStatus('Geconfigureerd ✓', 'ok');
-    } else {
-      setCalDavStatus('', '');
-    }
-  };
-
-  // Test connection button
-  document.getElementById('cfg-caldav-test').onclick = async () => {
-    const host = document.getElementById('cfg-caldav-host').value.trim();
-    const user = document.getElementById('cfg-caldav-user').value.trim();
-    const pass = document.getElementById('cfg-caldav-pass').value;
-    // Allow empty password if one is already stored in keychain
-    if (!host || !user || (!pass && !caldavHasPassword)) { setCalDavStatus('Vul server, gebruikersnaam en wachtwoord in', 'error'); return; }
-    setCalDavStatus('Verbinding testen…', 'syncing');
-    const result = await api.caldavTest({ serverHost: host, username: user, password: pass });
-    if (result.ok) {
-      setCalDavStatus(`✓ Verbonden — kalender: ${result.calendarUrl}`, 'ok');
-      caldavHasPassword = true;
-      // Auto-save credentials so they persist across sessions
-      await api.caldavSaveConfig({
-        enabled:       document.getElementById('cfg-caldav-enabled').checked,
-        serverHost:    host,
-        username:      user,
-        password:      pass || undefined,
-        pushByDefault: document.getElementById('cfg-caldav-push-default').checked,
-      });
-    } else {
-      setCalDavStatus(`✕ ${result.error}`, 'error');
-    }
-  };
-
-  // Manual sync button
-  document.getElementById('cfg-caldav-sync-now').onclick = async () => {
-    setCalDavStatus('Synchroniseren…', 'syncing');
-    const result = await api.caldavSyncNow();
-    if (result.error) {
-      setCalDavStatus(`✕ ${result.error}`, 'error');
-    } else {
-      setCalDavStatus('✓ Gesynchroniseerd', 'ok');
-      await loadAll();
-      renderView();
-    }
-  };
-
-  // Patch the settings-save button to also save CalDAV config
-  const origSaveClick = document.getElementById('settings-save').onclick;
-  document.getElementById('settings-save').onclick = async function (...args) {
-    // Only save CalDAV config if the username field is filled in.
-    // Skipping when empty preserves any existing stored credentials
-    // (password is never pre-filled for security, so an empty form
-    // would otherwise wipe the stored credentials on every save).
-    const user = document.getElementById('cfg-caldav-user').value.trim();
-    if (user) {
-      const enabled       = document.getElementById('cfg-caldav-enabled').checked;
-      const serverHost    = document.getElementById('cfg-caldav-host').value.trim() || 'dav.webmail.strato.de';
-      const password      = document.getElementById('cfg-caldav-pass').value || undefined;
-      const pushByDefault = document.getElementById('cfg-caldav-push-default').checked;
-      await api.caldavSaveConfig({ enabled, serverHost, username: user, password, pushByDefault });
-    }
-    // Run original settings save
-    if (origSaveClick) origSaveClick.apply(this, args);
-  };
-}
-
-function setCalDavStatus(msg, type) {
-  const el = document.getElementById('cfg-caldav-status');
-  if (!el) return;
-  el.textContent = msg;
-  el.style.color = type === 'error' ? 'var(--red)' : type === 'ok' ? 'var(--green)' : 'var(--text2)';
-}
 
 // ── Sync status pill (sidebar) ────────────────────────────────────────────────
 
@@ -1992,7 +2028,7 @@ async function maybeShowCalDavCheckbox(task) {
   const cfg = await api.caldavGetConfig();
   const dateVal = document.getElementById('task-date').value;
 
-  if (cfg.enabled && dateVal) {
+  if ((cfg.enabled || cfg.hasPassword) && dateVal) {
     group.classList.remove('hidden');
     // Pre-check: default on if setting says so, or if task is already in calendar
     cb.checked = task?.caldav_uid ? true : cfg.pushByDefault;

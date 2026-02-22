@@ -55,7 +55,8 @@ function createSchema() {
       completed   INTEGER DEFAULT 0,
       assigned_to TEXT DEFAULT '',
       created_by  TEXT DEFAULT '',
-      created_at  TEXT DEFAULT (datetime('now'))
+      created_at  TEXT DEFAULT (datetime('now')),
+      sort_order  INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS team_members (
@@ -111,6 +112,12 @@ function migrateSchema() {
   if (!cols.includes('caldav_etag')) db.exec("ALTER TABLE tasks ADD COLUMN caldav_etag TEXT DEFAULT ''");
   if (!cols.includes('end_date'))    db.exec("ALTER TABLE tasks ADD COLUMN end_date    TEXT DEFAULT ''");
   if (!cols.includes('project_id')) db.exec("ALTER TABLE tasks ADD COLUMN project_id  INTEGER DEFAULT NULL");
+
+  const itemCols = db.pragma('table_info(todo_items)').map(c => c.name);
+  if (!itemCols.includes('sort_order')) {
+    db.exec("ALTER TABLE todo_items ADD COLUMN sort_order INTEGER DEFAULT 0");
+    db.exec("UPDATE todo_items SET sort_order = id");
+  }
 }
 
 // ─── Generic query dispatcher ─────────────────────────────────────────────────
@@ -182,7 +189,7 @@ function validateTable(table) {
 function orderFor(table) {
   if (table === 'tasks')       return ' ORDER BY date ASC, created_at ASC';
   if (table === 'todo_lists')  return ' ORDER BY created_at DESC';
-  if (table === 'todo_items')  return ' ORDER BY created_at ASC';
+  if (table === 'todo_items')  return ' ORDER BY sort_order ASC, id ASC';
   if (table === 'team_members') return ' ORDER BY name ASC';
   if (table === 'projects')    return ' ORDER BY start_date ASC, name ASC';
   if (table === 'quotes')      return ' ORDER BY created_at DESC';

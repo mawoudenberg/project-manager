@@ -165,7 +165,7 @@
       </div>
       <div class="form-group" style="flex:1;margin:0">
         <label>E-mail (optioneel)</label>
-        <input type="email" id="new-member-email" placeholder="naam@vonkenvorm.com" />
+        <input type="email" id="new-member-email" placeholder="naam@bedrijf.nl" />
       </div>
       <button class="btn btn-primary" id="add-member-btn">Toevoegen</button>
     </div>
@@ -216,42 +216,6 @@
       <h3>Raspberry Pi URL</h3>
       <div class="form-group">
         <input type="text" id="cfg-api-url" placeholder="http://raspberrypi.local:5000" />
-      </div>
-    </div>
-    <div class="settings-section">
-      <h3>Agenda synchronisatie (CalDAV)</h3>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
-          <input type="checkbox" id="cfg-caldav-enabled" style="accent-color:var(--accent);width:16px;height:16px">
-          Synchroniseer kalender automatisch (elke 10 min)
-        </label>
-      </div>
-      <div id="cfg-caldav-fields">
-        <div class="form-row">
-          <div class="form-group">
-            <label>CalDAV server</label>
-            <input type="text" id="cfg-caldav-host" placeholder="dav.webmail.strato.de" />
-          </div>
-          <div class="form-group">
-            <label>Gebruikersnaam</label>
-            <input type="email" id="cfg-caldav-user" placeholder="info@vonkenvorm.com" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label>Wachtwoord <span style="color:var(--text2);font-weight:400">(veilig opgeslagen in macOS Sleutelhanger)</span></label>
-          <input type="password" id="cfg-caldav-pass" placeholder="Laat leeg om huidig wachtwoord te behouden" autocomplete="new-password" />
-        </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
-            <input type="checkbox" id="cfg-caldav-push-default" style="accent-color:var(--accent)">
-            Standaard: nieuwe taken ook naar kalender sturen
-          </label>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:4px">
-          <button class="btn btn-ghost btn-sm" id="cfg-caldav-test">Verbinding testen</button>
-          <button class="btn btn-ghost btn-sm" id="cfg-caldav-sync-now">Nu synchroniseren</button>
-        </div>
-        <div id="cfg-caldav-status" style="font-size:12px;margin-top:8px;min-height:18px"></div>
       </div>
     </div>
 
@@ -324,6 +288,7 @@
       <button class="nav-btn" data-view="daily">
         <span class="icon">☀️</span><span>Daily</span>
       </button>
+      <div class="nav-divider"></div>
       <button class="nav-btn" data-view="todo">
         <span class="icon">✅</span><span>Todo Lists</span>
       </button>

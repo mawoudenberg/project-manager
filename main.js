@@ -80,7 +80,8 @@ app.on('window-all-closed', () => {
 ipcMain.handle('config:get', () => loadConfig());
 
 ipcMain.handle('config:set', (_e, config) => {
-  saveConfig(config);
+  const existing = loadConfig() || {};
+  saveConfig({ ...existing, ...config });
   if (config.mode === 'file' && config.filePath) {
     openDb(config.filePath);
   }
@@ -126,8 +127,10 @@ function decryptPassword(stored) {
     if (safeStorage.isEncryptionAvailable()) {
       return safeStorage.decryptString(Buffer.from(stored, 'base64'));
     }
-    return Buffer.from(stored, 'base64').toString();
-  } catch (_) { return ''; }
+  } catch (_) {
+    // safeStorage decrypt failed — fall back to plain base64 (setup-script credentials)
+  }
+  try { return Buffer.from(stored, 'base64').toString('utf8'); } catch (_) { return ''; }
 }
 
 // ─── CalDAV background sync ───────────────────────────────────────────────────
@@ -156,15 +159,15 @@ async function runCalDAVSync() {
   const config = loadConfig();
   if (!config?.caldav?.enabled || !dbModule) return;
 
-  const { serverHost, username, passwordEncrypted, calendarUrl } = config.caldav;
+  const { serverHost, username, passwordEncrypted, calendarUrl, calendarUrlOverride } = config.caldav;
   const password = decryptPassword(passwordEncrypted);
   if (!username || !password) return;
 
   const caldav = getCalDav();
-  let resolvedUrl = calendarUrl;
+  let resolvedUrl = calendarUrlOverride || calendarUrl;
 
   try {
-    // Discover URL if not cached
+    // Discover URL if not cached (skipped when calendarUrlOverride is set)
     if (!resolvedUrl) {
       resolvedUrl = await caldav.discoverCalendarUrl({ serverHost, username, password });
       // Cache it
@@ -237,16 +240,17 @@ async function syncRemoteEvent(icsEv, etag) {
 
 // ─── CalDAV IPC handlers ──────────────────────────────────────────────────────
 
-ipcMain.handle('caldav:save-config', async (_e, { serverHost, username, password, enabled, pushByDefault }) => {
+ipcMain.handle('caldav:save-config', async (_e, { serverHost, username, password, enabled, pushByDefault, calendarUrlOverride }) => {
   const cfg = loadConfig() || {};
   const passwordEncrypted = password ? encryptPassword(password) : cfg.caldav?.passwordEncrypted || '';
   cfg.caldav = {
-    enabled:          !!enabled,
-    serverHost:       serverHost || 'dav.webmail.strato.de',
-    username:         username || '',
+    enabled:             !!enabled,
+    serverHost:          serverHost || 'caldav.icloud.com',
+    username:            username || '',
     passwordEncrypted,
-    pushByDefault:    !!pushByDefault,
-    calendarUrl:      null, // reset so it's re-discovered
+    pushByDefault:       !!pushByDefault,
+    calendarUrlOverride: calendarUrlOverride || '',
+    calendarUrl:         null, // reset cached auto-discovered URL so it's re-discovered
   };
   saveConfig(cfg);
   startCalDAVSync();
@@ -257,11 +261,12 @@ ipcMain.handle('caldav:get-config', () => {
   const cfg = loadConfig();
   const c = cfg?.caldav || {};
   return {
-    enabled:       c.enabled      || false,
-    serverHost:    c.serverHost   || 'dav.webmail.strato.de',
-    username:      c.username     || '',
-    pushByDefault: c.pushByDefault || false,
-    hasPassword:   !!c.passwordEncrypted,
+    enabled:             c.enabled             || false,
+    serverHost:          c.serverHost           || 'caldav.icloud.com',
+    username:            c.username             || '',
+    pushByDefault:       c.pushByDefault        || false,
+    calendarUrlOverride: c.calendarUrlOverride   || '',
+    hasPassword:         !!c.passwordEncrypted,
   };
 });
 
@@ -297,8 +302,8 @@ ipcMain.handle('caldav:push-task', async (_e, task) => {
   const password = decryptPassword(c.passwordEncrypted);
   if (!password) return { ok: false, error: 'Geen wachtwoord opgeslagen' };
 
-  // Discover calendar URL on-demand if not yet cached
-  let calendarUrl = c.calendarUrl;
+  // Use override URL if set, otherwise discover/cache
+  let calendarUrl = c.calendarUrlOverride || c.calendarUrl;
   if (!calendarUrl) {
     try {
       calendarUrl = await caldav.discoverCalendarUrl({ serverHost: c.serverHost, username: c.username, password });
@@ -309,7 +314,7 @@ ipcMain.handle('caldav:push-task', async (_e, task) => {
       return { ok: false, error: `Kalender niet gevonden: ${err.message}` };
     }
   }
-  const uid = task.caldav_uid || `pm-task-${task.id}@vonkenvorm.com`;
+  const uid = task.caldav_uid || `pm-task-${task.id}`;
   const ics = caldav.generateICS({
     uid,
     title:       task.title,
@@ -335,6 +340,36 @@ ipcMain.handle('caldav:push-task', async (_e, task) => {
       });
     }
     return { ok: true, uid, etag: result.etag };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('caldav:delete-task', async (_e, { uid }) => {
+  const cfg = loadConfig();
+  const c = cfg?.caldav;
+  if (!c?.username || !c?.passwordEncrypted) return { ok: false, error: 'CalDAV niet geconfigureerd' };
+
+  const caldav = getCalDav();
+  const password = decryptPassword(c.passwordEncrypted);
+  if (!password) return { ok: false, error: 'Geen wachtwoord opgeslagen' };
+
+  let calendarUrl = c.calendarUrlOverride || c.calendarUrl;
+  if (!calendarUrl) {
+    try {
+      calendarUrl = await caldav.discoverCalendarUrl({ serverHost: c.serverHost, username: c.username, password });
+      const freshCfg = loadConfig();
+      freshCfg.caldav.calendarUrl = calendarUrl;
+      saveConfig(freshCfg);
+    } catch (err) {
+      return { ok: false, error: `Kalender niet gevonden: ${err.message}` };
+    }
+  }
+
+  try {
+    const { status } = await caldav.deleteEvent({ calendarUrl, username: c.username, password, uid });
+    if (status === 200 || status === 204 || status === 404) return { ok: true };
+    return { ok: false, error: `HTTP ${status}` };
   } catch (err) {
     return { ok: false, error: err.message };
   }

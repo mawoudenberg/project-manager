@@ -53,148 +53,10 @@ function httpRequest({ method, url: href, username, password, extraHeaders = {},
  */
 async function discoverCalendarUrl({ serverHost, username, password }) {
   const base    = `https://${serverHost}`;
-  const encUser = encodeURIComponent(username); // info%40vonkenvorm.com
+  const encUser = encodeURIComponent(username);
   const log = [];
 
-  // ── Strategy 0: dav.webmail.strato.de (Strato's actual CalDAV endpoint) ──
-  // Strato routes CalDAV through dav.webmail.strato.de. We first do a root
-  // PROPFIND to get the current-user-principal (definitive auth check), then
-  // try direct URL patterns. Only throw 401 if the root check itself fails.
-  const stratoBase = 'https://dav.webmail.strato.de';
-  let stratoGot401 = false;
-
-  // Step 0a: Root PROPFIND → current-user-principal → calendar-home-set
-  try {
-    const rootRes = await httpRequest({
-      method: 'PROPFIND', url: `${stratoBase}/`, username, password,
-      extraHeaders: { Depth: '0' },
-      body: PROPFIND_PRINCIPAL,
-    });
-    console.log(`[CalDAV] strato root PROPFIND → ${rootRes.status}`);
-    if (rootRes.status === 401) {
-      stratoGot401 = true;
-    } else if (rootRes.status === 207) {
-      // Extract current-user-principal href
-      const cpBlock = /<[^:>]*:?current-user-principal[^>]*>([\s\S]*?)<\/[^:>]*:?current-user-principal>/i.exec(rootRes.body);
-      if (cpBlock) {
-        const cpHref = xmlText(cpBlock[1], 'href');
-        if (cpHref) {
-          const u = new URL(stratoBase);
-          const principalUrl = cpHref.startsWith('http') ? cpHref : `${u.protocol}//${u.host}${cpHref}`;
-          console.log(`[CalDAV] strato principal: ${principalUrl}`);
-          const calHome = await getCalendarHomeFromPrincipal(principalUrl, username, password, stratoBase);
-          if (calHome) {
-            const calCol = await firstCalendarCollection(calHome, username, password);
-            return calCol || calHome;
-          }
-          // calendar-home-set not found in principal response.
-          // Try URL patterns derived from the numeric user ID in the principal path.
-          // e.g. /principals/users/3 → try /caldav/v2/3/calendar/
-          const uidMatch = /\/(\d+)\/?$/.exec(cpHref);
-          if (uidMatch) {
-            const uid = uidMatch[1];
-            console.log(`[CalDAV] strato trying numeric uid: ${uid}`);
-            const uidCandidates = [
-              `${stratoBase}/caldav/v2/${uid}/calendar/`,
-              `${stratoBase}/caldav/v2/${uid}/`,
-              `${stratoBase}/calendars/${uid}/`,
-              `${stratoBase}/dav/${uid}/`,
-            ];
-            for (const url of uidCandidates) {
-              try {
-                const r = await httpRequest({
-                  method: 'PROPFIND', url, username, password,
-                  extraHeaders: { Depth: '0' }, body: PROPFIND_RESOURCETYPE,
-                });
-                console.log(`[CalDAV] strato uid PROPFIND ${url} → ${r.status}`);
-                if (r.status === 207) return url;
-              } catch (e) { log.push(`strato uid ${url}: ${e.message}`); }
-            }
-          }
-          // Also try a Depth:1 PROPFIND on the principal to list its children
-          try {
-            const r = await httpRequest({
-              method: 'PROPFIND', url: principalUrl, username, password,
-              extraHeaders: { Depth: '1' }, body: PROPFIND_RESOURCETYPE,
-            });
-            console.log(`[CalDAV] strato principal Depth:1 → ${r.status} body: ${r.body.slice(0, 600)}`);
-            if (r.status === 207) {
-              // Look for any href containing 'calendar' or 'caldav'
-              const hrefRe = /<[^:>]*:?href[^>]*>([^<]*(?:calendar|caldav)[^<]*)<\/[^:>]*:?href>/gi;
-              let hm;
-              while ((hm = hrefRe.exec(r.body)) !== null) {
-                const href = hm[1].trim();
-                const absUrl = href.startsWith('http') ? href : `${u.protocol}//${u.host}${href}`;
-                console.log(`[CalDAV] strato candidate href: ${absUrl}`);
-                const r2 = await httpRequest({
-                  method: 'PROPFIND', url: absUrl, username, password,
-                  extraHeaders: { Depth: '0' }, body: PROPFIND_RESOURCETYPE,
-                });
-                if (r2.status === 207) return absUrl;
-              }
-            }
-          } catch (e) { log.push(`strato principal depth1: ${e.message}`); }
-        }
-      }
-    }
-  } catch (e) { log.push(`strato root: ${e.message}`); }
-
-  // Step 0b: .well-known/caldav on dav.webmail.strato.de
-  if (!stratoGot401) {
-    try {
-      const wk = `${stratoBase}/.well-known/caldav`;
-      const r = await httpRequest({
-        method: 'PROPFIND', url: wk, username, password,
-        extraHeaders: { Depth: '0' },
-        body: PROPFIND_RESOURCETYPE,
-      });
-      console.log(`[CalDAV] strato well-known → ${r.status}`);
-      if (r.status === 401) { stratoGot401 = true; }
-      else if (r.status === 207) { return await resolveToCalendar(wk, r.body, username, password); }
-      else if (r.status === 301 || r.status === 302 || r.status === 308) {
-        const loc = r.headers.location;
-        if (loc) {
-          const redir = loc.startsWith('http') ? loc : new URL(loc, stratoBase).href;
-          const r2 = await httpRequest({
-            method: 'PROPFIND', url: redir, username, password,
-            extraHeaders: { Depth: '0' }, body: PROPFIND_RESOURCETYPE,
-          });
-          if (r2.status === 207) return await resolveToCalendar(redir, r2.body, username, password);
-        }
-      }
-    } catch (e) { log.push(`strato well-known: ${e.message}`); }
-  }
-
-  // Step 0c: Direct URL pattern candidates (don't throw on 401 — URL may not exist)
-  if (!stratoGot401) {
-    const stratoDirectCandidates = [
-      `${stratoBase}/caldav/v2/${username}/calendar/`,
-      `${stratoBase}/caldav/v2/${encUser}/calendar/`,
-      `${stratoBase}/caldav/v2/${username}/`,
-      `${stratoBase}/calendars/${username}/`,
-      `${stratoBase}/calendars/${encUser}/`,
-    ];
-    for (const url of stratoDirectCandidates) {
-      try {
-        const r = await httpRequest({
-          method: 'PROPFIND', url, username, password,
-          extraHeaders: { Depth: '0' },
-          body: PROPFIND_RESOURCETYPE,
-        });
-        console.log(`[CalDAV] strato PROPFIND ${url} → ${r.status}`);
-        if (r.status === 207) return url;
-        if (r.status === 401) stratoGot401 = true;
-      } catch (e) { log.push(`strato ${url}: ${e.message}`); }
-    }
-  }
-
-  // If every strato request got 401, credentials are wrong
-  if (stratoGot401) {
-    throw new Error('Authenticatie mislukt (401). Controleer gebruikersnaam en wachtwoord.');
-  }
-
   // ── Strategy 1: direct known URL patterns (configured serverHost) ─────────
-  // Try BOTH literal @ and encoded @ because Strato accepts either.
   const directCandidates = [
     `${base}/caldav/v2/${username}/calendar/`,
     `${base}/caldav/v2/${encUser}/calendar/`,
@@ -293,16 +155,45 @@ async function getCalendarHomeFromPrincipal(principalUrl, username, password, ba
  * When we got a 207 from a non-collection URL, resolve it to the actual calendar.
  */
 async function resolveToCalendar(url, body, username, password) {
+  const u = new URL(url);
+  const base = `${u.protocol}//${u.host}`;
+
+  // Helper: try a URL as a principal and follow to calendar collection
+  async function tryPrincipal(href) {
+    const principalUrl = href.startsWith('http') ? href : `${base}${href}`;
+    const calHome = await getCalendarHomeFromPrincipal(principalUrl, username, password, base);
+    if (calHome) return await firstCalendarCollection(calHome, username, password) || calHome;
+    return null;
+  }
+
+  // If the response contains current-user-principal, follow it
+  const cpBlock = /<[^:>]*:?current-user-principal[^>]*>([\s\S]*?)<\/[^:>]*:?current-user-principal>/i.exec(body);
+  if (cpBlock) {
+    const cpHref = xmlText(cpBlock[1], 'href');
+    if (cpHref) { const r = await tryPrincipal(cpHref); if (r) return r; }
+  }
+
   // If the response contains a calendar-home-set, follow it
   const calHomeBlock = /<[^:>]*:?calendar-home-set[^>]*>([\s\S]*?)<\/[^:>]*:?calendar-home-set>/i.exec(body);
   if (calHomeBlock) {
     const href = xmlText(calHomeBlock[1], 'href');
     if (href) {
-      const u = new URL(url);
-      const homeUrl = href.startsWith('http') ? href : `${u.protocol}//${u.host}${href}`;
+      const homeUrl = href.startsWith('http') ? href : `${base}${href}`;
       return await firstCalendarCollection(homeUrl, username, password) || homeUrl;
     }
   }
+
+  // iCloud: well-known redirects PROPFIND to the principal; the response <href> IS the principal path
+  const responseHrefM = /<[^:>]*:?href[^>]*>([^<]+)<\/[^:>]*:?href>/i.exec(body);
+  if (responseHrefM) {
+    const responseHref = responseHrefM[1].trim();
+    const reqPath = u.pathname;
+    if (responseHref && responseHref !== reqPath && !responseHref.includes('.well-known')) {
+      const r = await tryPrincipal(responseHref);
+      if (r) return r;
+    }
+  }
+
   return url;
 }
 
@@ -390,19 +281,22 @@ async function fetchEvents({ calendarUrl, username, password, monthsBack = 1, mo
 // ─── Push event (CalDAV PUT) ──────────────────────────────────────────────────
 
 async function putEvent({ calendarUrl, username, password, uid, icsContent }) {
-  const url = calendarUrl.replace(/\/$/, '') + '/' + uid + '.ics';
+  const url = calendarUrl.replace(/\/$/, '') + '/' + encodeURIComponent(uid) + '.ics';
   const res = await httpRequest({
     method: 'PUT', url, username, password,
     extraHeaders: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Length': Buffer.byteLength(icsContent, 'utf8') },
     body: icsContent,
   });
+  if (res.status !== 201 && res.status !== 204) {
+    throw new Error(`CalDAV PUT mislukt: HTTP ${res.status} — ${res.body.slice(0, 300)}`);
+  }
   return { status: res.status, etag: res.headers.etag || '' };
 }
 
 // ─── Delete event (CalDAV DELETE) ─────────────────────────────────────────────
 
 async function deleteEvent({ calendarUrl, username, password, uid }) {
-  const url = calendarUrl.replace(/\/$/, '') + '/' + uid + '.ics';
+  const url = calendarUrl.replace(/\/$/, '') + '/' + encodeURIComponent(uid) + '.ics';
   const res = await httpRequest({ method: 'DELETE', url, username, password, body: '' });
   return { status: res.status };
 }
