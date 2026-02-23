@@ -2026,6 +2026,11 @@ function initCalDavListeners() {
     updateSyncPill('☁ sync fout', 'error');
   });
 
+  api.onDbChanged(async () => {
+    await loadAll();
+    renderView();
+  });
+
   api.onUpdateAvailable(({ latest, url }) => {
     const banner = document.createElement('div');
     banner.id = 'update-banner';

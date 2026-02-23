@@ -26,10 +26,33 @@ function saveConfig(config) {
 // ─── Database ─────────────────────────────────────────────────────────────────
 
 let dbModule = null;
+let dbFilePath = null;
+let dbMtime = null;
+let dbPollTimer = null;
 
 function openDb(filePath) {
   if (!dbModule) dbModule = require('./db');
   dbModule.openDatabase(filePath);
+  dbFilePath = filePath;
+  try { dbMtime = fs.statSync(filePath).mtimeMs; } catch (_) {}
+  startDbPolling();
+}
+
+function startDbPolling() {
+  if (dbPollTimer) { clearInterval(dbPollTimer); dbPollTimer = null; }
+  if (!dbFilePath) return;
+  dbPollTimer = setInterval(() => {
+    try {
+      const mtime = fs.statSync(dbFilePath).mtimeMs;
+      if (mtime !== dbMtime) {
+        dbMtime = mtime;
+        dbModule.openDatabase(dbFilePath);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('db:changed');
+        }
+      }
+    } catch (_) {}
+  }, 5000);
 }
 
 // ─── Window ───────────────────────────────────────────────────────────────────
@@ -108,7 +131,12 @@ ipcMain.handle('app:refresh', () => {
 
 ipcMain.handle('db:query', (_e, payload) => {
   if (!dbModule) throw new Error('Database not initialised');
-  return dbModule.query(payload);
+  const result = dbModule.query(payload);
+  // After a write, refresh our mtime so the poll doesn't treat it as a remote change
+  if (payload.action !== 'select' && dbFilePath) {
+    try { dbMtime = fs.statSync(dbFilePath).mtimeMs; } catch (_) {}
+  }
+  return result;
 });
 
 // ─── CalDAV credential helpers ────────────────────────────────────────────────

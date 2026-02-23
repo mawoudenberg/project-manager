@@ -37,4 +37,7 @@ contextBridge.exposeInMainWorld('api', {
   // Auto-update
   onUpdateAvailable: (cb)   => ipcRenderer.on('app:update-available', (_e, d) => cb(d)),
   openUrl:           (url)  => ipcRenderer.invoke('app:open-url', url),
+
+  // DB sync (Google Drive changed the file)
+  onDbChanged: (cb) => ipcRenderer.on('db:changed', () => cb()),
 });
