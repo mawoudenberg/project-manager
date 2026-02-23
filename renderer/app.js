@@ -561,10 +561,14 @@ function renderGanttWeek() {
           style="left:${sLeft}%;width:${sWidth}%;background:${s.color || p.color ||'#4f8ef7'}"
           title="${escHtml(s.name)}">${escHtml(s.name)}</div>`;
       }
-      return `<div class="gnt-row gnt-stage-row">
-        <div class="gnt-lbl gnt-stage-lbl">
+      const noDate = !s.start_date || !s.end_date;
+      return `<div class="gnt-row gnt-stage-row" data-stage-id="${s.id}" data-proj-id="${p.id}" style="cursor:pointer" title="Klik om datums in te stellen">
+        <div class="gnt-lbl gnt-stage-lbl" style="border-left:3px solid ${s.color || p.color || '#4f8ef7'}">
           <div class="gnt-stage-dot" style="background:${s.color || p.color || '#4f8ef7'}"></div>
-          <span>${escHtml(s.name)}</span>
+          <div class="gnt-lbl-text">
+            <span class="gnt-stage-name">${escHtml(s.name)}</span>
+            <span class="gnt-stage-hint">${noDate ? 'klik om datums in te stellen' : `${s.start_date} → ${s.end_date}`}</span>
+          </div>
         </div>
         <div class="gnt-timeline">${bgCells}${todayLine}${stageBar}</div>
       </div>`;
@@ -605,6 +609,13 @@ function renderGanttWeek() {
       if (state.expandedProjects.has(projId)) state.expandedProjects.delete(projId);
       else state.expandedProjects.add(projId);
       renderGanttWeek();
+    });
+  });
+
+  content.querySelectorAll('.gnt-stage-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const stage = state.stages.find(s => s.id == row.dataset.stageId);
+      if (stage) openStageModal(stage, Number(row.dataset.projId));
     });
   });
 
@@ -749,15 +760,16 @@ function renderProjectDetail(proj) {
       <button class="btn btn-sm btn-ghost" id="default-stages-btn">Standaard fases invoegen</button>
     </div>`;
   } else {
-    html += projStages.map(s => `
-      <div class="proj-stage-row" data-stage-id="${s.id}">
-        <div class="proj-stage-color" style="background:${s.color || proj.color || '#4f8ef7'}"></div>
+    html += projStages.map(s => {
+      const c = s.color || proj.color || '#4f8ef7';
+      return `<div class="proj-stage-row" data-stage-id="${s.id}" style="border-left:3px solid ${c};cursor:pointer">
+        <div class="proj-stage-color" style="background:${c}"></div>
         <div class="proj-stage-info">
           <div class="proj-stage-name">${escHtml(s.name)}</div>
-          ${(s.start_date || s.end_date) ? `<div class="proj-stage-dates">${s.start_date || '?'} → ${s.end_date || '?'}</div>` : ''}
+          <div class="proj-stage-dates">${(s.start_date && s.end_date) ? `${s.start_date} → ${s.end_date}` : '<span style="opacity:.5">Nog geen datums — klik om in te stellen</span>'}</div>
         </div>
-        <button class="btn btn-sm btn-ghost edit-stage-btn" data-stage-id="${s.id}">Edit</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
   html += '</div>';
 
@@ -787,9 +799,9 @@ function renderProjectDetail(proj) {
     renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
     toast('Standaard fases toegevoegd');
   });
-  content.querySelectorAll('.edit-stage-btn').forEach(btn => {
-    btn.onclick = () => {
-      const stage = state.stages.find(s => s.id == btn.dataset.stageId);
+  content.querySelectorAll('.proj-stage-row').forEach(row => {
+    row.onclick = () => {
+      const stage = state.stages.find(s => s.id == row.dataset.stageId);
       if (stage) openStageModal(stage, proj.id);
     };
   });

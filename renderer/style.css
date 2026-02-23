@@ -974,13 +974,16 @@ tr:hover .qi-del { opacity: 1; }
 .gnt-toggle:hover { opacity: 1; }
 .gnt-stage-row { opacity: .9; }
 .gnt-stage-lbl {
-  padding-left: 28px !important;
+  padding-left: 10px !important;
   font-size: 12px;
-  color: var(--text2);
+  color: var(--text);
   display: flex;
   align-items: center;
   gap: 6px;
 }
+.gnt-stage-name { font-weight: 500; font-size: 12px; }
+.gnt-stage-hint { font-size: 10px; color: var(--text2); margin-top: 1px; }
+.gnt-stage-row:hover .gnt-lbl { background: var(--bg3); }
 .gnt-stage-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
@@ -1003,10 +1006,12 @@ tr:hover .qi-del { opacity: 1; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
   margin-bottom: 4px;
   background: var(--bg2);
+  cursor: pointer;
+  transition: background .15s;
 }
 .proj-stage-row:hover { background: var(--bg3); }
 .proj-stage-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
