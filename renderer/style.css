@@ -900,12 +900,14 @@ tr:hover .qi-del { opacity: 1; }
   width: 200px;
   flex-shrink: 0;
   border-right: 2px solid var(--border);
-  padding: 10px 14px;
+  padding: 10px 8px 10px 14px;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
   transition: background .15s;
 }
+.gnt-lbl-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .gnt-task-name {
   font-size: 13px;
   font-weight: 600;
@@ -964,13 +966,12 @@ tr:hover .qi-del { opacity: 1; }
   color: var(--text2);
   font-size: 10px;
   cursor: pointer;
-  padding: 2px 4px;
+  padding: 2px 5px;
   flex-shrink: 0;
   opacity: .6;
   transition: opacity .15s;
 }
 .gnt-toggle:hover { opacity: 1; }
-.gnt-lbl { display: flex; align-items: center; gap: 4px; }
 .gnt-stage-row { opacity: .9; }
 .gnt-stage-lbl {
   padding-left: 28px !important;

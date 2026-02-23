@@ -565,7 +565,7 @@ function renderGanttWeek() {
       <div class="gnt-lbl">
         <button class="gnt-toggle${isExpanded?' expanded':''}" data-proj-id="${p.id}"
                 title="${isExpanded?'Inklappen':'Uitklappen'}">${isExpanded?'▼':'▶'}</button>
-        <div>
+        <div class="gnt-lbl-text">
           <div class="gnt-task-name${done?' done':''}">${escHtml(p.name)}</div>
           <div class="gnt-task-who">${doneCount}/${taskCount} taken · ${pct}%</div>
         </div>
