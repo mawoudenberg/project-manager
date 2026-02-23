@@ -2035,9 +2035,12 @@ function initCalDavListeners() {
     const banner = document.createElement('div');
     banner.id = 'update-banner';
     banner.innerHTML = `
-      <span>Nieuwe versie <strong>v${latest}</strong> beschikbaar</span>
-      <button class="btn btn-primary" style="padding:4px 12px;font-size:12px" id="update-download-btn">Download</button>
-      <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px" id="update-dismiss-btn">✕</button>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <span>Nieuwe versie <strong>v${latest}</strong> beschikbaar</span>
+        <span style="font-size:11px;color:var(--text2)">Na installatie: rechtsklik op de app → <strong>Open</strong>, of voer uit in Terminal:<br><code style="user-select:all;background:var(--bg3);padding:1px 5px;border-radius:3px">xattr -cr /Applications/Project\\ Manager.app</code></span>
+      </div>
+      <button class="btn btn-primary" style="padding:4px 12px;font-size:12px;flex-shrink:0" id="update-download-btn">Download</button>
+      <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;flex-shrink:0" id="update-dismiss-btn">✕</button>
     `;
     document.body.appendChild(banner);
     document.getElementById('update-download-btn').onclick = () => api.openUrl(url);
