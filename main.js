@@ -380,6 +380,64 @@ ipcMain.handle('caldav:status', () => ({
   lastSyncError,
 }));
 
+// ─── Auto-update check ────────────────────────────────────────────────────────
+
+const REPO = 'mawoudenberg/project-manager';
+
+async function checkForUpdates() {
+  try {
+    const https = require('https');
+    const current = app.getVersion();
+    const data = await new Promise((resolve, reject) => {
+      const req = https.get(
+        `https://api.github.com/repos/${REPO}/releases/latest`,
+        { headers: { 'User-Agent': 'project-manager-app' } },
+        (res) => {
+          let body = '';
+          res.on('data', c => { body += c; });
+          res.on('end', () => {
+            try { resolve(JSON.parse(body)); } catch (_) { resolve(null); }
+          });
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+
+    if (!data || !data.tag_name) return;
+    const latest = data.tag_name.replace(/^v/, '');
+
+    function semverGt(a, b) {
+      const pa = a.split('.').map(Number);
+      const pb = b.split('.').map(Number);
+      for (let i = 0; i < 3; i++) {
+        if ((pa[i] || 0) > (pb[i] || 0)) return true;
+        if ((pa[i] || 0) < (pb[i] || 0)) return false;
+      }
+      return false;
+    }
+
+    if (semverGt(latest, current)) {
+      const dmg = (data.assets || []).find(a => a.name.endsWith('.dmg'));
+      const url = dmg ? dmg.browser_download_url : data.html_url;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('app:update-available', { latest, url });
+      }
+    }
+  } catch (_) {
+    // silently ignore network errors during update check
+  }
+}
+
+ipcMain.handle('app:open-url', (_e, url) => {
+  shell.openExternal(url);
+});
+
+app.whenReady().then(() => {
+  // Check for updates 5 seconds after startup
+  setTimeout(checkForUpdates, 5000);
+});
+
 // ─── Logo + PDF Export ────────────────────────────────────────────────────────
 
 ipcMain.handle('logo:get', () => {

@@ -391,19 +391,11 @@ function renderGanttWeek() {
     () => { state.cursor = new Date(anchor); state.cursor.setDate(anchor.getDate() + NAV_STEP * 7); renderGantt(); }
   );
 
-  // Compute effective dates for each project (explicit or derived from tasks)
+  // Only show projects with explicit start AND end date
   function projectEffectiveDates(p) {
-    let start = p.start_date;
-    let end   = p.end_date;
-    if (!start || !end) {
-      const pt = state.tasks.filter(t => t.project_id == p.id && t.date);
-      if (pt.length === 0 && (!start && !end)) return null;
-      if (!start) start = pt.reduce((m, t) => t.date < m ? t.date : m, pt[0]?.date || '');
-      if (!end)   end   = pt.reduce((m, t) => { const te = t.end_date || t.date; return te > m ? te : m; }, pt[0]?.end_date || pt[0]?.date || '');
-    }
-    if (!start || !end) return null;
-    if (start > rangeEnd || end < rangeStart) return null;
-    return { effectiveStart: start, effectiveEnd: end };
+    if (!p.start_date || !p.end_date) return null;
+    if (p.start_date > rangeEnd || p.end_date < rangeStart) return null;
+    return { effectiveStart: p.start_date, effectiveEnd: p.end_date };
   }
 
   const visibleProjects = state.projects
@@ -2015,6 +2007,19 @@ function initCalDavListeners() {
   });
   api.onCalDavError((msg) => {
     updateSyncPill('☁ sync fout', 'error');
+  });
+
+  api.onUpdateAvailable(({ latest, url }) => {
+    const banner = document.createElement('div');
+    banner.id = 'update-banner';
+    banner.innerHTML = `
+      <span>Nieuwe versie <strong>v${latest}</strong> beschikbaar</span>
+      <button class="btn btn-primary" style="padding:4px 12px;font-size:12px" id="update-download-btn">Download</button>
+      <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px" id="update-dismiss-btn">✕</button>
+    `;
+    document.body.appendChild(banner);
+    document.getElementById('update-download-btn').onclick = () => api.openUrl(url);
+    document.getElementById('update-dismiss-btn').onclick = () => banner.remove();
   });
 }
 

@@ -33,4 +33,8 @@ contextBridge.exposeInMainWorld('api', {
   caldavStatus:      ()     => ipcRenderer.invoke('caldav:status'),
   onCalDavSynced:    (cb)   => ipcRenderer.on('caldav:synced', (_e, d) => cb(d)),
   onCalDavError:     (cb)   => ipcRenderer.on('caldav:error',  (_e, m) => cb(m)),
+
+  // Auto-update
+  onUpdateAvailable: (cb)   => ipcRenderer.on('app:update-available', (_e, d) => cb(d)),
+  openUrl:           (url)  => ipcRenderer.invoke('app:open-url', url),
 });
