@@ -151,12 +151,18 @@ function selectRows(table, where) {
   return db.prepare(sql).all(...params);
 }
 
+function checkpoint() {
+  // Flush WAL back to main .db file so Google Drive only needs to sync one file
+  try { db.pragma('wal_checkpoint(FULL)'); } catch (_) {}
+}
+
 function insertRow(table, data) {
   validateTable(table);
   const keys = Object.keys(data);
   const placeholders = keys.map(() => '?').join(', ');
   const sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`;
   const result = db.prepare(sql).run(...Object.values(data));
+  checkpoint();
   return { id: result.lastInsertRowid, changes: result.changes };
 }
 
@@ -167,6 +173,7 @@ function updateRow(table, data, where) {
   const sql = `UPDATE ${table} SET ${setClauses} WHERE ${whereClauses}`;
   const params = [...Object.values(data), ...Object.values(where)];
   const result = db.prepare(sql).run(...params);
+  checkpoint();
   return { changes: result.changes };
 }
 
@@ -175,6 +182,7 @@ function deleteRow(table, where) {
   const whereClauses = Object.entries(where).map(([k]) => `${k} = ?`).join(' AND ');
   const sql = `DELETE FROM ${table} WHERE ${whereClauses}`;
   const result = db.prepare(sql).run(...Object.values(where));
+  checkpoint();
   return { changes: result.changes };
 }
 
