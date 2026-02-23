@@ -973,6 +973,7 @@ tr:hover .qi-del { opacity: 1; }
 }
 .gnt-toggle:hover { opacity: 1; }
 .gnt-stage-row { opacity: .9; }
+.gnt-stage-row .gnt-timeline { height: 36px; }
 .gnt-stage-lbl {
   padding-left: 10px !important;
   font-size: 12px;
@@ -990,11 +991,11 @@ tr:hover .qi-del { opacity: 1; }
   flex-shrink: 0;
 }
 .gnt-stage-bar {
-  height: 12px !important;
+  height: 22px !important;
   top: 50% !important;
   transform: translateY(-50%) !important;
-  opacity: .75;
-  font-size: 10px !important;
+  opacity: .85;
+  font-size: 11px !important;
 }
 
 /* Project detail — stages section */

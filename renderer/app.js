@@ -546,7 +546,14 @@ function renderGanttWeek() {
     const doneCount  = state.tasks.filter(t => t.project_id == p.id && t.status === 'done').length;
     const pct        = taskCount ? Math.round(doneCount / taskCount * 100) : 0;
     const isExpanded = state.expandedProjects.has(p.id);
-    const projStages = state.stages.filter(s => s.project_id == p.id);
+    const projStages = state.stages
+      .filter(s => s.project_id == p.id)
+      .sort((a, b) => {
+        if (!a.start_date && !b.start_date) return 0;
+        if (!a.start_date) return 1;
+        if (!b.start_date) return -1;
+        return a.start_date.localeCompare(b.start_date);
+      });
 
     // Stage rows (only when expanded)
     const stageRows = isExpanded ? projStages.map(s => {
