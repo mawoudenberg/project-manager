@@ -6,6 +6,15 @@ const COLORS = [
   '#f79040','#40c8f7','#f740c0','#80f740','#a0522d',
 ];
 
+const DEFAULT_STAGES = [
+  { name: 'Tekenen',   color: '#4f8ef7' },
+  { name: 'Frezen',    color: '#f7c948' },
+  { name: 'Polyurea',  color: '#7c5cbf' },
+  { name: 'Spuiter',   color: '#f79040' },
+  { name: 'Opleveren', color: '#3ecf74' },
+  { name: 'Offerte',   color: '#f76060' },
+];
+
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS = [
   'January','February','March','April','May','June',
@@ -735,7 +744,10 @@ function renderProjectDetail(proj) {
       <button class="btn btn-sm btn-primary" id="add-stage-btn">+ Fase</button>
     </div>`;
   if (projStages.length === 0) {
-    html += `<div class="proj-stages-empty">Nog geen fases. Voeg fases toe om voortgang bij te houden in de Gantt.</div>`;
+    html += `<div class="proj-stages-empty">
+      Nog geen fases.
+      <button class="btn btn-sm btn-ghost" id="default-stages-btn">Standaard fases invoegen</button>
+    </div>`;
   } else {
     html += projStages.map(s => `
       <div class="proj-stage-row" data-stage-id="${s.id}">
@@ -769,6 +781,12 @@ function renderProjectDetail(proj) {
   });
 
   document.getElementById('add-stage-btn').onclick = () => openStageModal(null, proj.id);
+  document.getElementById('default-stages-btn')?.addEventListener('click', async () => {
+    await insertDefaultStages(proj.id);
+    await loadStages();
+    renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
+    toast('Standaard fases toegevoegd');
+  });
   content.querySelectorAll('.edit-stage-btn').forEach(btn => {
     btn.onclick = () => {
       const stage = state.stages.find(s => s.id == btn.dataset.stageId);
@@ -839,9 +857,10 @@ function wireProjectModal() {
     if (state.editingProject) {
       await api.dbQuery({ action: 'update', table: 'projects', data, where: { id: state.editingProject.id } });
     } else {
-      await api.dbQuery({ action: 'insert', table: 'projects', data });
+      const result = await api.dbQuery({ action: 'insert', table: 'projects', data });
+      await insertDefaultStages(result.id);
     }
-    await loadProjects();
+    await Promise.all([loadProjects(), loadStages()]);
     closeProjectModal();
     renderView();
     toast('Project opgeslagen');
@@ -861,6 +880,17 @@ function wireProjectModal() {
     renderView();
     toast('Project verwijderd');
   };
+}
+
+async function insertDefaultStages(projectId) {
+  for (let i = 0; i < DEFAULT_STAGES.length; i++) {
+    await api.dbQuery({ action: 'insert', table: 'project_stages', data: {
+      project_id: projectId,
+      name:       DEFAULT_STAGES[i].name,
+      color:      DEFAULT_STAGES[i].color,
+      sort_order: i,
+    }});
+  }
 }
 
 function fmtProjStatus(s) {
