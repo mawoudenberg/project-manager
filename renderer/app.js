@@ -138,26 +138,32 @@ function renderMonthly() {
   const daysInPrev = new Date(year, month, 0).getDate();
   const todayStr = toDateStr(state.today);
 
-  let html = '<div id="monthly-grid">';
-  DAYS.forEach(d => { html += `<div class="cal-header-cell">${d}</div>`; });
-
-  // Prev month padding
+  // Build flat cell array so we can inject week-number cells per row
+  const allCells = [];
   for (let i = firstDay - 1; i >= 0; i--) {
     const dayNum = daysInPrev - i;
-    const dateStr = toDateStr(new Date(year, month-1, dayNum));
-    html += calCell(dayNum, dateStr, true, todayStr);
+    allCells.push({ dayNum, dateStr: toDateStr(new Date(year, month-1, dayNum)), other: true });
   }
-  // Current month
   for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = toDateStr(new Date(year, month, day));
-    html += calCell(day, dateStr, false, todayStr);
+    allCells.push({ dayNum: day, dateStr: toDateStr(new Date(year, month, day)), other: false });
   }
-  // Next month padding
-  const totalCells = firstDay + daysInMonth;
-  const remaining = (7 - (totalCells % 7)) % 7;
+  const remaining = (7 - (allCells.length % 7)) % 7;
   for (let day = 1; day <= remaining; day++) {
-    const dateStr = toDateStr(new Date(year, month+1, day));
-    html += calCell(day, dateStr, true, todayStr);
+    allCells.push({ dayNum: day, dateStr: toDateStr(new Date(year, month+1, day)), other: true });
+  }
+
+  let html = '<div id="monthly-grid">';
+  html += '<div class="cal-week-num-header">Wk</div>';
+  DAYS.forEach(d => { html += `<div class="cal-header-cell">${d}</div>`; });
+
+  for (let i = 0; i < allCells.length; i++) {
+    if (i % 7 === 0) {
+      // Use Monday (i+1) for ISO week — always valid since grid rows are complete
+      const monDate = new Date(allCells[Math.min(i + 1, allCells.length - 1)].dateStr);
+      html += `<div class="cal-week-num">${getISOWeek(monDate)}</div>`;
+    }
+    const c = allCells[i];
+    html += calCell(c.dayNum, c.dateStr, c.other, todayStr);
   }
   html += '</div>';
 
@@ -219,7 +225,10 @@ function renderWeekly() {
   });
 
   const todayStr = toDateStr(state.today);
-  const weekLabel = `${MONTHS[monday.getMonth()].slice(0,3)} ${monday.getDate()} – ${MONTHS[weekDates[6].getMonth()].slice(0,3)} ${weekDates[6].getDate()}, ${weekDates[6].getFullYear()}`;
+  const wkNum = getISOWeek(monday);
+  const startFmt = `${monday.getDate()} ${MONTHS[monday.getMonth()].slice(0,3)}`;
+  const endFmt   = `${weekDates[6].getDate()} ${MONTHS[weekDates[6].getMonth()].slice(0,3)}`;
+  const weekLabel = `Week ${wkNum} · ${startFmt} – ${endFmt} ${weekDates[6].getFullYear()}`;
 
   ctrl.innerHTML = `
     <div class="cal-nav">
@@ -1354,6 +1363,14 @@ function taskColor(task) {
     if (proj?.color) return proj.color;
   }
   return task.color || '#4f8ef7';
+}
+
+function getISOWeek(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 
 function toDateStr(date) {
