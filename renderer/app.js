@@ -44,6 +44,17 @@ async function init() {
   wireProjectModal();
   initCalDavListeners();
 
+  // Global Escape key: close whichever modal is open
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById('task-modal').classList.contains('hidden'))     { closeTaskModal();    return; }
+    if (!document.getElementById('stage-modal').classList.contains('hidden'))    { closeStageModal();   return; }
+    if (!document.getElementById('project-modal').classList.contains('hidden'))  { closeProjectModal(); return; }
+    if (!document.getElementById('list-modal').classList.contains('hidden'))     { closeListModal();    return; }
+    if (!document.getElementById('settings-modal').classList.contains('hidden')) { document.getElementById('settings-modal').classList.add('hidden'); return; }
+    if (!document.getElementById('team-modal').classList.contains('hidden'))     { document.getElementById('team-modal').classList.add('hidden');    return; }
+  });
+
   const config = await api.configGet();
   if (!config || !config.name) {
     showWizard();
