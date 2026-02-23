@@ -183,6 +183,39 @@ function renderMonthly() {
       });
     });
   });
+
+  // Drag-and-drop: drag chip to another day to change date
+  let draggingTaskId = null;
+  content.querySelectorAll('.cal-chip').forEach(chip => {
+    chip.addEventListener('dragstart', e => {
+      draggingTaskId = chip.dataset.id;
+      e.dataTransfer.effectAllowed = 'move';
+      chip.classList.add('dragging');
+    });
+    chip.addEventListener('dragend', () => {
+      chip.classList.remove('dragging');
+      content.querySelectorAll('.cal-cell.drag-over').forEach(c => c.classList.remove('drag-over'));
+    });
+  });
+  content.querySelectorAll('.cal-cell').forEach(cell => {
+    cell.addEventListener('dragover', e => {
+      if (!draggingTaskId) return;
+      e.preventDefault();
+      cell.classList.add('drag-over');
+    });
+    cell.addEventListener('dragleave', () => cell.classList.remove('drag-over'));
+    cell.addEventListener('drop', async e => {
+      e.preventDefault();
+      cell.classList.remove('drag-over');
+      if (!draggingTaskId) return;
+      const newDate = cell.dataset.date;
+      const task = state.tasks.find(t => t.id == draggingTaskId);
+      if (!task || task.date === newDate) return;
+      await api.dbQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
+      await loadTasks();
+      renderMonthly();
+    });
+  });
 }
 
 function calCell(dayNum, dateStr, otherMonth, todayStr) {
@@ -193,7 +226,7 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
 
   let chips = dayTasks.slice(0, 3).map(t =>
     `<div class="cal-chip ${t.status==='done'?'done':''}" data-id="${t.id}"
-         style="background:${taskColor(t)}"
+         draggable="true" style="background:${taskColor(t)}"
          title="${escHtml(t.title)}">${escHtml(t.title)}</div>`
   ).join('');
 
@@ -251,7 +284,7 @@ function renderWeekly() {
     const dayTasks = state.tasks.filter(t => t.date === dateStr);
     const cards = dayTasks.map(t => `
       <div class="week-task-card ${t.status==='done'?'done':''}" data-id="${t.id}"
-           style="background:${taskColor(t)}">
+           draggable="true" style="background:${taskColor(t)}">
         <div class="wt-title">${escHtml(t.title)}</div>
         ${t.assigned_to ? `<div class="wt-who">→ ${escHtml(t.assigned_to)}</div>` : ''}
       </div>`).join('');
@@ -268,11 +301,40 @@ function renderWeekly() {
   html += '</div>';
   content.innerHTML = html;
 
+  let draggingTaskId = null;
   content.querySelectorAll('.week-task-card').forEach(card => {
     card.onclick = () => {
       const task = state.tasks.find(t => t.id == card.dataset.id);
       if (task) openTaskModal(task);
     };
+    card.addEventListener('dragstart', e => {
+      draggingTaskId = card.dataset.id;
+      e.dataTransfer.effectAllowed = 'move';
+      card.classList.add('dragging');
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      content.querySelectorAll('.week-tasks.drag-over').forEach(c => c.classList.remove('drag-over'));
+    });
+  });
+  content.querySelectorAll('.week-tasks').forEach(col => {
+    col.addEventListener('dragover', e => {
+      if (!draggingTaskId) return;
+      e.preventDefault();
+      col.classList.add('drag-over');
+    });
+    col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+    col.addEventListener('drop', async e => {
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      if (!draggingTaskId) return;
+      const newDate = col.dataset.date;
+      const task = state.tasks.find(t => t.id == draggingTaskId);
+      if (!task || task.date === newDate) return;
+      await api.dbQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
+      await loadTasks();
+      renderWeekly();
+    });
   });
   content.querySelectorAll('.week-add-btn').forEach(btn => {
     btn.onclick = () => openTaskModal(null, btn.dataset.date);
