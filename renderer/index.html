@@ -270,6 +270,36 @@
   </div>
 </div>
 
+<!-- ─── Stage Modal ──────────────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="stage-modal">
+  <div class="modal">
+    <h2 id="stage-modal-title">Nieuwe fase</h2>
+    <div class="form-group">
+      <label>Naam *</label>
+      <input type="text" id="stage-name" placeholder="Fasenaam" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Startdatum</label>
+        <input type="date" id="stage-start" />
+      </div>
+      <div class="form-group">
+        <label>Einddatum</label>
+        <input type="date" id="stage-end" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Kleur</label>
+      <div class="color-swatches" id="stage-color-swatches"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="stage-cancel">Annuleer</button>
+      <button class="btn btn-danger hidden" id="stage-delete">Verwijder</button>
+      <button class="btn btn-primary" id="stage-save">Opslaan</button>
+    </div>
+  </div>
+</div>
+
 <!-- ─── Main App Shell ─────────────────────────────────────────────────────── -->
 <div id="app" style="display:none">
   <!-- Sidebar -->

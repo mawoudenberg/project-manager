@@ -957,6 +957,62 @@ tr:hover .qi-del { opacity: 1; }
 .gnt-bar:hover { filter: brightness(1.18); }
 .gnt-bar.done  { opacity: .4; }
 
+/* Gantt — toggle & stage rows */
+.gnt-toggle {
+  background: none;
+  border: none;
+  color: var(--text2);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+  opacity: .6;
+  transition: opacity .15s;
+}
+.gnt-toggle:hover { opacity: 1; }
+.gnt-lbl { display: flex; align-items: center; gap: 4px; }
+.gnt-stage-row { opacity: .9; }
+.gnt-stage-lbl {
+  padding-left: 28px !important;
+  font-size: 12px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.gnt-stage-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.gnt-stage-bar {
+  height: 12px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  opacity: .75;
+  font-size: 10px !important;
+}
+
+/* Project detail — stages section */
+.proj-stages-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+.proj-stages-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.proj-stages-header h3 { font-size: 14px; font-weight: 600; color: var(--text); margin: 0; }
+.proj-stages-empty { font-size: 12px; color: var(--text2); padding: 8px 0; }
+.proj-stage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: var(--bg2);
+}
+.proj-stage-row:hover { background: var(--bg3); }
+.proj-stage-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.proj-stage-info { flex: 1; }
+.proj-stage-name { font-size: 13px; font-weight: 500; }
+.proj-stage-dates { font-size: 11px; color: var(--text2); margin-top: 1px; }
+
 .gnt-today-line {
   position: absolute;
   top: 0; bottom: 0;

@@ -79,6 +79,17 @@ function createSchema() {
       created_at  TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS project_stages (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name        TEXT NOT NULL,
+      start_date  TEXT DEFAULT '',
+      end_date    TEXT DEFAULT '',
+      color       TEXT DEFAULT '',
+      sort_order  INTEGER DEFAULT 0,
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS quotes (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       name        TEXT NOT NULL,
@@ -188,7 +199,7 @@ function deleteRow(table, where) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects']);
+const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages']);
 
 function validateTable(table) {
   if (!ALLOWED_TABLES.has(table)) throw new Error(`Table not allowed: ${table}`);
@@ -200,8 +211,9 @@ function orderFor(table) {
   if (table === 'todo_items')  return ' ORDER BY sort_order ASC, id ASC';
   if (table === 'team_members') return ' ORDER BY name ASC';
   if (table === 'projects')    return ' ORDER BY start_date ASC, name ASC';
-  if (table === 'quotes')      return ' ORDER BY created_at DESC';
-  if (table === 'quote_items') return ' ORDER BY sort_order ASC, id ASC';
+  if (table === 'quotes')          return ' ORDER BY created_at DESC';
+  if (table === 'quote_items')     return ' ORDER BY sort_order ASC, id ASC';
+  if (table === 'project_stages')  return ' ORDER BY sort_order ASC, id ASC';
   return '';
 }
 

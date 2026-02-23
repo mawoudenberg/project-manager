@@ -20,12 +20,15 @@ let state = {
   cursor: new Date(),        // tracks month/week/day
   tasks: [],
   projects: [],
+  stages: [],
   todoLists: [],
   todoItems: {},             // { listId: [...items] }
   editingTask: null,
   editingList: null,
   editingProject: null,
+  editingStage: null,
   activeProject: null,
+  expandedProjects: new Set(),
 };
 
 /* ─── Startup ──────────────────────────────────────────────────────────────── */
@@ -34,6 +37,7 @@ async function init() {
   wireWizard();
   wireTaskModal();
   wireListModal();
+  wireStageModal();
   wireSettings();
   wireNav();
   wireTeam();
@@ -54,11 +58,15 @@ async function init() {
 
 /* ─── Data Loading ─────────────────────────────────────────────────────────── */
 async function loadAll() {
-  await Promise.all([loadTasks(), loadTodoLists(), loadProjects()]);
+  await Promise.all([loadTasks(), loadTodoLists(), loadProjects(), loadStages()]);
 }
 
 async function loadProjects() {
   state.projects = await api.dbQuery({ action: 'select', table: 'projects' });
+}
+
+async function loadStages() {
+  state.stages = await api.dbQuery({ action: 'select', table: 'project_stages' });
 }
 
 async function loadTasks() {
@@ -517,11 +525,39 @@ function renderGanttWeek() {
     const taskCount  = state.tasks.filter(t => t.project_id == p.id).length;
     const doneCount  = state.tasks.filter(t => t.project_id == p.id && t.status === 'done').length;
     const pct        = taskCount ? Math.round(doneCount / taskCount * 100) : 0;
+    const isExpanded = state.expandedProjects.has(p.id);
+    const projStages = state.stages.filter(s => s.project_id == p.id);
 
-    return `<div class="gnt-row" data-proj-id="${p.id}">
+    // Stage rows (only when expanded)
+    const stageRows = isExpanded ? projStages.map(s => {
+      const hasBar = s.start_date && s.end_date && s.start_date <= rangeEnd && s.end_date >= rangeStart;
+      let stageBar = '';
+      if (hasBar) {
+        const sClampStart = s.start_date < rangeStart ? rangeStart : s.start_date;
+        const sClampEnd   = s.end_date   > rangeEnd   ? rangeEnd   : s.end_date;
+        const sLeft  = (dayOffset(rangeStart, sClampStart) / totalDays * 100).toFixed(2);
+        const sWidth = ((dayOffset(rangeStart, sClampEnd) - dayOffset(rangeStart, sClampStart) + 1) / totalDays * 100).toFixed(2);
+        stageBar = `<div class="gnt-bar gnt-stage-bar"
+          style="left:${sLeft}%;width:${sWidth}%;background:${s.color || p.color ||'#4f8ef7'}"
+          title="${escHtml(s.name)}">${escHtml(s.name)}</div>`;
+      }
+      return `<div class="gnt-row gnt-stage-row">
+        <div class="gnt-lbl gnt-stage-lbl">
+          <div class="gnt-stage-dot" style="background:${s.color || p.color || '#4f8ef7'}"></div>
+          <span>${escHtml(s.name)}</span>
+        </div>
+        <div class="gnt-timeline">${bgCells}${todayLine}${stageBar}</div>
+      </div>`;
+    }).join('') : '';
+
+    return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}">
       <div class="gnt-lbl">
-        <div class="gnt-task-name${done?' done':''}">${escHtml(p.name)}</div>
-        <div class="gnt-task-who">${doneCount}/${taskCount} taken · ${pct}%</div>
+        <button class="gnt-toggle${isExpanded?' expanded':''}" data-proj-id="${p.id}"
+                title="${isExpanded?'Inklappen':'Uitklappen'}">${isExpanded?'▼':'▶'}</button>
+        <div>
+          <div class="gnt-task-name${done?' done':''}">${escHtml(p.name)}</div>
+          <div class="gnt-task-who">${doneCount}/${taskCount} taken · ${pct}%</div>
+        </div>
       </div>
       <div class="gnt-timeline">
         ${bgCells}
@@ -530,7 +566,7 @@ function renderGanttWeek() {
              style="left:${leftPct}%;width:${widthPct}%;background:${p.color||'#4f8ef7'}"
              title="${escHtml(p.name)}">${escHtml(p.name)}</div>
       </div>
-    </div>`;
+    </div>${stageRows}`;
   }).join('');
 
   content.innerHTML = `
@@ -542,10 +578,21 @@ function renderGanttWeek() {
       ${rowsHtml}
     </div>`;
 
-  content.querySelectorAll('.gnt-bar[data-proj-id], .gnt-row[data-proj-id]').forEach(el => {
+  content.querySelectorAll('.gnt-toggle').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const projId = Number(btn.dataset.projId);
+      if (state.expandedProjects.has(projId)) state.expandedProjects.delete(projId);
+      else state.expandedProjects.add(projId);
+      renderGanttWeek();
+    });
+  });
+
+  content.querySelectorAll('.gnt-bar[data-proj-id], .gnt-proj-row').forEach(el => {
     el.addEventListener('click', e => {
+      if (e.target.closest('.gnt-toggle')) return;
       if (el.classList.contains('gnt-bar')) e.stopPropagation();
-      const proj = state.projects.find(p => p.id == el.dataset.projId);
+      const proj = state.projects.find(p => p.id == (el.dataset.projId || el.closest('[data-proj-id]')?.dataset.projId));
       if (proj) openProjectModal(proj);
     });
   });
@@ -668,6 +715,29 @@ function renderProjectDetail(proj) {
     if (done.length)  html += `<div class="proj-done-divider">Afgerond</div>` + done.map(taskRow).join('');
   }
   html += '</div>';
+
+  // Stages section
+  const projStages = state.stages.filter(s => s.project_id == proj.id);
+  html += `<div class="proj-stages-section">
+    <div class="proj-stages-header">
+      <h3>Fases</h3>
+      <button class="btn btn-sm btn-primary" id="add-stage-btn">+ Fase</button>
+    </div>`;
+  if (projStages.length === 0) {
+    html += `<div class="proj-stages-empty">Nog geen fases. Voeg fases toe om voortgang bij te houden in de Gantt.</div>`;
+  } else {
+    html += projStages.map(s => `
+      <div class="proj-stage-row" data-stage-id="${s.id}">
+        <div class="proj-stage-color" style="background:${s.color || proj.color || '#4f8ef7'}"></div>
+        <div class="proj-stage-info">
+          <div class="proj-stage-name">${escHtml(s.name)}</div>
+          ${(s.start_date || s.end_date) ? `<div class="proj-stage-dates">${s.start_date || '?'} → ${s.end_date || '?'}</div>` : ''}
+        </div>
+        <button class="btn btn-sm btn-ghost edit-stage-btn" data-stage-id="${s.id}">Edit</button>
+      </div>`).join('');
+  }
+  html += '</div>';
+
   content.innerHTML = html;
 
   // Checkbox toggles
@@ -684,6 +754,14 @@ function renderProjectDetail(proj) {
     btn.onclick = () => {
       const task = state.tasks.find(t => t.id == btn.dataset.id);
       if (task) openTaskModal(task);
+    };
+  });
+
+  document.getElementById('add-stage-btn').onclick = () => openStageModal(null, proj.id);
+  content.querySelectorAll('.edit-stage-btn').forEach(btn => {
+    btn.onclick = () => {
+      const stage = state.stages.find(s => s.id == btn.dataset.stageId);
+      if (stage) openStageModal(stage, proj.id);
     };
   });
 }
@@ -776,6 +854,82 @@ function wireProjectModal() {
 
 function fmtProjStatus(s) {
   return { active: 'Actief', done: 'Afgerond', on_hold: 'On hold' }[s] || s;
+}
+
+/* ─── Stage Modal ─────────────────────────────────────────────────────────── */
+
+function openStageModal(stage, projectId) {
+  state.editingStage = stage ? { ...stage } : { _projectId: projectId };
+  const isEdit = !!stage;
+  document.getElementById('stage-modal-title').textContent = isEdit ? 'Fase bewerken' : 'Nieuwe fase';
+  document.getElementById('stage-name').value  = stage?.name       || '';
+  document.getElementById('stage-start').value = stage?.start_date || '';
+  document.getElementById('stage-end').value   = stage?.end_date   || '';
+  document.getElementById('stage-delete').classList.toggle('hidden', !isEdit);
+  buildStageColorSwatches(stage?.color || COLORS[0]);
+  document.getElementById('stage-modal').classList.remove('hidden');
+  document.getElementById('stage-name').focus();
+}
+
+function closeStageModal() {
+  document.getElementById('stage-modal').classList.add('hidden');
+  state.editingStage = null;
+}
+
+function buildStageColorSwatches(selected) {
+  const container = document.getElementById('stage-color-swatches');
+  container.innerHTML = COLORS.map(c =>
+    `<div class="color-swatch${c === selected ? ' selected' : ''}" data-color="${c}" style="background:${c}"></div>`
+  ).join('');
+  container.querySelectorAll('.color-swatch').forEach(sw => {
+    sw.onclick = () => {
+      container.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+      sw.classList.add('selected');
+    };
+  });
+}
+
+function wireStageModal() {
+  document.getElementById('stage-cancel').onclick = closeStageModal;
+  document.getElementById('stage-modal').addEventListener('click', e => {
+    if (e.target === document.getElementById('stage-modal')) closeStageModal();
+  });
+
+  document.getElementById('stage-save').onclick = async () => {
+    const name = document.getElementById('stage-name').value.trim();
+    if (!name) { shake(document.getElementById('stage-name')); return; }
+    const selectedSwatch = document.querySelector('#stage-color-swatches .color-swatch.selected');
+    const data = {
+      name,
+      start_date: document.getElementById('stage-start').value || '',
+      end_date:   document.getElementById('stage-end').value   || '',
+      color:      selectedSwatch?.dataset.color || COLORS[0],
+    };
+    if (state.editingStage?.id) {
+      await api.dbQuery({ action: 'update', table: 'project_stages', data, where: { id: state.editingStage.id } });
+    } else {
+      const projectId = state.editingStage._projectId;
+      const existing  = state.stages.filter(s => s.project_id == projectId);
+      await api.dbQuery({ action: 'insert', table: 'project_stages',
+        data: { ...data, project_id: projectId, sort_order: existing.length } });
+    }
+    await loadStages();
+    closeStageModal();
+    if (state.activeProject) renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
+    if (state.view === 'gantt') renderGantt();
+    toast('Fase opgeslagen');
+  };
+
+  document.getElementById('stage-delete').onclick = async () => {
+    if (!state.editingStage?.id) return;
+    if (!confirm('Fase verwijderen?')) return;
+    await api.dbQuery({ action: 'delete', table: 'project_stages', where: { id: state.editingStage.id } });
+    await loadStages();
+    closeStageModal();
+    if (state.activeProject) renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
+    if (state.view === 'gantt') renderGantt();
+    toast('Fase verwijderd');
+  };
 }
 
 /* ─── Todo Lists View ──────────────────────────────────────────────────────── */
