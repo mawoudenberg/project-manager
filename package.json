@@ -1,6 +1,6 @@
 {
   "name": "project-manager",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Shared project management app for teams",
   "main": "main.js",
   "scripts": {
@@ -23,11 +23,26 @@
       "node_modules/**/*"
     ],
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
       "category": "public.app-category.productivity"
     },
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }]
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
