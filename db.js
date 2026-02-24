@@ -123,6 +123,8 @@ function migrateSchema() {
   if (!cols.includes('caldav_etag')) db.exec("ALTER TABLE tasks ADD COLUMN caldav_etag TEXT DEFAULT ''");
   if (!cols.includes('end_date'))    db.exec("ALTER TABLE tasks ADD COLUMN end_date    TEXT DEFAULT ''");
   if (!cols.includes('project_id')) db.exec("ALTER TABLE tasks ADD COLUMN project_id  INTEGER DEFAULT NULL");
+  if (!cols.includes('all_day'))    db.exec("ALTER TABLE tasks ADD COLUMN all_day     INTEGER DEFAULT 1");
+  if (!cols.includes('task_time'))  db.exec("ALTER TABLE tasks ADD COLUMN task_time   TEXT    DEFAULT ''");
 
   const itemCols = db.pragma('table_info(todo_items)').map(c => c.name);
   if (!itemCols.includes('sort_order')) {

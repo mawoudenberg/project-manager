@@ -40,6 +40,9 @@ let state = {
   expandedProjects: new Set(),
 };
 
+let ganttDrag = null;        // active drag state for Gantt bars
+let ganttJustDragged = false; // suppress click after a drag
+
 /* ─── Startup ──────────────────────────────────────────────────────────────── */
 async function init() {
   buildColorSwatches();
@@ -52,6 +55,10 @@ async function init() {
   wireTeam();
   wireProjectModal();
   initCalDavListeners();
+
+  // Gantt drag: document-level listeners (registered once)
+  document.addEventListener('mousemove', _onGanttDragMove);
+  document.addEventListener('mouseup',   _onGanttDragEnd);
 
   // Global Escape key: close whichever modal is open
   document.addEventListener('keydown', e => {
@@ -391,15 +398,26 @@ function renderDaily() {
   };
   document.getElementById('day-add').onclick = () => openTaskModal(null, dateStr);
 
-  const dayTasks = state.tasks.filter(t => t.date === dateStr);
+  const dayTasks = state.tasks
+    .filter(t => t.date === dateStr)
+    .sort((a, b) => {
+      const aTime = (!a.all_day && a.task_time) ? a.task_time : '';
+      const bTime = (!b.all_day && b.task_time) ? b.task_time : '';
+      if (!aTime && !bTime) return 0;
+      if (!aTime) return -1;   // all-day tasks first
+      if (!bTime) return 1;
+      return aTime.localeCompare(bTime);
+    });
 
   let html = '<div id="daily-list">';
   if (dayTasks.length === 0) {
     html += `<div class="empty"><div class="empty-icon">🗓️</div><p>No tasks for this day. Click + Add Task to get started.</p></div>`;
   } else {
     dayTasks.forEach(t => {
-      const done = t.status === 'done';
+      const done    = t.status === 'done';
+      const hasTime = !t.all_day && t.task_time;
       html += `<div class="daily-task-row" data-id="${t.id}">
+        <div class="daily-time-col">${hasTime ? `<span class="daily-time">${t.task_time}</span>` : '<span class="daily-time daily-time-allday">Heel de dag</span>'}</div>
         <div class="priority-dot priority-${t.priority||'medium'}"></div>
         <input type="checkbox" class="status-cb" data-id="${t.id}" ${done?'checked':''} title="Toggle done" />
         <div class="daily-task-info">
@@ -565,8 +583,14 @@ function renderGanttWeek() {
         const sLeft  = (dayOffset(rangeStart, sClampStart) / totalDays * 100).toFixed(2);
         const sWidth = ((dayOffset(rangeStart, sClampEnd) - dayOffset(rangeStart, sClampStart) + 1) / totalDays * 100).toFixed(2);
         stageBar = `<div class="gnt-bar gnt-stage-bar"
+          data-stage-id="${s.id}" data-proj-id="${p.id}"
+          data-start="${s.start_date}" data-end="${s.end_date}"
           style="left:${sLeft}%;width:${sWidth}%;background:${s.color || p.color ||'#4f8ef7'}"
-          title="${escHtml(s.name)}">${escHtml(s.name)}</div>`;
+          title="${escHtml(s.name)}">
+          <div class="gnt-bar-hl"></div>
+          <span class="gnt-bar-label">${escHtml(s.name)}</span>
+          <div class="gnt-bar-hr"></div>
+        </div>`;
       }
       const noDate = !s.start_date || !s.end_date;
       return `<div class="gnt-row gnt-stage-row" data-stage-id="${s.id}" data-proj-id="${p.id}" style="cursor:pointer" title="Klik om datums in te stellen">
@@ -594,8 +618,13 @@ function renderGanttWeek() {
         ${bgCells}
         ${todayLine}
         <div class="gnt-bar${done?' done':''}" data-proj-id="${p.id}"
+             data-start="${p.effectiveStart}" data-end="${p.effectiveEnd}"
              style="left:${leftPct}%;width:${widthPct}%;background:${p.color||'#4f8ef7'}"
-             title="${escHtml(p.name)}">${escHtml(p.name)}</div>
+             title="${escHtml(p.name)}">
+          <div class="gnt-bar-hl"></div>
+          <span class="gnt-bar-label">${escHtml(p.name)}</span>
+          <div class="gnt-bar-hr"></div>
+        </div>
       </div>
     </div>${stageRows}`;
   }).join('');
@@ -621,18 +650,134 @@ function renderGanttWeek() {
 
   content.querySelectorAll('.gnt-stage-row').forEach(row => {
     row.addEventListener('click', () => {
+      if (ganttJustDragged) return;
       const stage = state.stages.find(s => s.id == row.dataset.stageId);
       if (stage) openStageModal(stage, Number(row.dataset.projId));
     });
   });
 
-  content.querySelectorAll('.gnt-bar[data-proj-id], .gnt-proj-row').forEach(el => {
+  content.querySelectorAll('.gnt-bar[data-proj-id]:not(.gnt-stage-bar), .gnt-proj-row').forEach(el => {
     el.addEventListener('click', e => {
+      if (ganttJustDragged) return;
       if (e.target.closest('.gnt-toggle')) return;
       if (el.classList.contains('gnt-bar')) e.stopPropagation();
       const proj = state.projects.find(p => p.id == (el.dataset.projId || el.closest('[data-proj-id]')?.dataset.projId));
       if (proj) openProjectModal(proj);
     });
+  });
+
+  wireGanttInteractions(rangeStart, totalDays);
+}
+
+/* ─── Gantt Interactions (scroll + drag-to-move/resize) ─────────────────── */
+function _ganttAddDays(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return toDateStr(d);
+}
+
+function _onGanttDragMove(e) {
+  if (!ganttDrag) return;
+  const { type, barEl, origStart, origEnd, startX, timelineWidth, totalDays, rangeStart } = ganttDrag;
+  const pxPerDay = timelineWidth / totalDays;
+  const rawDelta = Math.round((e.clientX - startX) / pxPerDay);
+  if (rawDelta === ganttDrag.lastDelta) return;
+  ganttDrag.lastDelta = rawDelta;
+
+  let newStart = origStart, newEnd = origEnd;
+  if (type === 'move') {
+    newStart = _ganttAddDays(origStart, rawDelta);
+    newEnd   = _ganttAddDays(origEnd,   rawDelta);
+  } else if (type === 'resize-l') {
+    newStart = _ganttAddDays(origStart, rawDelta);
+    if (newStart >= origEnd) newStart = _ganttAddDays(origEnd, -1);
+  } else if (type === 'resize-r') {
+    newEnd = _ganttAddDays(origEnd, rawDelta);
+    if (newEnd <= origStart) newEnd = _ganttAddDays(origStart, 1);
+  }
+
+  // Live-update bar position in DOM (no DB write yet)
+  const rangeStartMs = new Date(rangeStart + 'T00:00:00').getTime();
+  const startOff = Math.round((new Date(newStart + 'T00:00:00') - rangeStartMs) / 86400000);
+  const endOff   = Math.round((new Date(newEnd   + 'T00:00:00') - rangeStartMs) / 86400000);
+  barEl.style.left  = (startOff / totalDays * 100).toFixed(2) + '%';
+  barEl.style.width = ((endOff - startOff + 1) / totalDays * 100).toFixed(2) + '%';
+  ganttDrag.pendingStart = newStart;
+  ganttDrag.pendingEnd   = newEnd;
+}
+
+async function _onGanttDragEnd() {
+  if (!ganttDrag) return;
+  const d = ganttDrag;
+  ganttDrag = null;
+  document.body.style.userSelect = '';
+  d.barEl.style.cursor = '';
+
+  if (!d.pendingStart || d.lastDelta === 0) return;
+
+  // Block the click event that fires right after mouseup
+  ganttJustDragged = true;
+  setTimeout(() => { ganttJustDragged = false; }, 300);
+
+  if (d.stageId) {
+    await api.dbQuery({ action: 'update', table: 'project_stages',
+      data: { start_date: d.pendingStart, end_date: d.pendingEnd }, where: { id: d.stageId } });
+    const s = state.stages.find(x => x.id == d.stageId);
+    if (s) { s.start_date = d.pendingStart; s.end_date = d.pendingEnd; }
+  } else if (d.projId) {
+    await api.dbQuery({ action: 'update', table: 'projects',
+      data: { start_date: d.pendingStart, end_date: d.pendingEnd }, where: { id: d.projId } });
+    const p = state.projects.find(x => x.id == d.projId);
+    if (p) { p.start_date = d.pendingStart; p.end_date = d.pendingEnd; }
+  }
+  renderGantt();
+}
+
+function wireGanttInteractions(rangeStart, totalDays) {
+  const wrap = document.getElementById('gantt-wrap');
+  if (!wrap) return;
+
+  // Wheel → pan timeline by 1 week per tick
+  wrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    const dir = e.deltaY > 0 ? 1 : -1;
+    state.cursor.setDate(state.cursor.getDate() + dir * 7);
+    renderGantt();
+  }, { passive: false });
+
+  // Mousedown on bar → move or resize
+  wrap.addEventListener('mousedown', e => {
+    const barEl = e.target.closest('.gnt-bar');
+    if (!barEl) return;
+    if (e.target.closest('.gnt-toggle')) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const handle = e.target.closest('.gnt-bar-hl, .gnt-bar-hr');
+    const type   = handle
+      ? (handle.classList.contains('gnt-bar-hl') ? 'resize-l' : 'resize-r')
+      : 'move';
+
+    const timeline = barEl.closest('.gnt-timeline');
+    ganttDrag = {
+      type,
+      barEl,
+      projId:       barEl.dataset.projId  ? Number(barEl.dataset.projId)  : null,
+      stageId:      barEl.dataset.stageId ? Number(barEl.dataset.stageId) : null,
+      origStart:    barEl.dataset.start,
+      origEnd:      barEl.dataset.end,
+      startX:       e.clientX,
+      timelineWidth: timeline ? timeline.offsetWidth : 800,
+      totalDays,
+      rangeStart,
+      lastDelta:    0,
+      pendingStart: null,
+      pendingEnd:   null,
+    };
+
+    document.body.style.userSelect = 'none';
+    barEl.style.cursor = type === 'move' ? 'grabbing' : 'ew-resize';
   });
 }
 
@@ -775,6 +920,7 @@ function renderProjectDetail(proj) {
           <div class="proj-stage-name">${escHtml(s.name)}</div>
           <div class="proj-stage-dates">${(s.start_date && s.end_date) ? `${s.start_date} → ${s.end_date}` : '<span style="opacity:.5">Nog geen datums — klik om in te stellen</span>'}</div>
         </div>
+        <button class="btn btn-sm btn-ghost dup-stage-btn" data-stage-id="${s.id}" title="Dupliceer fase">⊕</button>
       </div>`;
     }).join('');
   }
@@ -807,9 +953,30 @@ function renderProjectDetail(proj) {
     toast('Standaard fases toegevoegd');
   });
   content.querySelectorAll('.proj-stage-row').forEach(row => {
-    row.onclick = () => {
+    row.onclick = e => {
+      if (e.target.closest('.dup-stage-btn')) return; // handled below
       const stage = state.stages.find(s => s.id == row.dataset.stageId);
       if (stage) openStageModal(stage, proj.id);
+    };
+  });
+
+  content.querySelectorAll('.dup-stage-btn').forEach(btn => {
+    btn.onclick = async e => {
+      e.stopPropagation();
+      const stage = state.stages.find(s => s.id == btn.dataset.stageId);
+      if (!stage) return;
+      const existing = state.stages.filter(s => s.project_id == proj.id);
+      await api.dbQuery({ action: 'insert', table: 'project_stages', data: {
+        project_id: proj.id,
+        name:       stage.name,
+        color:      stage.color,
+        sort_order: existing.length,
+        start_date: '',
+        end_date:   '',
+      }});
+      await loadStages();
+      renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
+      toast(`'${stage.name}' gedupliceerd`);
     };
   });
 }
@@ -1289,6 +1456,10 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
   document.getElementById('task-desc').value     = task?.description || '';
   document.getElementById('task-date').value     = task?.date || defaultDate || toDateStr(state.cursor);
   document.getElementById('task-end-date').value = task?.end_date || '';
+  const allDay = task ? (task.all_day !== 0) : true;
+  document.getElementById('task-all-day').checked = allDay;
+  document.getElementById('task-time').value = task?.task_time || '';
+  document.getElementById('task-time-group').classList.toggle('hidden', allDay);
   openAssigneePicker(task?.assigned_to ?? state.config.name ?? '');
   document.getElementById('task-status').value = task?.status || 'pending';
   document.getElementById('task-priority').value = task?.priority || 'medium';
@@ -1337,6 +1508,10 @@ async function saveTask(taskData) {
 
 function wireTaskModal() {
   document.getElementById('task-cancel').onclick = closeTaskModal;
+  document.getElementById('task-all-day').addEventListener('change', e => {
+    document.getElementById('task-time-group').classList.toggle('hidden', e.target.checked);
+    if (e.target.checked) document.getElementById('task-time').value = '';
+  });
   // Show/hide calendar checkbox when date changes
   document.getElementById('task-date').addEventListener('change', () => maybeShowCalDavCheckbox(state.editingTask));
 
@@ -1353,6 +1528,8 @@ function wireTaskModal() {
       description: document.getElementById('task-desc').value.trim(),
       date:        document.getElementById('task-date').value,
       end_date:    document.getElementById('task-end-date').value || '',
+      all_day:     document.getElementById('task-all-day').checked ? 1 : 0,
+      task_time:   document.getElementById('task-all-day').checked ? '' : (document.getElementById('task-time').value || ''),
       assigned_to: pickerAssignees.join(', '),
       project_id:  projVal ? parseInt(projVal) : null,
       status:      document.getElementById('task-status').value,

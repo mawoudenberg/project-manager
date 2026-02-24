@@ -289,6 +289,24 @@ a { color: var(--accent); text-decoration: none; }
 .daily-header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
 .daily-date-label { font-size: 20px; font-weight: 700; }
 #daily-list { display: flex; flex-direction: column; gap: 8px; }
+.daily-time-col {
+  flex-shrink: 0;
+  width: 72px;
+  display: flex;
+  align-items: center;
+}
+.daily-time {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: .5px;
+}
+.daily-time-allday {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text2);
+  letter-spacing: 0;
+}
 .daily-task-row {
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -946,18 +964,40 @@ tr:hover .qi-del { opacity: 1; }
   font-weight: 600;
   display: flex;
   align-items: center;
-  padding: 0 8px;
-  white-space: nowrap;
+  padding: 0 10px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
+  cursor: grab;
   transition: filter .15s;
   z-index: 2;
   min-width: 6px;
   box-shadow: 0 1px 4px rgba(0,0,0,.35);
+  user-select: none;
 }
 .gnt-bar:hover { filter: brightness(1.18); }
 .gnt-bar.done  { opacity: .4; }
+.gnt-bar-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.gnt-bar-hl,
+.gnt-bar-hr {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 4;
+  background: rgba(255,255,255,0.25);
+  opacity: 0;
+  transition: opacity .15s;
+}
+.gnt-bar-hl { left: 0;  border-radius: 5px 0 0 5px; }
+.gnt-bar-hr { right: 0; border-radius: 0 5px 5px 0; }
+.gnt-bar:hover .gnt-bar-hl,
+.gnt-bar:hover .gnt-bar-hr { opacity: 1; }
 
 /* Gantt — toggle & stage rows */
 .gnt-toggle {
@@ -1019,6 +1059,8 @@ tr:hover .qi-del { opacity: 1; }
 .proj-stage-info { flex: 1; }
 .proj-stage-name { font-size: 13px; font-weight: 500; }
 .proj-stage-dates { font-size: 11px; color: var(--text2); margin-top: 1px; }
+.dup-stage-btn { opacity: 0; transition: opacity .15s; font-size: 15px; padding: 2px 6px; }
+.proj-stage-row:hover .dup-stage-btn { opacity: 1; }
 
 .gnt-today-line {
   position: absolute;
