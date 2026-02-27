@@ -473,8 +473,9 @@ ipcMain.handle('app:open-url', (_e, url) => {
 });
 
 app.whenReady().then(() => {
-  // Check for updates 5 seconds after startup
+  // Check for updates 5 seconds after startup, then every hour
   setTimeout(checkForUpdates, 5000);
+  setInterval(checkForUpdates, 60 * 60 * 1000);
 });
 
 // ─── Logo + PDF Export ────────────────────────────────────────────────────────

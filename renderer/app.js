@@ -217,8 +217,8 @@ function renderMonthly() {
   document.getElementById('cal-next').onclick = () => { state.cursor = new Date(year, month+1, 1); renderMonthly(); };
   document.getElementById('cal-add').onclick = () => openTaskModal(null, toDateStr(state.cursor));
 
-  // Build grid
-  const firstDay = new Date(year, month, 1).getDay();
+  // Build grid (week starts Monday: Mon=0 … Sun=6)
+  const firstDay = (new Date(year, month, 1).getDay() + 6) % 7;
   const daysInMonth = new Date(year, month+1, 0).getDate();
   const daysInPrev = new Date(year, month, 0).getDate();
   const todayStr = toDateStr(state.today);
@@ -239,12 +239,12 @@ function renderMonthly() {
 
   let html = '<div id="monthly-grid">';
   html += '<div class="cal-week-num-header">Wk</div>';
-  DAYS.forEach(d => { html += `<div class="cal-header-cell">${d}</div>`; });
+  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d => { html += `<div class="cal-header-cell">${d}</div>`; });
 
   for (let i = 0; i < allCells.length; i++) {
     if (i % 7 === 0) {
-      // Use Monday (i+1) for ISO week — always valid since grid rows are complete
-      const monDate = new Date(allCells[Math.min(i + 1, allCells.length - 1)].dateStr);
+      // Use Monday (i+0) for ISO week — first cell in row is now Monday
+      const monDate = new Date(allCells[i].dateStr);
       html += `<div class="cal-week-num">${getISOWeek(monDate)}</div>`;
     }
     const c = allCells[i];
