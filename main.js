@@ -446,8 +446,19 @@ async function checkForUpdates() {
     }
 
     if (semverGt(latest, current)) {
-      const dmg = (data.assets || []).find(a => a.name.endsWith('.dmg'));
-      const url = dmg ? dmg.browser_download_url : data.html_url;
+      const assets = data.assets || [];
+      const platform = process.platform; // 'darwin' | 'win32' | 'linux'
+      let asset;
+      if (platform === 'win32') {
+        asset = assets.find(a => a.name.endsWith('.exe'));
+      } else {
+        // Pick arm64 DMG on Apple Silicon, universal otherwise
+        const isArm = process.arch === 'arm64';
+        asset = isArm
+          ? assets.find(a => a.name.endsWith('-arm64.dmg'))
+          : assets.find(a => a.name.endsWith('.dmg') && !a.name.includes('arm64'));
+      }
+      const url = asset ? asset.browser_download_url : data.html_url;
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('app:update-available', { latest, url });
       }
