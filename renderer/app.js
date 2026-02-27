@@ -42,6 +42,7 @@ let state = {
 
 let ganttDrag = null;        // active drag state for Gantt bars
 let ganttJustDragged = false; // suppress click after a drag
+let calDragInProgress = false; // suppress poll re-render during calendar drag
 
 /* ─── Startup ──────────────────────────────────────────────────────────────── */
 async function init() {
@@ -104,37 +105,42 @@ async function remoteQuery(params) {
 function startApiPolling() {
   if (state.config?.mode !== 'api') return;
   setInterval(async () => {
-    // Don't poll while a modal is open (user is editing)
-    const modalOpen = ['task-modal','stage-modal','project-modal','list-modal','settings-modal','team-modal']
-      .some(id => !document.getElementById(id)?.classList.contains('hidden'));
-    if (modalOpen) return;
+    try {
+      // Don't poll while a modal is open or a drag is in progress
+      const modalOpen = ['task-modal','stage-modal','project-modal','list-modal','settings-modal','team-modal']
+        .some(id => !document.getElementById(id)?.classList.contains('hidden'));
+      if (modalOpen || calDragInProgress) return;
 
-    const [tasks, projects, stages, todoLists] = await Promise.all([
-      remoteQuery({ action: 'select', table: 'tasks' }),
-      remoteQuery({ action: 'select', table: 'projects' }),
-      remoteQuery({ action: 'select', table: 'project_stages' }),
-      remoteQuery({ action: 'select', table: 'todo_lists' }),
-    ]);
+      const [tasks, projects, stages, todoLists] = await Promise.all([
+        remoteQuery({ action: 'select', table: 'tasks' }),
+        remoteQuery({ action: 'select', table: 'projects' }),
+        remoteQuery({ action: 'select', table: 'project_stages' }),
+        remoteQuery({ action: 'select', table: 'todo_lists' }),
+      ]);
 
-    const changed =
-      JSON.stringify(tasks)     !== JSON.stringify(state.tasks)    ||
-      JSON.stringify(projects)  !== JSON.stringify(state.projects)  ||
-      JSON.stringify(stages)    !== JSON.stringify(state.stages)    ||
-      JSON.stringify(todoLists) !== JSON.stringify(state.todoLists);
+      if (!Array.isArray(tasks) || !Array.isArray(projects)) return; // bad response
 
-    if (!changed) return;
+      const changed =
+        JSON.stringify(tasks)     !== JSON.stringify(state.tasks)    ||
+        JSON.stringify(projects)  !== JSON.stringify(state.projects)  ||
+        JSON.stringify(stages)    !== JSON.stringify(state.stages)    ||
+        JSON.stringify(todoLists) !== JSON.stringify(state.todoLists);
 
-    state.tasks     = tasks;
-    state.projects  = projects;
-    state.stages    = stages;
-    state.todoLists = todoLists;
-    // Also refresh todo items for all lists
-    for (const list of state.todoLists) {
-      state.todoItems[list.id] = await remoteQuery({
-        action: 'select', table: 'todo_items', where: { list_id: list.id },
-      });
+      if (!changed) return;
+
+      state.tasks     = tasks;
+      state.projects  = projects;
+      state.stages    = stages;
+      state.todoLists = todoLists;
+      for (const list of state.todoLists) {
+        state.todoItems[list.id] = await remoteQuery({
+          action: 'select', table: 'todo_items', where: { list_id: list.id },
+        });
+      }
+      renderView();
+    } catch (_) {
+      // silently ignore network errors during background poll
     }
-    renderView();
   }, 5000);
 }
 
@@ -265,10 +271,12 @@ function renderMonthly() {
   content.querySelectorAll('.cal-chip').forEach(chip => {
     chip.addEventListener('dragstart', e => {
       draggingTaskId = chip.dataset.id;
+      calDragInProgress = true;
       e.dataTransfer.effectAllowed = 'move';
       chip.classList.add('dragging');
     });
     chip.addEventListener('dragend', () => {
+      calDragInProgress = false;
       chip.classList.remove('dragging');
       content.querySelectorAll('.cal-cell.drag-over').forEach(c => c.classList.remove('drag-over'));
     });
@@ -385,10 +393,12 @@ function renderWeekly() {
     };
     card.addEventListener('dragstart', e => {
       draggingTaskId = card.dataset.id;
+      calDragInProgress = true;
       e.dataTransfer.effectAllowed = 'move';
       card.classList.add('dragging');
     });
     card.addEventListener('dragend', () => {
+      calDragInProgress = false;
       card.classList.remove('dragging');
       content.querySelectorAll('.week-tasks.drag-over').forEach(c => c.classList.remove('drag-over'));
     });

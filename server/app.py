@@ -170,4 +170,4 @@ if __name__ == '__main__':
     DB_PATH = args.db
     init_db()
     print(f"Project Manager server running on {args.host}:{args.port}  DB: {DB_PATH}")
-    app.run(host=args.host, port=args.port)
+    app.run(host=args.host, port=args.port, threaded=True)
