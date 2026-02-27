@@ -1,0 +1,13 @@
+[Unit]
+Description=Project Manager API Server
+After=network.target
+
+[Service]
+User=vonk
+WorkingDirectory=/home/vonk/project-manager/server
+ExecStart=/usr/bin/python3 app.py --db /mnt/nas/shared/project-manager.db --host 0.0.0.0 --port 5000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

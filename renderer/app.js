@@ -83,43 +83,45 @@ async function init() {
   }
 }
 
+/* ─── Remote query wrapper ─────────────────────────────────────────────────── */
+// In file-mode: calls local SQLite via IPC.
+// In api-mode:  POSTs to /api/query on the Pi server.
+async function remoteQuery(params) {
+  if (state.config?.mode !== 'api') {
+    return api.dbQuery(params);
+  }
+  const r = await api.apiFetch({
+    method: 'POST',
+    url:    `${state.config.apiUrl}/api/query`,
+    body:   params,
+  });
+  // select returns array; insert returns {id}; update/delete returns {ok}
+  return Array.isArray(r) ? r : (r.data ?? r);
+}
+
 /* ─── Data Loading ─────────────────────────────────────────────────────────── */
 async function loadAll() {
   await Promise.all([loadTasks(), loadTodoLists(), loadProjects(), loadStages()]);
 }
 
 async function loadProjects() {
-  state.projects = await api.dbQuery({ action: 'select', table: 'projects' });
+  state.projects = await remoteQuery({ action: 'select', table: 'projects' });
 }
 
 async function loadStages() {
-  state.stages = await api.dbQuery({ action: 'select', table: 'project_stages' });
+  state.stages = await remoteQuery({ action: 'select', table: 'project_stages' });
 }
 
 async function loadTasks() {
-  if (state.config.mode === 'file') {
-    state.tasks = await api.dbQuery({ action: 'select', table: 'tasks' });
-  } else {
-    const r = await api.apiFetch({ method: 'GET', url: `${state.config.apiUrl}/api/tasks` });
-    state.tasks = r.data || [];
-  }
+  state.tasks = await remoteQuery({ action: 'select', table: 'tasks' });
 }
 
 async function loadTodoLists() {
-  if (state.config.mode === 'file') {
-    state.todoLists = await api.dbQuery({ action: 'select', table: 'todo_lists' });
-    for (const list of state.todoLists) {
-      state.todoItems[list.id] = await api.dbQuery({
-        action: 'select', table: 'todo_items', where: { list_id: list.id },
-      });
-    }
-  } else {
-    const r = await api.apiFetch({ method: 'GET', url: `${state.config.apiUrl}/api/lists` });
-    state.todoLists = r.data || [];
-    for (const list of state.todoLists) {
-      const ri = await api.apiFetch({ method: 'GET', url: `${state.config.apiUrl}/api/lists/${list.id}/items` });
-      state.todoItems[list.id] = ri.data || [];
-    }
+  state.todoLists = await remoteQuery({ action: 'select', table: 'todo_lists' });
+  for (const list of state.todoLists) {
+    state.todoItems[list.id] = await remoteQuery({
+      action: 'select', table: 'todo_items', where: { list_id: list.id },
+    });
   }
 }
 
@@ -246,7 +248,7 @@ function renderMonthly() {
       const newDate = cell.dataset.date;
       const task = state.tasks.find(t => t.id == draggingTaskId);
       if (!task || task.date === newDate) return;
-      await api.dbQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
+      await remoteQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
       await loadTasks();
       renderMonthly();
     });
@@ -366,7 +368,7 @@ function renderWeekly() {
       const newDate = col.dataset.date;
       const task = state.tasks.find(t => t.id == draggingTaskId);
       if (!task || task.date === newDate) return;
-      await api.dbQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
+      await remoteQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
       await loadTasks();
       renderWeekly();
     });
@@ -720,12 +722,12 @@ async function _onGanttDragEnd() {
   setTimeout(() => { ganttJustDragged = false; }, 300);
 
   if (d.stageId) {
-    await api.dbQuery({ action: 'update', table: 'project_stages',
+    await remoteQuery({ action: 'update', table: 'project_stages',
       data: { start_date: d.pendingStart, end_date: d.pendingEnd }, where: { id: d.stageId } });
     const s = state.stages.find(x => x.id == d.stageId);
     if (s) { s.start_date = d.pendingStart; s.end_date = d.pendingEnd; }
   } else if (d.projId) {
-    await api.dbQuery({ action: 'update', table: 'projects',
+    await remoteQuery({ action: 'update', table: 'projects',
       data: { start_date: d.pendingStart, end_date: d.pendingEnd }, where: { id: d.projId } });
     const p = state.projects.find(x => x.id == d.projId);
     if (p) { p.start_date = d.pendingStart; p.end_date = d.pendingEnd; }
@@ -966,7 +968,7 @@ function renderProjectDetail(proj) {
       const stage = state.stages.find(s => s.id == btn.dataset.stageId);
       if (!stage) return;
       const existing = state.stages.filter(s => s.project_id == proj.id);
-      await api.dbQuery({ action: 'insert', table: 'project_stages', data: {
+      await remoteQuery({ action: 'insert', table: 'project_stages', data: {
         project_id: proj.id,
         name:       stage.name,
         color:      stage.color,
@@ -1041,9 +1043,9 @@ function wireProjectModal() {
       created_by:  state.config?.name || '',
     };
     if (state.editingProject) {
-      await api.dbQuery({ action: 'update', table: 'projects', data, where: { id: state.editingProject.id } });
+      await remoteQuery({ action: 'update', table: 'projects', data, where: { id: state.editingProject.id } });
     } else {
-      const result = await api.dbQuery({ action: 'insert', table: 'projects', data });
+      const result = await remoteQuery({ action: 'insert', table: 'projects', data });
       await insertDefaultStages(result.id);
     }
     await Promise.all([loadProjects(), loadStages()]);
@@ -1055,11 +1057,11 @@ function wireProjectModal() {
   document.getElementById('proj-delete').onclick = async () => {
     if (!state.editingProject) return;
     if (!confirm(`Project "${state.editingProject.name}" verwijderen?`)) return;
-    await api.dbQuery({ action: 'delete', table: 'projects', where: { id: state.editingProject.id } });
+    await remoteQuery({ action: 'delete', table: 'projects', where: { id: state.editingProject.id } });
     // Unlink tasks from this project
     const linked = state.tasks.filter(t => t.project_id == state.editingProject.id);
     for (const t of linked) {
-      await api.dbQuery({ action: 'update', table: 'tasks', data: { project_id: null }, where: { id: t.id } });
+      await remoteQuery({ action: 'update', table: 'tasks', data: { project_id: null }, where: { id: t.id } });
     }
     await Promise.all([loadProjects(), loadTasks()]);
     closeProjectModal();
@@ -1070,7 +1072,7 @@ function wireProjectModal() {
 
 async function insertDefaultStages(projectId) {
   for (let i = 0; i < DEFAULT_STAGES.length; i++) {
-    await api.dbQuery({ action: 'insert', table: 'project_stages', data: {
+    await remoteQuery({ action: 'insert', table: 'project_stages', data: {
       project_id: projectId,
       name:       DEFAULT_STAGES[i].name,
       color:      DEFAULT_STAGES[i].color,
@@ -1133,11 +1135,11 @@ function wireStageModal() {
       color:      selectedSwatch?.dataset.color || COLORS[0],
     };
     if (state.editingStage?.id) {
-      await api.dbQuery({ action: 'update', table: 'project_stages', data, where: { id: state.editingStage.id } });
+      await remoteQuery({ action: 'update', table: 'project_stages', data, where: { id: state.editingStage.id } });
     } else {
       const projectId = state.editingStage._projectId;
       const existing  = state.stages.filter(s => s.project_id == projectId);
-      await api.dbQuery({ action: 'insert', table: 'project_stages',
+      await remoteQuery({ action: 'insert', table: 'project_stages',
         data: { ...data, project_id: projectId, sort_order: existing.length } });
     }
     await loadStages();
@@ -1150,7 +1152,7 @@ function wireStageModal() {
   document.getElementById('stage-delete').onclick = async () => {
     if (!state.editingStage?.id) return;
     if (!confirm('Fase verwijderen?')) return;
-    await api.dbQuery({ action: 'delete', table: 'project_stages', where: { id: state.editingStage.id } });
+    await remoteQuery({ action: 'delete', table: 'project_stages', where: { id: state.editingStage.id } });
     await loadStages();
     closeStageModal();
     if (state.activeProject) renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
@@ -1262,7 +1264,7 @@ function renderTodo() {
     const rows = [...zone.querySelectorAll('.todo-item-row[data-item-id]')];
     for (let i = 0; i < rows.length; i++) {
       const itemId = Number(rows[i].dataset.itemId);
-      await api.dbQuery({ action: 'update', table: 'todo_items',
+      await remoteQuery({ action: 'update', table: 'todo_items',
         data: { sort_order: i, list_id: Number(zoneListId) },
         where: { id: itemId } });
     }
@@ -1336,7 +1338,7 @@ function renderTodo() {
         committed = true;
         const newText = input.value.trim();
         if (newText && newText !== original) {
-          await api.dbQuery({ action: 'update', table: 'todo_items', data: { text: newText }, where: { id: itemId } });
+          await remoteQuery({ action: 'update', table: 'todo_items', data: { text: newText }, where: { id: itemId } });
           await loadTodoLists();
           renderTodo();
         } else {
@@ -1359,19 +1361,19 @@ function renderTodo() {
 /* ─── Todo Operations ──────────────────────────────────────────────────────── */
 async function addTodoItem(listId, text) {
   const data = { list_id: listId, text, created_by: state.config.name || '' };
-  await api.dbQuery({ action: 'insert', table: 'todo_items', data });
+  await remoteQuery({ action: 'insert', table: 'todo_items', data });
   await loadTodoLists();
   renderTodo();
 }
 
 async function toggleTodoItem(listId, itemId, completed) {
-  await api.dbQuery({ action: 'update', table: 'todo_items', data: { completed: completed ? 1 : 0 }, where: { id: itemId } });
+  await remoteQuery({ action: 'update', table: 'todo_items', data: { completed: completed ? 1 : 0 }, where: { id: itemId } });
   await loadTodoLists();
   renderTodo();
 }
 
 async function deleteTodoItem(listId, itemId) {
-  await api.dbQuery({ action: 'delete', table: 'todo_items', where: { id: itemId } });
+  await remoteQuery({ action: 'delete', table: 'todo_items', where: { id: itemId } });
   await loadTodoLists();
   renderTodo();
 }
@@ -1388,7 +1390,7 @@ async function renderAssigneePicker() {
   const container = document.getElementById('assignee-picker');
   if (!container) return;
 
-  const members = await api.dbQuery({ action: 'select', table: 'team_members' });
+  const members = await remoteQuery({ action: 'select', table: 'team_members' });
   const memberNames = members.map(m => m.name);
 
   // Team member toggle pills
@@ -1490,19 +1492,11 @@ function closeTaskModal() {
 }
 
 async function saveTask(taskData) {
-  if (state.config.mode === 'file') {
-    if (taskData.id) {
-      const { id, created_at, ...data } = taskData;
-      await api.dbQuery({ action: 'update', table: 'tasks', data, where: { id: taskData.id } });
-    } else {
-      await api.dbQuery({ action: 'insert', table: 'tasks', data: taskData });
-    }
+  if (taskData.id) {
+    const { id, created_at, ...data } = taskData;
+    await remoteQuery({ action: 'update', table: 'tasks', data, where: { id: taskData.id } });
   } else {
-    if (taskData.id) {
-      await api.apiFetch({ method: 'PUT', url: `${state.config.apiUrl}/api/tasks/${taskData.id}`, body: taskData });
-    } else {
-      await api.apiFetch({ method: 'POST', url: `${state.config.apiUrl}/api/tasks`, body: taskData });
-    }
+    await remoteQuery({ action: 'insert', table: 'tasks', data: taskData });
   }
 }
 
@@ -1562,7 +1556,7 @@ function wireTaskModal() {
     if (!confirm('Delete this task?')) return;
     try {
       const task = state.editingTask;
-      await api.dbQuery({ action: 'delete', table: 'tasks', where: { id: task.id } });
+      await remoteQuery({ action: 'delete', table: 'tasks', where: { id: task.id } });
 
       // If this task was pushed to the calendar, delete it there too
       if (task.caldav_uid) {
@@ -1618,9 +1612,9 @@ function wireListModal() {
       created_by: state.config.name || '',
     };
     if (state.editingList) {
-      await api.dbQuery({ action: 'update', table: 'todo_lists', data, where: { id: state.editingList.id } });
+      await remoteQuery({ action: 'update', table: 'todo_lists', data, where: { id: state.editingList.id } });
     } else {
-      await api.dbQuery({ action: 'insert', table: 'todo_lists', data });
+      await remoteQuery({ action: 'insert', table: 'todo_lists', data });
     }
     await loadTodoLists();
     closeListModal();
@@ -1631,7 +1625,7 @@ function wireListModal() {
   document.getElementById('list-delete').onclick = async () => {
     if (!state.editingList) return;
     if (!confirm('Delete this list and all its items?')) return;
-    await api.dbQuery({ action: 'delete', table: 'todo_lists', where: { id: state.editingList.id } });
+    await remoteQuery({ action: 'delete', table: 'todo_lists', where: { id: state.editingList.id } });
     await loadTodoLists();
     closeListModal();
     renderTodo();
@@ -1911,7 +1905,7 @@ async function renderQuoteList() {
   ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-quote-btn">+ Nieuwe offerte</button>`;
   document.getElementById('new-quote-btn').onclick = () => openQuoteEditor(null);
 
-  const quotes = await api.dbQuery({ action: 'select', table: 'quotes' });
+  const quotes = await remoteQuery({ action: 'select', table: 'quotes' });
 
   if (quotes.length === 0) {
     document.getElementById('content').innerHTML =
@@ -1921,7 +1915,7 @@ async function renderQuoteList() {
 
   // Calculate total for each quote (load items)
   const rows = await Promise.all(quotes.map(async q => {
-    const items = await api.dbQuery({ action: 'select', table: 'quote_items', where: { quote_id: q.id } });
+    const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: q.id } });
     const t = calcQuoteTotals(items, q.margin);
     return { q, total: t.grandTotal };
   }));
@@ -1959,7 +1953,7 @@ async function openQuoteEditor(quote) {
 
   // Load existing items if editing
   if (qe.id) {
-    const items = await api.dbQuery({ action: 'select', table: 'quote_items', where: { quote_id: qe.id } });
+    const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: qe.id } });
     qe.materials = items.filter(i => i.type === 'material').map(i => ({ ...i }));
     qe.services  = items.filter(i => i.type === 'service').map(i => ({ ...i }));
   }
@@ -2207,10 +2201,10 @@ async function saveQuote() {
 
   let quoteId = qe.id;
   if (quoteId) {
-    await api.dbQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
-    await api.dbQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
+    await remoteQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
+    await remoteQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
   } else {
-    const res = await api.dbQuery({ action: 'insert', table: 'quotes', data: quoteData });
+    const res = await remoteQuery({ action: 'insert', table: 'quotes', data: quoteData });
     quoteId = res.id;
     qe.id = quoteId;
   }
@@ -2220,11 +2214,11 @@ async function saveQuote() {
     ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price,  sort_order: i })),
   ];
   for (const item of allItems) {
-    await api.dbQuery({ action: 'insert', table: 'quote_items', data: item });
+    await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
   }
 
   // Reload to get server-generated ids on items
-  const saved = await api.dbQuery({ action: 'select', table: 'quotes', where: { id: quoteId } });
+  const saved = await remoteQuery({ action: 'select', table: 'quotes', where: { id: quoteId } });
   if (saved[0]) { qe.id = saved[0].id; }
 
   // Show delete button now that it's saved
@@ -2237,7 +2231,7 @@ async function saveQuote() {
 async function deleteQuote() {
   if (!qe.id) return;
   if (!confirm(`Offerte "${qe.name}" verwijderen?`)) return;
-  await api.dbQuery({ action: 'delete', table: 'quotes', where: { id: qe.id } });
+  await remoteQuery({ action: 'delete', table: 'quotes', where: { id: qe.id } });
   qe = null;
   toast('Offerte verwijderd');
   setView('quotes');
@@ -2400,7 +2394,7 @@ async function openTeamModal() {
 }
 
 async function renderTeamList() {
-  const members = await api.dbQuery({ action: 'select', table: 'team_members' });
+  const members = await remoteQuery({ action: 'select', table: 'team_members' });
   const el = document.getElementById('team-list');
 
   if (members.length === 0) {
@@ -2420,7 +2414,7 @@ async function renderTeamList() {
 
     el.querySelectorAll('.team-member-delete').forEach(btn => {
       btn.onclick = async () => {
-        await api.dbQuery({ action: 'delete', table: 'team_members', where: { id: btn.dataset.id } });
+        await remoteQuery({ action: 'delete', table: 'team_members', where: { id: btn.dataset.id } });
         await renderTeamList();
         await refreshTeamDatalist();
       };
@@ -2435,10 +2429,10 @@ async function addMember() {
   const name = nameEl.value.trim();
   if (!name) { shake(nameEl); return; }
 
-  const members = await api.dbQuery({ action: 'select', table: 'team_members' });
+  const members = await remoteQuery({ action: 'select', table: 'team_members' });
   const color = MEMBER_COLORS[members.length % MEMBER_COLORS.length];
 
-  await api.dbQuery({ action: 'insert', table: 'team_members', data: {
+  await remoteQuery({ action: 'insert', table: 'team_members', data: {
     name, email: emailEl.value.trim(), color,
   }});
 
