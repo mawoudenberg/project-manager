@@ -102,8 +102,11 @@ async function remoteQuery(params) {
 }
 
 /* ─── API polling (API mode only) ─────────────────────────────────────────── */
+let _pollingStarted = false;
 function startApiPolling() {
   if (state.config?.mode !== 'api') return;
+  if (_pollingStarted) return;
+  _pollingStarted = true;
   setInterval(async () => {
     try {
       // Don't poll while a modal is open or a drag is in progress
@@ -1735,6 +1738,7 @@ function wireSettings() {
     document.getElementById('settings-modal').classList.add('hidden');
     await loadAll();
     renderView();
+    startApiPolling();
     toast('Settings saved');
   };
 
