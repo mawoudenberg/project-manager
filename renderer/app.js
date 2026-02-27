@@ -179,6 +179,7 @@ function renderView() {
     monthly:  renderMonthly,
     weekly:   renderWeekly,
     daily:    renderDaily,
+    mytasks:  renderMyTasks,
     todo:     renderTodo,
     quotes:   renderQuoteList,
     gantt:    renderGantt,
@@ -193,7 +194,7 @@ function setView(view) {
   document.querySelectorAll('.nav-btn[data-view]').forEach(b =>
     b.classList.toggle('active', b.dataset.view === view)
   );
-  const titles = { monthly:'Monthly View', weekly:'Weekly View', daily:'Daily View', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
+  const titles = { monthly:'Monthly View', weekly:'Weekly View', daily:'Daily View', mytasks:'Mijn Taken', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
   document.getElementById('toolbar-title').textContent = titles[view] || '';
   renderView();
 }
@@ -239,7 +240,7 @@ function renderMonthly() {
 
   let html = '<div id="monthly-grid">';
   html += '<div class="cal-week-num-header">Wk</div>';
-  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d => { html += `<div class="cal-header-cell">${d}</div>`; });
+  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => { html += `<div class="cal-header-cell${i>=5?' weekend':''}">${d}</div>`; });
 
   for (let i = 0; i < allCells.length; i++) {
     if (i % 7 === 0) {
@@ -308,7 +309,9 @@ function renderMonthly() {
 function calCell(dayNum, dateStr, otherMonth, todayStr) {
   const dayTasks = state.tasks.filter(t => t.date === dateStr);
   const isToday = dateStr === todayStr;
-  const classes = ['cal-cell', otherMonth && 'other-month', isToday && 'today']
+  const dow = new Date(dateStr).getDay(); // 0=Sun,6=Sat
+  const isWeekend = dow === 0 || dow === 6;
+  const classes = ['cal-cell', otherMonth && 'other-month', isToday && 'today', isWeekend && 'weekend']
     .filter(Boolean).join(' ');
 
   let chips = dayTasks.slice(0, 3).map(t =>
@@ -325,6 +328,75 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
     <div class="cal-day-num">${dayNum}</div>
     <div class="cal-chips">${chips}</div>
   </div>`;
+}
+
+/* ─── My Tasks View ────────────────────────────────────────────────────────── */
+function renderMyTasks() {
+  const content = document.getElementById('content');
+  const ctrl = document.getElementById('toolbar-controls');
+  const me = state.config?.name || '';
+
+  ctrl.innerHTML = '';
+  document.getElementById('toolbar-title').textContent = 'Mijn Taken';
+
+  const todayStr = toDateStr(state.today);
+  const myTasks = state.tasks
+    .filter(t => t.assigned_to && t.assigned_to.split(',').map(s => s.trim()).includes(me))
+    .sort((a, b) => (a.date || '9999') < (b.date || '9999') ? -1 : (a.date || '9999') > (b.date || '9999') ? 1 : 0);
+
+  // Group by date
+  const groups = {};
+  myTasks.forEach(t => {
+    const key = t.date || '';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(t);
+  });
+
+  const NL_MONTHS = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+  function fmtDate(dateStr) {
+    if (!dateStr) return 'Geen datum';
+    const d = new Date(dateStr);
+    const dow = ['zo','ma','di','wo','do','vr','za'][d.getDay()];
+    if (dateStr === todayStr) return `Vandaag · ${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]}`;
+    if (dateStr < todayStr) return `⚠ ${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+    return `${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  }
+
+  if (myTasks.length === 0) {
+    content.innerHTML = `<div style="padding:48px;text-align:center;color:var(--text2)">Geen taken toegewezen aan ${escHtml(me)}</div>`;
+    return;
+  }
+
+  let html = '<div class="mytasks-list">';
+  for (const dateKey of Object.keys(groups).sort()) {
+    const isToday = dateKey === todayStr;
+    const isPast  = dateKey < todayStr;
+    html += `<div class="mytasks-group">
+      <div class="mytasks-date-header${isToday ? ' today' : isPast ? ' past' : ''}">${fmtDate(dateKey)}</div>`;
+    groups[dateKey].forEach(t => {
+      const proj = state.projects.find(p => p.id === t.project_id);
+      const timeLabel = !t.all_day && t.task_time ? `<span class="mt-time">${t.task_time}</span>` : '';
+      const projLabel = proj ? `<span class="mt-proj" style="background:${proj.color}20;color:${proj.color}">${escHtml(proj.name)}</span>` : '';
+      const statusDot = t.status === 'done' ? '✓' : t.status === 'in-progress' ? '▶' : '·';
+      html += `<div class="mytasks-row ${t.status === 'done' ? 'done' : ''}" data-id="${t.id}">
+        <div class="mt-dot" style="background:${taskColor(t)}">${statusDot}</div>
+        <div class="mt-body">
+          <div class="mt-title">${escHtml(t.title)}</div>
+          <div class="mt-meta">${timeLabel}${projLabel}</div>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+
+  content.innerHTML = html;
+  content.querySelectorAll('.mytasks-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const task = state.tasks.find(t => t.id === Number(row.dataset.id));
+      if (task) openTaskModal(task);
+    });
+  });
 }
 
 /* ─── Weekly View ──────────────────────────────────────────────────────────── */
