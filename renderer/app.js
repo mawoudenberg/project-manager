@@ -44,6 +44,20 @@ let ganttDrag = null;        // active drag state for Gantt bars
 let ganttJustDragged = false; // suppress click after a drag
 let calDragInProgress = false; // suppress poll re-render during calendar drag
 
+/* ─── Undo stack ────────────────────────────────────────────────────────────── */
+const undoStack = [];
+function pushUndo(label, fn) {
+  undoStack.push({ label, fn });
+  if (undoStack.length > 30) undoStack.shift();
+}
+document.addEventListener('keydown', async e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+    e.preventDefault();
+    const entry = undoStack.pop();
+    if (entry) { await entry.fn(); toast(`↩ ${entry.label}`); }
+  }
+});
+
 /* ─── Startup ──────────────────────────────────────────────────────────────── */
 async function init() {
   buildColorSwatches();
@@ -299,6 +313,11 @@ function renderMonthly() {
       const newDate = cell.dataset.date;
       const task = state.tasks.find(t => t.id == draggingTaskId);
       if (!task || task.date === newDate) return;
+      const oldDate = task.date;
+      pushUndo(`verplaats "${escHtml(task.title)}"`, async () => {
+        await remoteQuery({ action: 'update', table: 'tasks', data: { date: oldDate }, where: { id: task.id } });
+        await loadTasks(); renderMonthly();
+      });
       await remoteQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
       await loadTasks();
       renderMonthly();
@@ -331,70 +350,187 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
 }
 
 /* ─── My Tasks View ────────────────────────────────────────────────────────── */
+// Sub-view state for Mijn Taken
+if (!state.myTasksView)   state.myTasksView   = 'list';
+if (!state.myTasksCursor) state.myTasksCursor = new Date();
+
 function renderMyTasks() {
   const content = document.getElementById('content');
-  const ctrl = document.getElementById('toolbar-controls');
-  const me = state.config?.name || '';
-
-  ctrl.innerHTML = '';
-  document.getElementById('toolbar-title').textContent = 'Mijn Taken';
-
+  const ctrl    = document.getElementById('toolbar-controls');
+  const me      = state.config?.name || '';
   const todayStr = toDateStr(state.today);
-  const myTasks = state.tasks
-    .filter(t => t.assigned_to && t.assigned_to.split(',').map(s => s.trim()).includes(me))
-    .sort((a, b) => (a.date || '9999') < (b.date || '9999') ? -1 : (a.date || '9999') > (b.date || '9999') ? 1 : 0);
-
-  // Group by date
-  const groups = {};
-  myTasks.forEach(t => {
-    const key = t.date || '';
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(t);
-  });
 
   const NL_MONTHS = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
-  function fmtDate(dateStr) {
+  const NL_DAYS   = ['zo','ma','di','wo','do','vr','za'];
+
+  function fmtDateHeader(dateStr) {
     if (!dateStr) return 'Geen datum';
     const d = new Date(dateStr);
-    const dow = ['zo','ma','di','wo','do','vr','za'][d.getDay()];
+    const dow = NL_DAYS[d.getDay()];
+    const base = `${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
     if (dateStr === todayStr) return `Vandaag · ${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]}`;
-    if (dateStr < todayStr) return `⚠ ${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
-    return `${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+    if (dateStr < todayStr)  return `⚠ ${base}`;
+    return base;
   }
 
-  if (myTasks.length === 0) {
-    content.innerHTML = `<div style="padding:48px;text-align:center;color:var(--text2)">Geen taken toegewezen aan ${escHtml(me)}</div>`;
-    return;
+  // Toolbar
+  const subView = state.myTasksView;
+  let navHtml = '';
+  if (subView === 'day') {
+    const cur = state.myTasksCursor;
+    const label = cur.toDateString() === state.today.toDateString()
+      ? `Vandaag · ${NL_DAYS[cur.getDay()]} ${cur.getDate()} ${NL_MONTHS[cur.getMonth()]}`
+      : `${NL_DAYS[cur.getDay()]} ${cur.getDate()} ${NL_MONTHS[cur.getMonth()]} ${cur.getFullYear()}`;
+    navHtml = `<div class="cal-nav">
+      <button class="btn-icon" id="mt-prev">‹</button>
+      <span>${label}</span>
+      <button class="btn-icon" id="mt-next">›</button>
+    </div>`;
+  } else if (subView === 'week') {
+    const monday = new Date(state.myTasksCursor);
+    const day = monday.getDay();
+    monday.setDate(monday.getDate() - (day === 0 ? 6 : day - 1));
+    const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+    const label = `${monday.getDate()} ${NL_MONTHS[monday.getMonth()]} – ${sunday.getDate()} ${NL_MONTHS[sunday.getMonth()]} ${sunday.getFullYear()}`;
+    navHtml = `<div class="cal-nav">
+      <button class="btn-icon" id="mt-prev">‹</button>
+      <span>${label}</span>
+      <button class="btn-icon" id="mt-next">›</button>
+    </div>`;
   }
 
-  let html = '<div class="mytasks-list">';
-  for (const dateKey of Object.keys(groups).sort()) {
-    const isToday = dateKey === todayStr;
-    const isPast  = dateKey < todayStr;
-    html += `<div class="mytasks-group">
-      <div class="mytasks-date-header${isToday ? ' today' : isPast ? ' past' : ''}">${fmtDate(dateKey)}</div>`;
-    groups[dateKey].forEach(t => {
-      const proj = state.projects.find(p => p.id === t.project_id);
-      const timeLabel = !t.all_day && t.task_time ? `<span class="mt-time">${t.task_time}</span>` : '';
-      const projLabel = proj ? `<span class="mt-proj" style="background:${proj.color}20;color:${proj.color}">${escHtml(proj.name)}</span>` : '';
-      const statusDot = t.status === 'done' ? '✓' : t.status === 'in-progress' ? '▶' : '·';
-      html += `<div class="mytasks-row ${t.status === 'done' ? 'done' : ''}" data-id="${t.id}">
-        <div class="mt-dot" style="background:${taskColor(t)}">${statusDot}</div>
-        <div class="mt-body">
-          <div class="mt-title">${escHtml(t.title)}</div>
-          <div class="mt-meta">${timeLabel}${projLabel}</div>
-        </div>
-      </div>`;
+  ctrl.innerHTML = `<div class="mt-toolbar">
+    ${navHtml}
+    <div class="mt-view-toggle">
+      <button class="btn btn-sm${subView==='list'?' btn-primary':''}" data-mtview="list">Lijst</button>
+      <button class="btn btn-sm${subView==='day' ?' btn-primary':''}" data-mtview="day">Dag</button>
+      <button class="btn btn-sm${subView==='week'?' btn-primary':''}" data-mtview="week">Week</button>
+    </div>
+  </div>`;
+
+  ctrl.querySelectorAll('[data-mtview]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.myTasksView = btn.dataset.mtview;
+      state.myTasksCursor = new Date();
+      renderMyTasks();
     });
-    html += '</div>';
+  });
+  if (subView === 'day') {
+    ctrl.querySelector('#mt-prev')?.addEventListener('click', () => {
+      state.myTasksCursor = new Date(state.myTasksCursor);
+      state.myTasksCursor.setDate(state.myTasksCursor.getDate() - 1);
+      renderMyTasks();
+    });
+    ctrl.querySelector('#mt-next')?.addEventListener('click', () => {
+      state.myTasksCursor = new Date(state.myTasksCursor);
+      state.myTasksCursor.setDate(state.myTasksCursor.getDate() + 1);
+      renderMyTasks();
+    });
+  } else if (subView === 'week') {
+    ctrl.querySelector('#mt-prev')?.addEventListener('click', () => {
+      state.myTasksCursor = new Date(state.myTasksCursor);
+      state.myTasksCursor.setDate(state.myTasksCursor.getDate() - 7);
+      renderMyTasks();
+    });
+    ctrl.querySelector('#mt-next')?.addEventListener('click', () => {
+      state.myTasksCursor = new Date(state.myTasksCursor);
+      state.myTasksCursor.setDate(state.myTasksCursor.getDate() + 7);
+      renderMyTasks();
+    });
+  }
+
+  // Filter tasks for this user
+  const allMine = state.tasks
+    .filter(t => t.assigned_to && t.assigned_to.split(',').map(s => s.trim()).includes(me))
+    .sort((a, b) => {
+      const da = (a.date || '9999') + (a.task_time || '');
+      const db = (b.date || '9999') + (b.task_time || '');
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+
+  // Determine which dates to show
+  let dateKeys;
+  if (subView === 'day') {
+    dateKeys = [toDateStr(state.myTasksCursor)];
+  } else if (subView === 'week') {
+    const monday = new Date(state.myTasksCursor);
+    const day = monday.getDay();
+    monday.setDate(monday.getDate() - (day === 0 ? 6 : day - 1));
+    dateKeys = Array.from({length: 7}, (_, i) => {
+      const d = new Date(monday); d.setDate(monday.getDate() + i); return toDateStr(d);
+    });
+  } else {
+    // List: all dates that have tasks
+    dateKeys = [...new Set(allMine.map(t => t.date || ''))].sort();
+  }
+
+  // Build groups
+  const groups = {};
+  dateKeys.forEach(k => { groups[k] = allMine.filter(t => (t.date || '') === k); });
+
+  function taskRow(t) {
+    const proj = state.projects.find(p => p.id === t.project_id);
+    const timeLabel = !t.all_day && t.task_time ? `<span class="mt-time">${t.task_time}</span>` : '';
+    const projLabel = proj ? `<span class="mt-proj" style="background:${proj.color}20;color:${proj.color}">${escHtml(proj.name)}</span>` : '';
+    const done = t.status === 'done';
+    return `<div class="mytasks-row${done ? ' done' : ''}" data-id="${t.id}">
+      <input type="checkbox" class="mt-check" data-id="${t.id}" ${done ? 'checked' : ''} title="Markeer als afgerond">
+      <div class="mt-color" style="background:${taskColor(t)}"></div>
+      <div class="mt-body">
+        <div class="mt-title">${escHtml(t.title)}</div>
+        <div class="mt-meta">${timeLabel}${projLabel}</div>
+      </div>
+    </div>`;
+  }
+
+  const hasAny = dateKeys.some(k => groups[k]?.length);
+  let html = '<div class="mytasks-list">';
+  if (!hasAny) {
+    html += `<div style="padding:48px;text-align:center;color:var(--text2)">Geen taken voor deze periode</div>`;
+  } else {
+    for (const dateKey of dateKeys) {
+      const tasks = groups[dateKey] || [];
+      if (subView !== 'day' && tasks.length === 0) continue; // hide empty days in list/week
+      const isToday = dateKey === todayStr;
+      const isPast  = dateKey && dateKey < todayStr;
+      html += `<div class="mytasks-group">
+        <div class="mytasks-date-header${isToday?' today':isPast?' past':''}">${fmtDateHeader(dateKey)}</div>`;
+      if (tasks.length === 0) {
+        html += `<div style="padding:8px 0;color:var(--text2);font-size:13px">Geen taken</div>`;
+      } else {
+        tasks.forEach(t => { html += taskRow(t); });
+      }
+      html += '</div>';
+    }
   }
   html += '</div>';
-
   content.innerHTML = html;
+
+  // Click to edit (row body, not checkbox)
   content.querySelectorAll('.mytasks-row').forEach(row => {
-    row.addEventListener('click', () => {
+    row.addEventListener('click', e => {
+      if (e.target.classList.contains('mt-check')) return;
       const task = state.tasks.find(t => t.id === Number(row.dataset.id));
       if (task) openTaskModal(task);
+    });
+  });
+
+  // Checkbox: toggle done/pending
+  content.querySelectorAll('.mt-check').forEach(cb => {
+    cb.addEventListener('change', async e => {
+      e.stopPropagation();
+      const id = Number(cb.dataset.id);
+      const task = state.tasks.find(t => t.id === id);
+      const oldStatus = task?.status;
+      const newStatus = cb.checked ? 'done' : 'pending';
+      pushUndo(`status "${escHtml(task?.title)}"`, async () => {
+        await remoteQuery({ action: 'update', table: 'tasks', data: { status: oldStatus }, where: { id } });
+        if (task) task.status = oldStatus;
+        renderMyTasks();
+      });
+      await remoteQuery({ action: 'update', table: 'tasks', data: { status: newStatus }, where: { id } });
+      if (task) task.status = newStatus;
+      renderMyTasks();
     });
   });
 }
@@ -440,6 +576,8 @@ function renderWeekly() {
   weekDates.forEach(date => {
     const dateStr = toDateStr(date);
     const isToday = dateStr === todayStr;
+    const dow = date.getDay();
+    const isWeekend = dow === 0 || dow === 6;
     const dayTasks = state.tasks.filter(t => t.date === dateStr);
     const cards = dayTasks.map(t => `
       <div class="week-task-card ${t.status==='done'?'done':''}" data-id="${t.id}"
@@ -448,7 +586,7 @@ function renderWeekly() {
         ${t.assigned_to ? `<div class="wt-who">→ ${escHtml(t.assigned_to)}</div>` : ''}
       </div>`).join('');
 
-    html += `<div class="week-col">
+    html += `<div class="week-col${isWeekend?' weekend':''}">
       <div class="week-col-header ${isToday?'today-col':''}">
         <span class="wd">${DAYS[(date.getDay())]}</span>
         <span class="dd">${date.getDate()}</span>
@@ -492,6 +630,11 @@ function renderWeekly() {
       const newDate = col.dataset.date;
       const task = state.tasks.find(t => t.id == draggingTaskId);
       if (!task || task.date === newDate) return;
+      const oldDate = task.date;
+      pushUndo(`verplaats "${escHtml(task.title)}"`, async () => {
+        await remoteQuery({ action: 'update', table: 'tasks', data: { date: oldDate }, where: { id: task.id } });
+        await loadTasks(); renderWeekly();
+      });
       await remoteQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
       await loadTasks();
       renderWeekly();
@@ -1657,6 +1800,12 @@ function wireTaskModal() {
       ...(state.editingTask ? { id: state.editingTask.id, created_at: state.editingTask.created_at } : {}),
     };
 
+    if (state.editingTask) {
+      const snap = { ...state.editingTask };
+      pushUndo(`bewerk "${escHtml(snap.title)}"`, async () => {
+        await saveTask(snap); await loadTasks(); renderView();
+      });
+    }
     await saveTask(taskData);
     // Reload to get the persisted ID (needed for CalDAV push)
     await loadTasks();
@@ -1680,6 +1829,12 @@ function wireTaskModal() {
     if (!confirm('Delete this task?')) return;
     try {
       const task = state.editingTask;
+      const snap = { ...task };
+      pushUndo(`verwijder "${escHtml(snap.title)}"`, async () => {
+        const { id, created_at, ...data } = snap;
+        await remoteQuery({ action: 'insert', table: 'tasks', data });
+        await loadTasks(); renderView();
+      });
       await remoteQuery({ action: 'delete', table: 'tasks', where: { id: task.id } });
 
       // If this task was pushed to the calendar, delete it there too
@@ -2632,8 +2787,7 @@ async function maybeShowCalDavCheckbox(task) {
 
   if ((cfg.enabled || cfg.hasPassword) && dateVal) {
     group.classList.remove('hidden');
-    // Pre-check: default on if setting says so, or if task is already in calendar
-    cb.checked = task?.caldav_uid ? true : cfg.pushByDefault;
+    cb.checked = false;
   } else {
     group.classList.add('hidden');
     cb.checked = false;
