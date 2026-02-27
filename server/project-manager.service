@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=vonk
 WorkingDirectory=/home/vonk/project-manager/server
-ExecStart=/usr/bin/python3 app.py --db /mnt/nas/shared/project-manager.db --host 0.0.0.0 --port 5000
+ExecStart=/usr/bin/python3 app.py --db "/mnt/nas/shared/Studio Vonk &  Vorm/intern basic/database/project-manager.db" --host 0.0.0.0 --port 5000
 Restart=on-failure
 RestartSec=5
 
