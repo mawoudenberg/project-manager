@@ -80,6 +80,7 @@ async function init() {
     await loadAll();
     renderView();
     refreshTeamDatalist();
+    startApiPolling();
   }
 }
 
@@ -97,6 +98,44 @@ async function remoteQuery(params) {
   });
   // select returns array; insert returns {id}; update/delete returns {ok}
   return Array.isArray(r) ? r : (r.data ?? r);
+}
+
+/* ─── API polling (API mode only) ─────────────────────────────────────────── */
+function startApiPolling() {
+  if (state.config?.mode !== 'api') return;
+  setInterval(async () => {
+    // Don't poll while a modal is open (user is editing)
+    const modalOpen = ['task-modal','stage-modal','project-modal','list-modal','settings-modal','team-modal']
+      .some(id => !document.getElementById(id)?.classList.contains('hidden'));
+    if (modalOpen) return;
+
+    const [tasks, projects, stages, todoLists] = await Promise.all([
+      remoteQuery({ action: 'select', table: 'tasks' }),
+      remoteQuery({ action: 'select', table: 'projects' }),
+      remoteQuery({ action: 'select', table: 'project_stages' }),
+      remoteQuery({ action: 'select', table: 'todo_lists' }),
+    ]);
+
+    const changed =
+      JSON.stringify(tasks)     !== JSON.stringify(state.tasks)    ||
+      JSON.stringify(projects)  !== JSON.stringify(state.projects)  ||
+      JSON.stringify(stages)    !== JSON.stringify(state.stages)    ||
+      JSON.stringify(todoLists) !== JSON.stringify(state.todoLists);
+
+    if (!changed) return;
+
+    state.tasks     = tasks;
+    state.projects  = projects;
+    state.stages    = stages;
+    state.todoLists = todoLists;
+    // Also refresh todo items for all lists
+    for (const list of state.todoLists) {
+      state.todoItems[list.id] = await remoteQuery({
+        action: 'select', table: 'todo_items', where: { list_id: list.id },
+      });
+    }
+    renderView();
+  }, 5000);
 }
 
 /* ─── Data Loading ─────────────────────────────────────────────────────────── */
