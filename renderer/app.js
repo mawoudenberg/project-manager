@@ -330,7 +330,8 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
   const isToday = dateStr === todayStr;
   const dow = new Date(dateStr).getDay(); // 0=Sun,6=Sat
   const isWeekend = dow === 0 || dow === 6;
-  const classes = ['cal-cell', otherMonth && 'other-month', isToday && 'today', isWeekend && 'weekend']
+  const holiday = !otherMonth ? getDutchHolidays(parseInt(dateStr.slice(0,4)))[dateStr] : null;
+  const classes = ['cal-cell', otherMonth && 'other-month', isToday && 'today', isWeekend && 'weekend', holiday && 'holiday']
     .filter(Boolean).join(' ');
 
   let chips = dayTasks.slice(0, 3).map(t =>
@@ -344,7 +345,7 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
   }
 
   return `<div class="${classes}" data-date="${dateStr}">
-    <div class="cal-day-num">${dayNum}</div>
+    <div class="cal-day-num">${dayNum}${holiday ? `<span class="cal-holiday-name">${escHtml(holiday)}</span>` : ''}</div>
     <div class="cal-chips">${chips}</div>
   </div>`;
 }
@@ -586,10 +587,12 @@ function renderWeekly() {
         ${t.assigned_to ? `<div class="wt-who">→ ${escHtml(t.assigned_to)}</div>` : ''}
       </div>`).join('');
 
-    html += `<div class="week-col${isWeekend?' weekend':''}">
+    const holiday = getDutchHolidays(date.getFullYear())[dateStr];
+    html += `<div class="week-col${isWeekend?' weekend':''}${holiday?' holiday':''}">
       <div class="week-col-header ${isToday?'today-col':''}">
         <span class="wd">${DAYS[(date.getDay())]}</span>
         <span class="dd">${date.getDate()}</span>
+        ${holiday ? `<span class="wk-holiday">${escHtml(holiday)}</span>` : ''}
       </div>
       <div class="week-tasks" data-date="${dateStr}">${cards}</div>
       <button class="week-add-btn" data-date="${dateStr}">+ Add</button>
@@ -651,10 +654,11 @@ function renderDaily() {
   const ctrl = document.getElementById('toolbar-controls');
   const dateStr = toDateStr(state.cursor);
 
+  const dailyHoliday = getDutchHolidays(state.cursor.getFullYear())[dateStr];
   ctrl.innerHTML = `
     <div class="cal-nav">
       <button class="btn-icon" id="day-prev">‹</button>
-      <span>${formatDateLong(state.cursor)}</span>
+      <span>${formatDateLong(state.cursor)}${dailyHoliday ? ` · <span class="daily-holiday-badge">${escHtml(dailyHoliday)}</span>` : ''}</span>
       <button class="btn-icon" id="day-next">›</button>
       <button class="btn btn-primary btn-sm" id="day-add">+ Add Task</button>
     </div>`;
@@ -2105,6 +2109,42 @@ function toDateStr(date) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+/* ─── Dutch public holidays ─────────────────────────────────────────────────── */
+const _holidayCache = {};
+
+function getEaster(year) {
+  const a = year % 19, b = Math.floor(year/100), c = year%100;
+  const d = Math.floor(b/4), e = b%4, f = Math.floor((b+8)/25);
+  const g = Math.floor((b-f+1)/3), h = (19*a+b-d-g+15)%30;
+  const i = Math.floor(c/4), k = c%4, l = (32+2*e+2*i-h-k)%7;
+  const mm = Math.floor((a+11*h+22*l)/451);
+  const month = Math.floor((h+l-7*mm+114)/31);
+  const day = ((h+l-7*mm+114)%31)+1;
+  return new Date(year, month-1, day);
+}
+
+function getDutchHolidays(year) {
+  if (_holidayCache[year]) return _holidayCache[year];
+  const e = getEaster(year);
+  const add = (base, n) => { const r = new Date(base); r.setDate(r.getDate()+n); return r; };
+  let koningsdag = new Date(year, 3, 27);
+  if (koningsdag.getDay() === 0) koningsdag = new Date(year, 3, 26);
+  _holidayCache[year] = {
+    [toDateStr(new Date(year,0,1))]:   'Nieuwjaarsdag',
+    [toDateStr(add(e,-2))]:            'Goede Vrijdag',
+    [toDateStr(e)]:                    '1e Paasdag',
+    [toDateStr(add(e,1))]:             '2e Paasdag',
+    [toDateStr(koningsdag)]:           'Koningsdag',
+    [toDateStr(new Date(year,4,5))]:   'Bevrijdingsdag',
+    [toDateStr(add(e,39))]:            'Hemelvaartsdag',
+    [toDateStr(add(e,49))]:            '1e Pinksterdag',
+    [toDateStr(add(e,50))]:            '2e Pinksterdag',
+    [toDateStr(new Date(year,11,25))]: '1e Kerstdag',
+    [toDateStr(new Date(year,11,26))]: '2e Kerstdag',
+  };
+  return _holidayCache[year];
 }
 
 function formatDateLong(date) {

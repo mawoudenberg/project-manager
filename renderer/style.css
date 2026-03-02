@@ -213,6 +213,21 @@ a { color: var(--accent); text-decoration: none; }
 .cal-cell.weekend { background: var(--bg); }
 .cal-header-cell.weekend { color: var(--text2); opacity: .6; }
 .cal-cell.other-month .cal-day-num { color: var(--text2); }
+.cal-cell.holiday { background: #fef6ee; }
+.cal-holiday-name {
+  display: inline-block;
+  margin-left: 5px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(100% - 20px);
+  vertical-align: middle;
+}
 .cal-day-num {
   font-size: 12px;
   color: var(--text2);
@@ -266,6 +281,27 @@ a { color: var(--accent); text-decoration: none; }
   line-height: 1.2;
 }
 .week-col-header.today-col .dd { color: var(--accent); }
+.week-col.holiday { background: #fef6ee; }
+.wk-holiday {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.daily-holiday-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: #fde8d0;
+  border-radius: 4px;
+  padding: 1px 7px;
+  vertical-align: middle;
+}
 .week-tasks { padding: 8px; display: flex; flex-direction: column; gap: 6px; min-height: 80px; }
 .week-task-card {
   border-radius: 6px;
