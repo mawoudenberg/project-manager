@@ -1,18 +1,18 @@
 /* ─── CSS Variables ────────────────────────────────────────────────────────── */
 :root {
-  --bg: #0f1117;
-  --bg2: #1a1d27;
-  --bg3: #22263a;
-  --border: #2e3352;
-  --accent: #4f8ef7;
-  --accent2: #7c5cbf;
-  --text: #e2e6f0;
-  --text2: #8891aa;
-  --green: #3ecf74;
-  --red: #f76060;
-  --yellow: #f7c948;
-  --radius: 10px;
-  --shadow: 0 4px 24px rgba(0,0,0,.4);
+  --bg: #f5f2ed;
+  --bg2: #ffffff;
+  --bg3: #ece8e1;
+  --border: #d9d2c8;
+  --accent: #b86a2e;
+  --accent2: #7a6b9a;
+  --text: #272320;
+  --text2: #9a8f83;
+  --green: #4a845c;
+  --red: #bf4f4f;
+  --yellow: #c49530;
+  --radius: 8px;
+  --shadow: 0 2px 16px rgba(0,0,0,.07);
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
@@ -207,7 +207,7 @@ a { color: var(--accent); text-decoration: none; }
   overflow: hidden;
 }
 .cal-cell:hover { background: var(--bg3); }
-.cal-cell.today { background: #1a2a45; }
+.cal-cell.today { background: #fef3e8; }
 .cal-cell.today .cal-day-num { color: var(--accent); font-weight: 700; }
 .cal-cell.other-month { opacity: .4; }
 .cal-cell.weekend { background: var(--bg); }
@@ -311,7 +311,7 @@ a { color: var(--accent); text-decoration: none; }
   color: var(--text2); padding: 4px 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
 }
 .mytasks-date-header.today { color: var(--accent); }
-.mytasks-date-header.past  { color: #e05c5c; }
+.mytasks-date-header.past  { color: var(--red); }
 .mytasks-row {
   display: flex; align-items: center; gap: 10px; padding: 9px 10px;
   border-radius: var(--radius); cursor: pointer; transition: background .15s;
