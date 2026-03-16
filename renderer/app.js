@@ -43,6 +43,7 @@ let state = {
 let ganttDrag = null;        // active drag state for Gantt bars
 let ganttJustDragged = false; // suppress click after a drag
 let calDragInProgress = false; // suppress poll re-render during calendar drag
+let calDraggingTaskId = null;  // shared across monthly pages for drag-and-drop
 
 /* ─── Undo stack ────────────────────────────────────────────────────────────── */
 const undoStack = [];
@@ -193,6 +194,7 @@ function renderView() {
     monthly:  renderMonthly,
     weekly:   renderWeekly,
     daily:    renderDaily,
+    yearly:   renderYearly,
     mytasks:  renderMyTasks,
     todo:     renderTodo,
     quotes:   renderQuoteList,
@@ -208,87 +210,60 @@ function setView(view) {
   document.querySelectorAll('.nav-btn[data-view]').forEach(b =>
     b.classList.toggle('active', b.dataset.view === view)
   );
-  const titles = { monthly:'Monthly View', weekly:'Weekly View', daily:'Daily View', mytasks:'Mijn Taken', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
+  const titles = { monthly:'Monthly View', weekly:'Weekly View', daily:'Daily View', yearly:'Yearly View', mytasks:'Mijn Taken', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
   document.getElementById('toolbar-title').textContent = titles[view] || '';
+  if (view !== 'monthly') document.getElementById('content').className = '';
   renderView();
 }
 
 /* ─── Monthly View ─────────────────────────────────────────────────────────── */
-function renderMonthly() {
-  const content = document.getElementById('content');
-  const ctrl = document.getElementById('toolbar-controls');
-  const d = state.cursor;
-  const year = d.getFullYear(), month = d.getMonth();
-
-  ctrl.innerHTML = `
-    <div class="cal-nav">
-      <button class="btn-icon" id="cal-prev">‹</button>
-      <span>${MONTHS[month]} ${year}</span>
-      <button class="btn-icon" id="cal-next">›</button>
-      <button class="btn btn-primary btn-sm" id="cal-add">+ Add Task</button>
-    </div>`;
-
-  document.getElementById('cal-prev').onclick = () => { state.cursor = new Date(year, month-1, 1); renderMonthly(); };
-  document.getElementById('cal-next').onclick = () => { state.cursor = new Date(year, month+1, 1); renderMonthly(); };
-  document.getElementById('cal-add').onclick = () => openTaskModal(null, toDateStr(state.cursor));
-
-  // Build grid (week starts Monday: Mon=0 … Sun=6)
+function buildMonthGrid(year, month, todayStr) {
   const firstDay = (new Date(year, month, 1).getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month+1, 0).getDate();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
   const daysInPrev = new Date(year, month, 0).getDate();
-  const todayStr = toDateStr(state.today);
-
-  // Build flat cell array so we can inject week-number cells per row
   const allCells = [];
   for (let i = firstDay - 1; i >= 0; i--) {
     const dayNum = daysInPrev - i;
-    allCells.push({ dayNum, dateStr: toDateStr(new Date(year, month-1, dayNum)), other: true });
+    allCells.push({ dayNum, dateStr: toDateStr(new Date(year, month - 1, dayNum)), other: true });
   }
   for (let day = 1; day <= daysInMonth; day++) {
     allCells.push({ dayNum: day, dateStr: toDateStr(new Date(year, month, day)), other: false });
   }
   const remaining = (7 - (allCells.length % 7)) % 7;
   for (let day = 1; day <= remaining; day++) {
-    allCells.push({ dayNum: day, dateStr: toDateStr(new Date(year, month+1, day)), other: true });
+    allCells.push({ dayNum: day, dateStr: toDateStr(new Date(year, month + 1, day)), other: true });
   }
-
-  let html = '<div id="monthly-grid">';
+  let html = '<div class="monthly-grid">';
   html += '<div class="cal-week-num-header">Wk</div>';
-  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => { html += `<div class="cal-header-cell${i>=5?' weekend':''}">${d}</div>`; });
-
+  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => {
+    html += `<div class="cal-header-cell${i >= 5 ? ' weekend' : ''}">${d}</div>`;
+  });
   for (let i = 0; i < allCells.length; i++) {
-    if (i % 7 === 0) {
-      // Use Monday (i+0) for ISO week — first cell in row is now Monday
-      const monDate = new Date(allCells[i].dateStr);
-      html += `<div class="cal-week-num">${getISOWeek(monDate)}</div>`;
-    }
+    if (i % 7 === 0) html += `<div class="cal-week-num">${getISOWeek(new Date(allCells[i].dateStr))}</div>`;
     const c = allCells[i];
     html += calCell(c.dayNum, c.dateStr, c.other, todayStr);
   }
   html += '</div>';
+  return html;
+}
 
-  content.innerHTML = html;
-
-  // Attach click handlers
-  content.querySelectorAll('.cal-cell').forEach(cell => {
-    cell.addEventListener('click', (e) => {
+function attachCalHandlers(container) {
+  container.querySelectorAll('.cal-cell').forEach(cell => {
+    cell.addEventListener('click', e => {
       if (e.target.closest('.cal-chip')) return;
       openTaskModal(null, cell.dataset.date);
     });
     cell.querySelectorAll('.cal-chip').forEach(chip => {
-      chip.addEventListener('click', (e) => {
+      chip.addEventListener('click', e => {
         e.stopPropagation();
         const task = state.tasks.find(t => t.id == chip.dataset.id);
         if (task) openTaskModal(task);
       });
     });
   });
-
-  // Drag-and-drop: drag chip to another day to change date
-  let draggingTaskId = null;
-  content.querySelectorAll('.cal-chip').forEach(chip => {
+  container.querySelectorAll('.cal-chip').forEach(chip => {
     chip.addEventListener('dragstart', e => {
-      draggingTaskId = chip.dataset.id;
+      calDraggingTaskId = chip.dataset.id;
       calDragInProgress = true;
       e.dataTransfer.effectAllowed = 'move';
       chip.classList.add('dragging');
@@ -296,12 +271,12 @@ function renderMonthly() {
     chip.addEventListener('dragend', () => {
       calDragInProgress = false;
       chip.classList.remove('dragging');
-      content.querySelectorAll('.cal-cell.drag-over').forEach(c => c.classList.remove('drag-over'));
+      container.querySelectorAll('.cal-cell.drag-over').forEach(c => c.classList.remove('drag-over'));
     });
   });
-  content.querySelectorAll('.cal-cell').forEach(cell => {
+  container.querySelectorAll('.cal-cell').forEach(cell => {
     cell.addEventListener('dragover', e => {
-      if (!draggingTaskId) return;
+      if (!calDraggingTaskId) return;
       e.preventDefault();
       cell.classList.add('drag-over');
     });
@@ -309,18 +284,138 @@ function renderMonthly() {
     cell.addEventListener('drop', async e => {
       e.preventDefault();
       cell.classList.remove('drag-over');
-      if (!draggingTaskId) return;
+      if (!calDraggingTaskId) return;
       const newDate = cell.dataset.date;
-      const task = state.tasks.find(t => t.id == draggingTaskId);
+      const task = state.tasks.find(t => t.id == calDraggingTaskId);
       if (!task || task.date === newDate) return;
       const oldDate = task.date;
       pushUndo(`verplaats "${escHtml(task.title)}"`, async () => {
         await remoteQuery({ action: 'update', table: 'tasks', data: { date: oldDate }, where: { id: task.id } });
         await loadTasks(); renderMonthly();
       });
-      await remoteQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(draggingTaskId) } });
+      await remoteQuery({ action: 'update', table: 'tasks', data: { date: newDate }, where: { id: Number(calDraggingTaskId) } });
       await loadTasks();
       renderMonthly();
+    });
+  });
+}
+
+function renderMonthly() {
+  const content = document.getElementById('content');
+  const ctrl = document.getElementById('toolbar-controls');
+  const RANGE = 18;
+  const cy = state.cursor.getFullYear(), cm = state.cursor.getMonth();
+  const todayStr = toDateStr(state.today);
+
+  ctrl.innerHTML = `
+    <div class="cal-nav">
+      <button class="btn-icon" id="cal-prev">‹</button>
+      <span id="cal-month-label">${MONTHS[cm]} ${cy}</span>
+      <button class="btn-icon" id="cal-next">›</button>
+      <button class="btn btn-primary btn-sm" id="cal-add">+ Add Task</button>
+    </div>`;
+
+  content.className = 'monthly-mode';
+
+  let html = '<div id="monthly-scroll">';
+  for (let offset = -RANGE; offset <= RANGE; offset++) {
+    const d = new Date(cy, cm + offset, 1);
+    const y = d.getFullYear(), m = d.getMonth();
+    html += `<div class="month-page" data-year="${y}" data-month="${m}">${buildMonthGrid(y, m, todayStr)}</div>`;
+  }
+  html += '</div>';
+  content.innerHTML = html;
+
+  // Scroll to cursor month without animation
+  content.querySelectorAll('.month-page')[RANGE].scrollIntoView({ behavior: 'instant' });
+
+  // Track visible month → update label + cursor
+  const scroll = document.getElementById('monthly-scroll');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        const y = parseInt(e.target.dataset.year), m = parseInt(e.target.dataset.month);
+        state.cursor = new Date(y, m, 1);
+        const label = document.getElementById('cal-month-label');
+        if (label) label.textContent = `${MONTHS[m]} ${y}`;
+      }
+    });
+  }, { threshold: 0.5, root: scroll });
+  content.querySelectorAll('.month-page').forEach(p => observer.observe(p));
+
+  document.getElementById('cal-prev').onclick = () => scroll.scrollBy({ top: -scroll.clientHeight, behavior: 'smooth' });
+  document.getElementById('cal-next').onclick = () => scroll.scrollBy({ top: scroll.clientHeight, behavior: 'smooth' });
+  document.getElementById('cal-add').onclick  = () => openTaskModal(null, toDateStr(state.cursor));
+
+  attachCalHandlers(content);
+}
+
+/* ─── Yearly View ──────────────────────────────────────────────────────────── */
+function renderYearly() {
+  const content = document.getElementById('content');
+  const ctrl = document.getElementById('toolbar-controls');
+  const year = state.cursor.getFullYear();
+  const todayStr = toDateStr(state.today);
+
+  ctrl.innerHTML = `
+    <div class="cal-nav">
+      <button class="btn-icon" id="yr-prev">‹</button>
+      <span>${year}</span>
+      <button class="btn-icon" id="yr-next">›</button>
+      <button class="btn btn-primary btn-sm" id="yr-today">Today</button>
+    </div>`;
+
+  document.getElementById('yr-prev').onclick = () => { state.cursor = new Date(year - 1, 0, 1); renderYearly(); };
+  document.getElementById('yr-next').onclick = () => { state.cursor = new Date(year + 1, 0, 1); renderYearly(); };
+  document.getElementById('yr-today').onclick = () => { state.cursor = new Date(state.today); renderYearly(); };
+
+  // Pre-index tasks by date string for O(1) lookup
+  const tasksByDate = {};
+  for (const t of state.tasks) {
+    if (!t.date) continue;
+    if (!tasksByDate[t.date]) tasksByDate[t.date] = [];
+    tasksByDate[t.date].push(t);
+  }
+
+  const DOW_LABELS = ['M','T','W','T','F','S','S'];
+
+  let html = '<div id="yearly-grid">';
+  for (let m = 0; m < 12; m++) {
+    const firstDay = (new Date(year, m, 1).getDay() + 6) % 7; // Mon=0
+    const daysInMonth = new Date(year, m + 1, 0).getDate();
+
+    let dowRow = DOW_LABELS.map(d => `<div class="yr-dow">${d}</div>`).join('');
+
+    // Blank cells before first day
+    let cells = '';
+    for (let b = 0; b < firstDay; b++) cells += '<div class="yr-day"></div>';
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${year}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const isToday = dateStr === todayStr;
+      const dayTasks = tasksByDate[dateStr] || [];
+      const hasTasks = dayTasks.length > 0;
+      const dot = hasTasks
+        ? `<div class="yr-dot" style="background:${taskColor(dayTasks[0])}"></div>`
+        : '';
+      const cls = ['yr-day', isToday && 'yr-today', hasTasks && 'yr-has-tasks'].filter(Boolean).join(' ');
+      cells += `<div class="${cls}" data-date="${dateStr}"><div class="yr-day-num">${d}</div>${dot}</div>`;
+    }
+
+    html += `
+      <div class="yr-month">
+        <div class="yr-month-name">${MONTHS[m]}</div>
+        <div class="yr-dow-row">${dowRow}</div>
+        <div class="yr-days-grid">${cells}</div>
+      </div>`;
+  }
+  html += '</div>';
+  content.innerHTML = html;
+
+  content.querySelectorAll('.yr-day[data-date]').forEach(cell => {
+    cell.addEventListener('click', () => {
+      state.cursor = new Date(cell.dataset.date + 'T00:00:00');
+      setView('daily');
     });
   });
 }
@@ -2222,12 +2317,14 @@ function freshQE(quote) {
 
 async function renderQuoteList() {
   const ctrl = document.getElementById('toolbar-controls');
+  const content = document.getElementById('content');
   ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-quote-btn">+ Nieuwe offerte</button>`;
   document.getElementById('new-quote-btn').onclick = () => openQuoteEditor(null);
+  content.innerHTML = '';
 
   const quotes = await remoteQuery({ action: 'select', table: 'quotes' });
 
-  if (quotes.length === 0) {
+  if (!Array.isArray(quotes) || quotes.length === 0) {
     document.getElementById('content').innerHTML =
       `<div class="empty"><div class="empty-icon">💶</div><p>Nog geen offertes. Klik op "+ Nieuwe offerte" om te beginnen.</p></div>`;
     return;
