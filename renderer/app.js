@@ -7,12 +7,15 @@ const COLORS = [
 ];
 
 const DEFAULT_STAGES = [
-  { name: 'Tekenen',   color: '#4f8ef7' },
-  { name: 'Frezen',    color: '#f7c948' },
-  { name: 'Polyurea',  color: '#7c5cbf' },
-  { name: 'Spuiter',   color: '#f79040' },
-  { name: 'Opleveren', color: '#3ecf74' },
-  { name: 'Offerte',   color: '#f76060' },
+  { name: 'Offerte',      color: '#f76060' },
+  { name: 'Tekenen',      color: '#4f8ef7' },
+  { name: 'CNC Frezen',   color: '#f7c948' },
+  { name: 'Robot Frezen', color: '#f79040' },
+  { name: 'Polyurea',     color: '#7c5cbf' },
+  { name: 'Spuiter',      color: '#40c8f7' },
+  { name: 'Grafisch',     color: '#f740c0' },
+  { name: 'Decoratie',    color: '#80f740' },
+  { name: 'Opleveren',    color: '#3ecf74' },
 ];
 
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -253,7 +256,14 @@ function attachCalHandlers(container) {
       if (e.target.closest('.cal-chip')) return;
       openTaskModal(null, cell.dataset.date);
     });
-    cell.querySelectorAll('.cal-chip').forEach(chip => {
+    cell.querySelectorAll('.cal-chip-stage').forEach(chip => {
+      chip.addEventListener('click', e => {
+        e.stopPropagation();
+        const stage = state.stages.find(s => s.id == chip.dataset.stageId);
+        if (stage) openStageModal(stage, stage.project_id);
+      });
+    });
+    cell.querySelectorAll('.cal-chip:not(.cal-chip-stage)').forEach(chip => {
       chip.addEventListener('click', e => {
         e.stopPropagation();
         const task = state.tasks.find(t => t.id == chip.dataset.id);
@@ -261,7 +271,7 @@ function attachCalHandlers(container) {
       });
     });
   });
-  container.querySelectorAll('.cal-chip').forEach(chip => {
+  container.querySelectorAll('.cal-chip:not(.cal-chip-stage)').forEach(chip => {
     chip.addEventListener('dragstart', e => {
       calDraggingTaskId = chip.dataset.id;
       calDragInProgress = true;
@@ -420,6 +430,15 @@ function renderYearly() {
   });
 }
 
+function stagesForDate(dateStr) {
+  return state.stages
+    .filter(s => s.name === 'Opleveren' && s.end_date === dateStr)
+    .map(s => {
+      const proj = state.projects.find(p => p.id === s.project_id);
+      return { ...s, isStage: true, displayTitle: proj ? proj.name : 'Opleveren' };
+    });
+}
+
 function calCell(dayNum, dateStr, otherMonth, todayStr) {
   const dayTasks = state.tasks.filter(t => t.date === dateStr);
   const isToday = dateStr === todayStr;
@@ -429,14 +448,22 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
   const classes = ['cal-cell', otherMonth && 'other-month', isToday && 'today', isWeekend && 'weekend', holiday && 'holiday']
     .filter(Boolean).join(' ');
 
-  let chips = dayTasks.slice(0, 3).map(t =>
+  const dayStages = stagesForDate(dateStr);
+  const maxTaskChips = Math.max(0, 3 - dayStages.length);
+  let chips = dayStages.map(s =>
+    `<div class="cal-chip cal-chip-stage" data-stage-id="${s.id}"
+         style="background:${s.color || '#3ecf74'}"
+         title="${escHtml(s.displayTitle)}">🏁 ${escHtml(s.displayTitle)}</div>`
+  ).join('');
+  chips += dayTasks.slice(0, maxTaskChips).map(t =>
     `<div class="cal-chip ${t.status==='done'?'done':''}" data-id="${t.id}"
          draggable="true" style="background:${taskColor(t)}"
          title="${escHtml(t.title)}">${escHtml(t.title)}</div>`
   ).join('');
 
-  if (dayTasks.length > 3) {
-    chips += `<div class="cal-more">+${dayTasks.length - 3} more</div>`;
+  const remaining = dayTasks.length - maxTaskChips;
+  if (remaining > 0) {
+    chips += `<div class="cal-more">+${remaining} more</div>`;
   }
 
   return `<div class="${classes}" data-date="${dateStr}">
@@ -675,7 +702,13 @@ function renderWeekly() {
     const dow = date.getDay();
     const isWeekend = dow === 0 || dow === 6;
     const dayTasks = state.tasks.filter(t => t.date === dateStr);
-    const cards = dayTasks.map(t => `
+    const dayStages = stagesForDate(dateStr);
+    const stageCards = dayStages.map(s => `
+      <div class="week-task-card cal-chip-stage" data-stage-id="${s.id}"
+           style="background:${s.color || '#3ecf74'}">
+        <div class="wt-title">🏁 ${escHtml(s.displayTitle)}</div>
+      </div>`).join('');
+    const cards = stageCards + dayTasks.map(t => `
       <div class="week-task-card ${t.status==='done'?'done':''}" data-id="${t.id}"
            draggable="true" style="background:${taskColor(t)}">
         <div class="wt-title">${escHtml(t.title)}</div>
@@ -697,7 +730,13 @@ function renderWeekly() {
   content.innerHTML = html;
 
   let draggingTaskId = null;
-  content.querySelectorAll('.week-task-card').forEach(card => {
+  content.querySelectorAll('.week-task-card.cal-chip-stage').forEach(card => {
+    card.onclick = () => {
+      const stage = state.stages.find(s => s.id == card.dataset.stageId);
+      if (stage) openStageModal(stage, stage.project_id);
+    };
+  });
+  content.querySelectorAll('.week-task-card:not(.cal-chip-stage)').forEach(card => {
     card.onclick = () => {
       const task = state.tasks.find(t => t.id == card.dataset.id);
       if (task) openTaskModal(task);
@@ -777,8 +816,19 @@ function renderDaily() {
       return aTime.localeCompare(bTime);
     });
 
+  const dayStages = stagesForDate(dateStr);
+
   let html = '<div id="daily-list">';
-  if (dayTasks.length === 0) {
+  dayStages.forEach(s => {
+    html += `<div class="daily-stage-row" data-stage-id="${s.id}" style="border-left:4px solid ${s.color || '#3ecf74'}">
+      <div class="daily-stage-flag">🏁</div>
+      <div class="daily-stage-info">
+        <div class="daily-stage-title">${escHtml(s.displayTitle)} — Opleveren</div>
+        <div class="daily-stage-sub">Fase afgerond</div>
+      </div>
+    </div>`;
+  });
+  if (dayTasks.length === 0 && dayStages.length === 0) {
     html += `<div class="empty"><div class="empty-icon">🗓️</div><p>No tasks for this day. Click + Add Task to get started.</p></div>`;
   } else {
     dayTasks.forEach(t => {
@@ -804,6 +854,15 @@ function renderDaily() {
   }
   html += '</div>';
   content.innerHTML = html;
+
+  // Stage row clicks
+  content.querySelectorAll('.daily-stage-row').forEach(row => {
+    row.style.cursor = 'pointer';
+    row.onclick = () => {
+      const stage = state.stages.find(s => s.id == row.dataset.stageId);
+      if (stage) openStageModal(stage, stage.project_id);
+    };
+  });
 
   // Checkbox toggles
   content.querySelectorAll('.status-cb').forEach(cb => {
@@ -1269,16 +1328,22 @@ function renderProjectDetail(proj) {
 
   // Stages section
   const projStages = state.stages.filter(s => s.project_id == proj.id);
+  const existingNames = new Set(projStages.map(s => s.name));
+  const presetBtns = DEFAULT_STAGES.map(ds => {
+    const used = existingNames.has(ds.name);
+    return `<button class="phase-preset-btn${used?' used':''}" data-name="${escHtml(ds.name)}" data-color="${ds.color}"
+      style="border-left-color:${ds.color}" ${used?'disabled':''}>${escHtml(ds.name)}</button>`;
+  }).join('');
   html += `<div class="proj-stages-section">
     <div class="proj-stages-header">
       <h3>Fases</h3>
-      <button class="btn btn-sm btn-primary" id="add-stage-btn">+ Fase</button>
+    </div>
+    <div class="phase-presets">
+      ${presetBtns}
+      <button class="phase-preset-btn phase-preset-custom" id="add-stage-btn">+ Custom</button>
     </div>`;
   if (projStages.length === 0) {
-    html += `<div class="proj-stages-empty">
-      Nog geen fases.
-      <button class="btn btn-sm btn-ghost" id="default-stages-btn">Standaard fases invoegen</button>
-    </div>`;
+    html += `<div class="proj-stages-empty">Nog geen fases. Klik een fase hierboven om toe te voegen.</div>`;
   } else {
     html += projStages.map(s => {
       const c = s.color || proj.color || '#4f8ef7';
@@ -1314,11 +1379,21 @@ function renderProjectDetail(proj) {
   });
 
   document.getElementById('add-stage-btn').onclick = () => openStageModal(null, proj.id);
-  document.getElementById('default-stages-btn')?.addEventListener('click', async () => {
-    await insertDefaultStages(proj.id);
-    await loadStages();
-    renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
-    toast('Standaard fases toegevoegd');
+  content.querySelectorAll('.phase-preset-btn:not(.phase-preset-custom):not(.used)').forEach(btn => {
+    btn.onclick = async () => {
+      const existing = state.stages.filter(s => s.project_id == proj.id);
+      await remoteQuery({ action: 'insert', table: 'project_stages', data: {
+        project_id: proj.id,
+        name:       btn.dataset.name,
+        color:      btn.dataset.color,
+        sort_order: existing.length,
+        start_date: '',
+        end_date:   '',
+      }});
+      await loadStages();
+      renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
+      toast(`'${btn.dataset.name}' toegevoegd`);
+    };
   });
   content.querySelectorAll('.proj-stage-row').forEach(row => {
     row.onclick = e => {
@@ -1411,8 +1486,7 @@ function wireProjectModal() {
     if (state.editingProject) {
       await remoteQuery({ action: 'update', table: 'projects', data, where: { id: state.editingProject.id } });
     } else {
-      const result = await remoteQuery({ action: 'insert', table: 'projects', data });
-      await insertDefaultStages(result.id);
+      await remoteQuery({ action: 'insert', table: 'projects', data });
     }
     await Promise.all([loadProjects(), loadStages()]);
     closeProjectModal();
@@ -1488,6 +1562,15 @@ function wireStageModal() {
   document.getElementById('stage-cancel').onclick = closeStageModal;
   document.getElementById('stage-modal').addEventListener('click', e => {
     if (e.target === document.getElementById('stage-modal')) closeStageModal();
+  });
+
+  document.getElementById('stage-start').addEventListener('input', () => {
+    const end = document.getElementById('stage-end');
+    if (!end.value) end.value = document.getElementById('stage-start').value;
+  });
+  document.getElementById('stage-end').addEventListener('input', () => {
+    const start = document.getElementById('stage-start');
+    if (!start.value) start.value = document.getElementById('stage-end').value;
   });
 
   document.getElementById('stage-save').onclick = async () => {

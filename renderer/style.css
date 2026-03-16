@@ -268,6 +268,7 @@ a { color: var(--accent); text-decoration: none; }
 .cal-chip.done { opacity: .5; text-decoration: line-through; }
 .cal-chip[draggable] { cursor: grab; }
 .cal-chip.dragging { opacity: .35; }
+.cal-chip-stage { cursor: pointer; font-weight: 700; letter-spacing: .01em; }
 .cal-cell.drag-over { outline: 2px dashed var(--accent); background: var(--bg3); }
 .cal-more { font-size: 10px; color: var(--text2); margin-top: 2px; }
 
@@ -1226,11 +1227,43 @@ tr:hover .qi-del { opacity: 1; }
   font-size: 11px !important;
 }
 
+/* Daily view — stage rows */
+.daily-stage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: var(--bg2);
+  border-left: 4px solid #3ecf74;
+}
+.daily-stage-flag { font-size: 18px; line-height: 1; }
+.daily-stage-title { font-weight: 600; font-size: 14px; }
+.daily-stage-sub { font-size: 11px; color: var(--text2); }
+
 /* Project detail — stages section */
 .proj-stages-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
 .proj-stages-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .proj-stages-header h3 { font-size: 14px; font-weight: 600; color: var(--text); margin: 0; }
 .proj-stages-empty { font-size: 12px; color: var(--text2); padding: 8px 0; }
+
+/* Phase preset buttons */
+.phase-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.phase-preset-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  background: var(--bg2);
+  color: var(--text);
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.phase-preset-btn:hover:not(:disabled) { background: var(--bg3); }
+.phase-preset-btn.used { opacity: .35; cursor: default; }
+.phase-preset-btn.phase-preset-custom { border-left-color: var(--border); font-style: italic; }
 .proj-stage-row {
   display: flex;
   align-items: center;
