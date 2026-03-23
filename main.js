@@ -200,6 +200,12 @@ ipcMain.handle('app:open-url', (_e, url) => {
   shell.openExternal(url);
 });
 
+ipcMain.handle('app:download-url', (_e, url) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.downloadURL(url);
+  }
+});
+
 app.whenReady().then(() => {
   // Check for updates 5 seconds after startup, then every hour
   setTimeout(checkForUpdates, 5000);

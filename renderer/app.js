@@ -3545,11 +3545,15 @@ function initListeners() {
 
   api.onUpdateAvailable(({ latest, url }) => {
     const XATTR_CMD = 'xattr -cr /Applications/Project\\ Manager.app';
+    // Auto-copy xattr command as soon as update banner appears
+    navigator.clipboard.writeText(XATTR_CMD).catch(() => {});
+
     const banner = document.createElement('div');
     banner.id = 'update-banner';
     banner.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:4px">
         <span>Nieuwe versie <strong>v${latest}</strong> beschikbaar</span>
+        <span style="font-size:11px;color:var(--green)">✓ Terminal-opdracht gekopieerd naar klembord</span>
       </div>
       <button class="btn btn-primary" style="padding:4px 12px;font-size:12px;flex-shrink:0" id="update-download-btn">Download</button>
       <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;flex-shrink:0" id="update-dismiss-btn">✕</button>
@@ -3557,11 +3561,8 @@ function initListeners() {
     document.body.appendChild(banner);
 
     document.getElementById('update-download-btn').onclick = () => {
-      // Open download
-      api.openUrl(url);
-      // Copy xattr command to clipboard
-      navigator.clipboard.writeText(XATTR_CMD).catch(() => {});
-      // Replace banner with how-to guide
+      api.downloadUrl(url);
+      // Replace banner with install instructions
       banner.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:6px;flex:1">
           <span style="font-weight:600">📥 Installatie-instructies v${latest}</span>
@@ -3571,7 +3572,7 @@ function initListeners() {
             <li>Open <strong>Terminal</strong> en plak de gekopieerde opdracht: <code style="background:var(--bg3);padding:1px 6px;border-radius:3px;user-select:all">${XATTR_CMD}</code></li>
             <li>Druk op <strong>Enter</strong>, open daarna de app</li>
           </ol>
-          <span style="font-size:11px;color:var(--green)">✓ Opdracht gekopieerd naar klembord</span>
+          <span style="font-size:11px;color:var(--green)">✓ Opdracht staat al op je klembord</span>
         </div>
         <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;flex-shrink:0;align-self:flex-start" id="update-dismiss-btn">✕</button>
       `;
