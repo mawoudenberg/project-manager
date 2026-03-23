@@ -11,6 +11,7 @@ const DEFAULT_STAGES = [
   { name: 'Tekenen',      color: '#4f8ef7' },
   { name: 'CNC Frezen',   color: '#f7c948' },
   { name: 'Robot Frezen', color: '#f79040' },
+  { name: '3D Printen',   color: '#e84393' },
   { name: 'Polyurea',     color: '#7c5cbf' },
   { name: 'Spuiter',      color: '#40c8f7' },
   { name: 'Grafisch',     color: '#f740c0' },
@@ -41,12 +42,36 @@ let state = {
   editingStage: null,
   activeProject: null,
   expandedProjects: new Set(),
+  ganttMode: 'week',   // 'week' | 'day'
+  ganttHideInactive: true,
+  projectsHideInactive: true,
+  myTasksHideInactive: true,
+  calFilter: { tasks: 'active', stages: 'active' }, // tasks: 'all'|'active'|'none'  stages: 'all'|'active'|'none'
 };
 
 let ganttDrag = null;        // active drag state for Gantt bars
 let ganttJustDragged = false; // suppress click after a drag
 let calDragInProgress = false; // suppress poll re-render during calendar drag
 let calDraggingTaskId = null;  // shared across monthly pages for drag-and-drop
+let ganttWheelController = null; // AbortController for gantt wheel listener cleanup
+let ganttDraw = null;            // active draw-new-bar drag state
+
+function _dayOffset(fromStr, toStr) {
+  return Math.round((new Date(toStr) - new Date(fromStr)) / 86400000);
+}
+
+function _assignLanes(stages, weekStart, weekEnd) {
+  const sorted = [...stages].sort((a, b) => a.start_date.localeCompare(b.start_date));
+  const laneEnds = [];
+  return sorted.map(s => {
+    const start = s.start_date < weekStart ? weekStart : s.start_date;
+    const end   = s.end_date   > weekEnd   ? weekEnd   : s.end_date;
+    let lane = laneEnds.findIndex(e => e < start);
+    if (lane === -1) { lane = laneEnds.length; }
+    laneEnds[lane] = end;
+    return { s, lane, start, end };
+  });
+}
 
 /* ─── Undo stack ────────────────────────────────────────────────────────────── */
 const undoStack = [];
@@ -63,6 +88,10 @@ document.addEventListener('keydown', async e => {
 });
 
 /* ─── Startup ──────────────────────────────────────────────────────────────── */
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === 'dark' ? 'dark' : 'light';
+}
+
 async function init() {
   buildColorSwatches();
   wireWizard();
@@ -73,7 +102,7 @@ async function init() {
   wireNav();
   wireTeam();
   wireProjectModal();
-  initCalDavListeners();
+  initListeners();
 
   // Gantt drag: document-level listeners (registered once)
   document.addEventListener('mousemove', _onGanttDragMove);
@@ -95,6 +124,7 @@ async function init() {
     showWizard();
   } else {
     state.config = config;
+    applyTheme(config.theme);
     showApp();
     await loadAll();
     renderView();
@@ -207,16 +237,63 @@ function renderView() {
   (views[state.view] || renderMonthly)();
 }
 
+const CAL_VIEWS = new Set(['monthly', 'weekly', 'daily', 'yearly']);
+
 function setView(view) {
   state.view = view;
   state.activeProject = null;
-  document.querySelectorAll('.nav-btn[data-view]').forEach(b =>
-    b.classList.toggle('active', b.dataset.view === view)
-  );
-  const titles = { monthly:'Monthly View', weekly:'Weekly View', daily:'Daily View', yearly:'Yearly View', mytasks:'Mijn Taken', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
+  document.querySelectorAll('.nav-btn[data-view]').forEach(b => {
+    const isActive = b.dataset.view === view || (b.dataset.view === 'calendar' && CAL_VIEWS.has(view));
+    b.classList.toggle('active', isActive);
+  });
+  const titles = { monthly:'Kalender', weekly:'Kalender', daily:'Kalender', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
   document.getElementById('toolbar-title').textContent = titles[view] || '';
   if (view !== 'monthly') document.getElementById('content').className = '';
+  if (!CAL_VIEWS.has(view)) document.getElementById('cal-filter-bar')?.remove();
   renderView();
+}
+
+function calViewToggleHTML(active) {
+  return `
+  <div class="gantt-mode-toggle">
+    <button class="gmt-btn${active==='daily'?' active':''}" id="cvt-day">Dag</button>
+    <button class="gmt-btn${active==='weekly'?' active':''}" id="cvt-week">Week</button>
+    <button class="gmt-btn${active==='monthly'?' active':''}" id="cvt-month">Maand</button>
+  </div>`;
+}
+function renderCalFilterBar() {
+  const f = state.calFilter;
+  let bar = document.getElementById('cal-filter-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'cal-filter-bar';
+    document.getElementById('toolbar').after(bar);
+  }
+  bar.innerHTML = `
+    <span class="cfp-label">Taken</span>
+    <div class="gantt-mode-toggle">
+      <button class="gmt-btn${f.tasks==='all'?' active':''}"    data-cf="tasks-all">Alles</button>
+      <button class="gmt-btn${f.tasks==='active'?' active':''}" data-cf="tasks-active">Open</button>
+      <button class="gmt-btn${f.tasks==='none'?' active':''}"   data-cf="tasks-none">Uit</button>
+    </div>
+    <span class="cfp-label">Fases</span>
+    <div class="gantt-mode-toggle">
+      <button class="gmt-btn${f.stages==='all'?' active':''}"    data-cf="stages-all">Alles</button>
+      <button class="gmt-btn${f.stages==='active'?' active':''}" data-cf="stages-active">Actief</button>
+      <button class="gmt-btn${f.stages==='none'?' active':''}"   data-cf="stages-none">Uit</button>
+    </div>`;
+  bar.querySelectorAll('[data-cf]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const [key, val] = btn.dataset.cf.split('-');
+      state.calFilter[key] = val;
+      renderView();
+    });
+  });
+}
+function wireCalViewToggle() {
+  document.getElementById('cvt-day')?.addEventListener('click',   () => setView('daily'));
+  document.getElementById('cvt-week')?.addEventListener('click',  () => setView('weekly'));
+  document.getElementById('cvt-month')?.addEventListener('click', () => setView('monthly'));
 }
 
 /* ─── Monthly View ─────────────────────────────────────────────────────────── */
@@ -236,32 +313,84 @@ function buildMonthGrid(year, month, todayStr) {
   for (let day = 1; day <= remaining; day++) {
     allCells.push({ dayNum: day, dateStr: toDateStr(new Date(year, month + 1, day)), other: true });
   }
+
+  // Group cells into weeks
+  const weeks = [];
+  for (let i = 0; i < allCells.length; i += 7) weeks.push(allCells.slice(i, i + 7));
+
+  // Compute once for all weeks
+  const monthVisStages = visibleStages();
+
   let html = '<div class="monthly-grid">';
   html += '<div class="cal-week-num-header">Wk</div>';
   ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => {
     html += `<div class="cal-header-cell${i >= 5 ? ' weekend' : ''}">${d}</div>`;
   });
-  for (let i = 0; i < allCells.length; i++) {
-    if (i % 7 === 0) html += `<div class="cal-week-num">${getISOWeek(new Date(allCells[i].dateStr))}</div>`;
-    const c = allCells[i];
-    html += calCell(c.dayNum, c.dateStr, c.other, todayStr);
-  }
+
+  weeks.forEach(week => {
+    const weekStart = week[0].dateStr;
+    const weekEnd   = week[6].dateStr;
+    const weekNum   = getISOWeek(new Date(weekStart));
+
+    // Stages overlapping this week (must have both start and end)
+    const weekStages = monthVisStages.filter(s =>
+      s.start_date && s.end_date &&
+      s.start_date <= weekEnd && s.end_date >= weekStart
+    );
+
+    const laned = weekStages.length ? _assignLanes(weekStages, weekStart, weekEnd) : [];
+    const numLanes = laned.length ? Math.max(...laned.map(l => l.lane)) + 1 : 0;
+
+    // Week-num cell spans 2 grid rows (stage bar row + day cells row)
+    html += `<div class="cal-week-num" style="grid-row: span 2">${weekNum}</div>`;
+
+    // Stage bars row (grid-column 2/9 = all 7 day columns)
+    if (numLanes > 0) {
+      const rowH = Math.min(numLanes, 3) * 20 + 4;
+      html += `<div class="month-stage-bar-row" style="height:${rowH}px">`;
+      laned.slice(0, 21).forEach(({ s, lane, start, end }) => {
+        if (lane >= 3) return; // max 3 lanes
+        const startDow = (new Date(start + 'T00:00:00').getDay() + 6) % 7;
+        const endDow   = (new Date(end   + 'T00:00:00').getDay() + 6) % 7;
+        const left  = (startDow / 7 * 100).toFixed(2);
+        const width = ((endDow - startDow + 1) / 7 * 100).toFixed(2);
+        const isStart = s.start_date >= weekStart;
+        const isEnd   = s.end_date   <= weekEnd;
+        const br = `${isStart ? '3px' : '0'} ${isEnd ? '3px' : '0'} ${isEnd ? '3px' : '0'} ${isStart ? '3px' : '0'}`;
+        const proj = state.projects.find(p => p.id === s.project_id);
+        const label = proj ? `${proj.name} · ${s.name}` : s.name;
+        const sBarBg = s.color || '#4f8ef7';
+        html += `<div class="month-sbar" data-stage-id="${s.id}"
+          style="left:${left}%;width:${width}%;top:${lane * 20 + 2}px;background:${sBarBg};color:${contrastColor(sBarBg)};border-radius:${br}"
+          title="${escHtml(label)}">${isStart ? escHtml(s.name) : ''}</div>`;
+      });
+      html += `</div>`;
+    } else {
+      html += `<div class="month-stage-bar-row month-stage-bar-row-empty"></div>`;
+    }
+
+    // 7 day cells
+    week.forEach(c => { html += calCell(c.dayNum, c.dateStr, c.other, todayStr); });
+  });
+
   html += '</div>';
   return html;
 }
 
 function attachCalHandlers(container) {
+  // Stage bar clicks (multi-day bars above day cells)
+  container.querySelectorAll('.month-sbar').forEach(bar => {
+    bar.addEventListener('click', e => {
+      e.stopPropagation();
+      const stage = state.stages.find(s => s.id == bar.dataset.stageId);
+      if (stage) openStageModal(stage, stage.project_id);
+    });
+  });
+
   container.querySelectorAll('.cal-cell').forEach(cell => {
     cell.addEventListener('click', e => {
       if (e.target.closest('.cal-chip')) return;
       openTaskModal(null, cell.dataset.date);
-    });
-    cell.querySelectorAll('.cal-chip-stage').forEach(chip => {
-      chip.addEventListener('click', e => {
-        e.stopPropagation();
-        const stage = state.stages.find(s => s.id == chip.dataset.stageId);
-        if (stage) openStageModal(stage, stage.project_id);
-      });
     });
     cell.querySelectorAll('.cal-chip:not(.cal-chip-stage)').forEach(chip => {
       chip.addEventListener('click', e => {
@@ -322,8 +451,11 @@ function renderMonthly() {
       <button class="btn-icon" id="cal-prev">‹</button>
       <span id="cal-month-label">${MONTHS[cm]} ${cy}</span>
       <button class="btn-icon" id="cal-next">›</button>
+      ${calViewToggleHTML('monthly')}
       <button class="btn btn-primary btn-sm" id="cal-add">+ Add Task</button>
     </div>`;
+  wireCalViewToggle();
+  renderCalFilterBar();
 
   content.className = 'monthly-mode';
 
@@ -430,17 +562,54 @@ function renderYearly() {
   });
 }
 
-function stagesForDate(dateStr) {
-  return state.stages
-    .filter(s => s.name === 'Opleveren' && s.end_date === dateStr)
+function calTaskVisible(task) {
+  const f = state.calFilter.tasks;
+  if (f === 'none')   return false;
+  if (f === 'active') return task.status !== 'done';
+  return true;
+}
+
+function visibleStages() {
+  const f = state.calFilter.stages;
+  if (f === 'none') return [];
+  if (f === 'active') {
+    const activeIds = new Set(state.projects.filter(p => p.status === 'active').map(p => p.id));
+    return state.stages.filter(s => activeIds.has(s.project_id));
+  }
+  return state.stages;
+}
+
+// Stages that start or end on a given date (for monthly/weekly chips)
+function stagesForDate(dateStr, stages = visibleStages()) {
+  const result = [];
+  stages.forEach(s => {
+    const proj = state.projects.find(p => p.id === s.project_id);
+    const projName = proj ? proj.name : '';
+    if (s.start_date === dateStr) {
+      result.push({ ...s, isStage: true, stageEvent: s.end_date === dateStr ? 'both' : 'start', displayTitle: s.name, projName });
+    } else if (s.end_date === dateStr) {
+      result.push({ ...s, isStage: true, stageEvent: 'end', displayTitle: s.name, projName });
+    }
+  });
+  return result;
+}
+
+// Stages spanning (active on) a given date (for daily view)
+function stagesActiveOnDate(dateStr) {
+  return visibleStages()
+    .filter(s => s.start_date && s.end_date && s.start_date <= dateStr && s.end_date >= dateStr)
     .map(s => {
       const proj = state.projects.find(p => p.id === s.project_id);
-      return { ...s, isStage: true, displayTitle: proj ? proj.name : 'Opleveren' };
+      const event = s.start_date === dateStr && s.end_date === dateStr ? 'both'
+                  : s.start_date === dateStr ? 'start'
+                  : s.end_date   === dateStr ? 'end'
+                  : 'active';
+      return { ...s, isStage: true, stageEvent: event, displayTitle: s.name, projName: proj ? proj.name : '' };
     });
 }
 
 function calCell(dayNum, dateStr, otherMonth, todayStr) {
-  const dayTasks = state.tasks.filter(t => t.date === dateStr);
+  const dayTasks = state.tasks.filter(t => t.date === dateStr && calTaskVisible(t));
   const isToday = dateStr === todayStr;
   const dow = new Date(dateStr).getDay(); // 0=Sun,6=Sat
   const isWeekend = dow === 0 || dow === 6;
@@ -448,20 +617,14 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
   const classes = ['cal-cell', otherMonth && 'other-month', isToday && 'today', isWeekend && 'weekend', holiday && 'holiday']
     .filter(Boolean).join(' ');
 
-  const dayStages = stagesForDate(dateStr);
-  const maxTaskChips = Math.max(0, 3 - dayStages.length);
-  let chips = dayStages.map(s =>
-    `<div class="cal-chip cal-chip-stage" data-stage-id="${s.id}"
-         style="background:${s.color || '#3ecf74'}"
-         title="${escHtml(s.displayTitle)}">🏁 ${escHtml(s.displayTitle)}</div>`
-  ).join('');
-  chips += dayTasks.slice(0, maxTaskChips).map(t =>
-    `<div class="cal-chip ${t.status==='done'?'done':''}" data-id="${t.id}"
-         draggable="true" style="background:${taskColor(t)}"
-         title="${escHtml(t.title)}">${escHtml(t.title)}</div>`
-  ).join('');
+  let chips = dayTasks.slice(0, 3).map(t => {
+    const bg = taskColor(t);
+    return `<div class="cal-chip ${t.status==='done'?'done':''}" data-id="${t.id}"
+         draggable="true" style="background:${bg};color:${contrastColor(bg)}"
+         title="${escHtml(t.title)}">${escHtml(t.title)}</div>`;
+  }).join('');
 
-  const remaining = dayTasks.length - maxTaskChips;
+  const remaining = dayTasks.length - 3;
   if (remaining > 0) {
     chips += `<div class="cal-more">+${remaining} more</div>`;
   }
@@ -529,6 +692,9 @@ function renderMyTasks() {
       <button class="btn btn-sm${subView==='day' ?' btn-primary':''}" data-mtview="day">Dag</button>
       <button class="btn btn-sm${subView==='week'?' btn-primary':''}" data-mtview="week">Week</button>
     </div>
+    <button class="btn btn-sm${state.myTasksHideInactive?' btn-primary':' btn-ghost'}" id="mt-filter-btn">
+      ${state.myTasksHideInactive ? 'Toon alles' : 'Alleen actief'}
+    </button>
   </div>`;
 
   ctrl.querySelectorAll('[data-mtview]').forEach(btn => {
@@ -537,6 +703,10 @@ function renderMyTasks() {
       state.myTasksCursor = new Date();
       renderMyTasks();
     });
+  });
+  document.getElementById('mt-filter-btn')?.addEventListener('click', () => {
+    state.myTasksHideInactive = !state.myTasksHideInactive;
+    renderMyTasks();
   });
   if (subView === 'day') {
     ctrl.querySelector('#mt-prev')?.addEventListener('click', () => {
@@ -565,6 +735,7 @@ function renderMyTasks() {
   // Filter tasks for this user
   const allMine = state.tasks
     .filter(t => t.assigned_to && t.assigned_to.split(',').map(s => s.trim()).includes(me))
+    .filter(t => !state.myTasksHideInactive || t.status !== 'done')
     .sort((a, b) => {
       const da = (a.date || '9999') + (a.task_time || '');
       const db = (b.date || '9999') + (b.task_time || '');
@@ -686,7 +857,10 @@ function renderWeekly() {
       <button class="btn-icon" id="wk-prev">‹</button>
       <span>${weekLabel}</span>
       <button class="btn-icon" id="wk-next">›</button>
+      ${calViewToggleHTML('weekly')}
     </div>`;
+  wireCalViewToggle();
+  renderCalFilterBar();
 
   document.getElementById('wk-prev').onclick = () => {
     state.cursor = new Date(monday); state.cursor.setDate(monday.getDate() - 7); renderWeekly();
@@ -695,25 +869,32 @@ function renderWeekly() {
     state.cursor = new Date(monday); state.cursor.setDate(monday.getDate() + 7); renderWeekly();
   };
 
+  const weekVisStages = visibleStages();
   let html = '<div id="weekly-grid">';
   weekDates.forEach(date => {
     const dateStr = toDateStr(date);
     const isToday = dateStr === todayStr;
     const dow = date.getDay();
     const isWeekend = dow === 0 || dow === 6;
-    const dayTasks = state.tasks.filter(t => t.date === dateStr);
-    const dayStages = stagesForDate(dateStr);
-    const stageCards = dayStages.map(s => `
-      <div class="week-task-card cal-chip-stage" data-stage-id="${s.id}"
-           style="background:${s.color || '#3ecf74'}">
-        <div class="wt-title">🏁 ${escHtml(s.displayTitle)}</div>
-      </div>`).join('');
-    const cards = stageCards + dayTasks.map(t => `
-      <div class="week-task-card ${t.status==='done'?'done':''}" data-id="${t.id}"
-           draggable="true" style="background:${taskColor(t)}">
+    const dayTasks = state.tasks.filter(t => t.date === dateStr && calTaskVisible(t));
+    const dayStages = stagesForDate(dateStr, weekVisStages);
+    const stageCards = dayStages.map(s => {
+      const icon = s.stageEvent === 'end' || s.stageEvent === 'both' ? '🏁' : '▶';
+      const sbg = s.color || '#3ecf74';
+      return `<div class="week-task-card cal-chip-stage cal-chip-stage-${s.stageEvent}" data-stage-id="${s.id}"
+           style="background:${sbg};color:${contrastColor(sbg)}">
+        <div class="wt-title">${icon} ${escHtml(s.displayTitle)}</div>
+        ${s.projName ? `<div class="wt-sub">${escHtml(s.projName)}</div>` : ''}
+      </div>`;
+    }).join('');
+    const cards = stageCards + dayTasks.map(t => {
+      const bg = taskColor(t);
+      return `<div class="week-task-card ${t.status==='done'?'done':''}" data-id="${t.id}"
+           draggable="true" style="background:${bg};color:${contrastColor(bg)}">
         <div class="wt-title">${escHtml(t.title)}</div>
         ${t.assigned_to ? `<div class="wt-who">→ ${escHtml(t.assigned_to)}</div>` : ''}
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
     const holiday = getDutchHolidays(date.getFullYear())[dateStr];
     html += `<div class="week-col${isWeekend?' weekend':''}${holiday?' holiday':''}">
@@ -794,8 +975,11 @@ function renderDaily() {
       <button class="btn-icon" id="day-prev">‹</button>
       <span>${formatDateLong(state.cursor)}${dailyHoliday ? ` · <span class="daily-holiday-badge">${escHtml(dailyHoliday)}</span>` : ''}</span>
       <button class="btn-icon" id="day-next">›</button>
+      ${calViewToggleHTML('daily')}
       <button class="btn btn-primary btn-sm" id="day-add">+ Add Task</button>
     </div>`;
+  wireCalViewToggle();
+  renderCalFilterBar();
 
   document.getElementById('day-prev').onclick = () => {
     state.cursor = new Date(state.cursor); state.cursor.setDate(state.cursor.getDate()-1); renderDaily();
@@ -806,7 +990,7 @@ function renderDaily() {
   document.getElementById('day-add').onclick = () => openTaskModal(null, dateStr);
 
   const dayTasks = state.tasks
-    .filter(t => t.date === dateStr)
+    .filter(t => t.date === dateStr && calTaskVisible(t))
     .sort((a, b) => {
       const aTime = (!a.all_day && a.task_time) ? a.task_time : '';
       const bTime = (!b.all_day && b.task_time) ? b.task_time : '';
@@ -816,15 +1000,17 @@ function renderDaily() {
       return aTime.localeCompare(bTime);
     });
 
-  const dayStages = stagesForDate(dateStr);
+  const dayStages = stagesActiveOnDate(dateStr);
 
   let html = '<div id="daily-list">';
   dayStages.forEach(s => {
+    const icon = s.stageEvent === 'end' || s.stageEvent === 'both' ? '🏁' : s.stageEvent === 'start' ? '▶' : '▬';
+    const sub = s.stageEvent === 'start' ? 'Start' : s.stageEvent === 'end' ? 'Einde' : s.stageEvent === 'both' ? 'Start & einde' : 'Actief';
     html += `<div class="daily-stage-row" data-stage-id="${s.id}" style="border-left:4px solid ${s.color || '#3ecf74'}">
-      <div class="daily-stage-flag">🏁</div>
+      <div class="daily-stage-flag">${icon}</div>
       <div class="daily-stage-info">
-        <div class="daily-stage-title">${escHtml(s.displayTitle)} — Opleveren</div>
-        <div class="daily-stage-sub">Fase afgerond</div>
+        <div class="daily-stage-title">${escHtml(s.projName ? s.projName + ' · ' + s.displayTitle : s.displayTitle)}</div>
+        <div class="daily-stage-sub">${sub}${s.start_date && s.end_date ? ` · ${s.start_date} → ${s.end_date}` : ''}</div>
       </div>
     </div>`;
   });
@@ -885,7 +1071,8 @@ function renderDaily() {
 
 /* ─── Gantt View ───────────────────────────────────────────────────────────── */
 function renderGantt() {
-  renderGanttWeek();
+  if (state.ganttMode === 'day') renderGanttDay();
+  else renderGanttWeek();
 }
 
 function ganttToolbarNav(label, prevFn, nextFn) {
@@ -895,9 +1082,19 @@ function ganttToolbarNav(label, prevFn, nextFn) {
       <button class="btn-icon" id="gnt-prev">‹</button>
       <span>${label}</span>
       <button class="btn-icon" id="gnt-next">›</button>
+      <div class="gantt-mode-toggle">
+        <button class="gmt-btn${state.ganttMode==='week'?' active':''}" id="gmt-week">Week</button>
+        <button class="gmt-btn${state.ganttMode==='day'?' active':''}" id="gmt-day">Dag</button>
+      </div>
+      <button class="btn btn-sm${state.ganttHideInactive?' btn-primary':' btn-ghost'}" id="gnt-filter-btn">
+        ${state.ganttHideInactive ? 'Toon alles' : 'Alleen actief'}
+      </button>
     </div>`;
   document.getElementById('gnt-prev').onclick = prevFn;
   document.getElementById('gnt-next').onclick = nextFn;
+  document.getElementById('gmt-week').onclick = () => { state.ganttMode = 'week'; renderGantt(); };
+  document.getElementById('gmt-day').onclick  = () => { state.ganttMode = 'day';  renderGantt(); };
+  document.getElementById('gnt-filter-btn').onclick = () => { state.ganttHideInactive = !state.ganttHideInactive; renderGantt(); };
 }
 
 /* ─── Gantt Week View (Projects, multi-week overview) ──────────────────────── */
@@ -943,16 +1140,14 @@ function renderGanttWeek() {
   }
 
   const visibleProjects = state.projects
+    .filter(p => !state.ganttHideInactive || p.status === 'active')
     .map(p => { const dates = projectEffectiveDates(p); return dates ? { ...p, ...dates } : null; })
     .filter(Boolean);
 
   if (visibleProjects.length === 0) {
-    content.innerHTML = `<div class="empty"><div class="empty-icon">📁</div><p>Geen projecten in dit bereik. Maak een project aan via <strong>Projecten</strong> en stel start/einddatum in.</p></div>`;
+    content.innerHTML = `<div id="gantt-wrap"><div class="empty"><div class="empty-icon">📁</div><p>Geen projecten in dit bereik. Maak een project aan via <strong>Projecten</strong> en stel start/einddatum in.</p></div></div>`;
+    wireGanttInteractions(rangeStart, totalDays);
     return;
-  }
-
-  function dayOffset(fromStr, toStr) {
-    return Math.round((new Date(toStr) - new Date(fromStr)) / 86400000);
   }
 
   // Week column headers
@@ -974,7 +1169,7 @@ function renderGanttWeek() {
   }).join('');
 
   // Today vertical line (day-precision within the 12-week range)
-  const todayOffDays = dayOffset(rangeStart, todayStr);
+  const todayOffDays = _dayOffset(rangeStart, todayStr);
   const todayLine = (todayOffDays >= 0 && todayOffDays < totalDays)
     ? `<div class="gnt-today-line" style="left:${((todayOffDays + 0.5) / totalDays * 100).toFixed(2)}%"></div>`
     : '';
@@ -982,8 +1177,8 @@ function renderGanttWeek() {
   const rowsHtml = visibleProjects.map(p => {
     const clampStart = p.effectiveStart < rangeStart ? rangeStart : p.effectiveStart;
     const clampEnd   = p.effectiveEnd   > rangeEnd   ? rangeEnd   : p.effectiveEnd;
-    const startOff   = dayOffset(rangeStart, clampStart);
-    const endOff     = dayOffset(rangeStart, clampEnd);
+    const startOff   = _dayOffset(rangeStart, clampStart);
+    const endOff     = _dayOffset(rangeStart, clampEnd);
     const leftPct    = (startOff / totalDays * 100).toFixed(2);
     const widthPct   = ((endOff - startOff + 1) / totalDays * 100).toFixed(2);
     const done       = p.status === 'done';
@@ -1000,39 +1195,10 @@ function renderGanttWeek() {
         return a.start_date.localeCompare(b.start_date);
       });
 
-    // Stage rows (only when expanded)
-    const stageRows = isExpanded ? projStages.map(s => {
-      const hasBar = s.start_date && s.end_date && s.start_date <= rangeEnd && s.end_date >= rangeStart;
-      let stageBar = '';
-      if (hasBar) {
-        const sClampStart = s.start_date < rangeStart ? rangeStart : s.start_date;
-        const sClampEnd   = s.end_date   > rangeEnd   ? rangeEnd   : s.end_date;
-        const sLeft  = (dayOffset(rangeStart, sClampStart) / totalDays * 100).toFixed(2);
-        const sWidth = ((dayOffset(rangeStart, sClampEnd) - dayOffset(rangeStart, sClampStart) + 1) / totalDays * 100).toFixed(2);
-        stageBar = `<div class="gnt-bar gnt-stage-bar"
-          data-stage-id="${s.id}" data-proj-id="${p.id}"
-          data-start="${s.start_date}" data-end="${s.end_date}"
-          style="left:${sLeft}%;width:${sWidth}%;background:${s.color || p.color ||'#4f8ef7'}"
-          title="${escHtml(s.name)}">
-          <div class="gnt-bar-hl"></div>
-          <span class="gnt-bar-label">${escHtml(s.name)}</span>
-          <div class="gnt-bar-hr"></div>
-        </div>`;
-      }
-      const noDate = !s.start_date || !s.end_date;
-      return `<div class="gnt-row gnt-stage-row" data-stage-id="${s.id}" data-proj-id="${p.id}" style="cursor:pointer" title="Klik om datums in te stellen">
-        <div class="gnt-lbl gnt-stage-lbl" style="border-left:3px solid ${s.color || p.color || '#4f8ef7'}">
-          <div class="gnt-stage-dot" style="background:${s.color || p.color || '#4f8ef7'}"></div>
-          <div class="gnt-lbl-text">
-            <span class="gnt-stage-name">${escHtml(s.name)}</span>
-            <span class="gnt-stage-hint">${noDate ? 'klik om datums in te stellen' : `${s.start_date} → ${s.end_date}`}</span>
-          </div>
-        </div>
-        <div class="gnt-timeline">${bgCells}${todayLine}${stageBar}</div>
-      </div>`;
-    }).join('') : '';
+    // Stage rows (only when expanded) — grouped by name
+    const stageRows = isExpanded ? _ganttGroupedStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd, totalDays) : '';
 
-    return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}">
+    return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}" style="border-left:4px solid ${p.color||'#4f8ef7'}">
       <div class="gnt-lbl">
         <button class="gnt-toggle${isExpanded?' expanded':''}" data-proj-id="${p.id}"
                 title="${isExpanded?'Inklappen':'Uitklappen'}">${isExpanded?'▼':'▶'}</button>
@@ -1076,10 +1242,12 @@ function renderGanttWeek() {
   });
 
   content.querySelectorAll('.gnt-stage-row').forEach(row => {
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (e) => {
       if (ganttJustDragged) return;
-      const stage = state.stages.find(s => s.id == row.dataset.stageId);
-      if (stage) openStageModal(stage, Number(row.dataset.projId));
+      const barEl = e.target.closest('.gnt-bar');
+      const stageId = barEl ? barEl.dataset.stageId : row.dataset.stageId;
+      const stage = state.stages.find(s => s.id == stageId);
+      if (stage) openStageModal(stage, Number(row.dataset.projId), _ganttDateFromClick(e, rangeStart, totalDays));
     });
   });
 
@@ -1097,6 +1265,75 @@ function renderGanttWeek() {
 }
 
 /* ─── Gantt Interactions (scroll + drag-to-move/resize) ─────────────────── */
+function _ganttGroupedStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd, totalDays) {
+  // Pre-compute task counts per stage to avoid O(n*m) filtering in the loop
+  const tasksByStage = {};
+  state.tasks.forEach(t => {
+    if (t.stage_id == null) return;
+    if (!tasksByStage[t.stage_id]) tasksByStage[t.stage_id] = { total: 0, open: 0 };
+    tasksByStage[t.stage_id].total++;
+    if (t.status !== 'done') tasksByStage[t.stage_id].open++;
+  });
+
+  // Group by name, preserving first-occurrence order
+  const groups = {}, groupOrder = [];
+  projStages.forEach(s => {
+    if (!groups[s.name]) { groups[s.name] = []; groupOrder.push(s.name); }
+    groups[s.name].push(s);
+  });
+  return groupOrder.map(name => {
+    const stages = groups[name];
+    const color = stages[0].color || p.color || '#4f8ef7';
+    const bars = stages.map(s => {
+      const hasBar = s.start_date && s.end_date && s.start_date <= rangeEnd && s.end_date >= rangeStart;
+      if (!hasBar) return '';
+      const sCs = s.start_date < rangeStart ? rangeStart : s.start_date;
+      const sCe = s.end_date   > rangeEnd   ? rangeEnd   : s.end_date;
+      const sLeft  = (_dayOffset(rangeStart, sCs) / totalDays * 100).toFixed(2);
+      const sWidth = ((_dayOffset(rangeStart, sCe) - _dayOffset(rangeStart, sCs) + 1) / totalDays * 100).toFixed(2);
+      const counts = tasksByStage[s.id] || { total: 0, open: 0 };
+      const taskCount = counts.total;
+      const openCount = counts.open;
+      const titleParts = [escHtml(s.name)];
+      if (s.notes) titleParts.push(escHtml(s.notes));
+      if (taskCount > 0) titleParts.push(`${openCount}/${taskCount} taken`);
+      const title = titleParts.join(' — ');
+      return `<div class="gnt-bar gnt-stage-bar"
+        data-stage-id="${s.id}" data-proj-id="${p.id}"
+        data-start="${s.start_date}" data-end="${s.end_date}"
+        style="left:${sLeft}%;width:${sWidth}%;background:${color}"
+        title="${title}">
+        <div class="gnt-bar-hl"></div>
+        ${taskCount > 0 ? `<span class="gnt-bar-task-count">${openCount}/${taskCount}</span>` : (s.notes ? `<span class="gnt-bar-notes-dot">●</span>` : '')}
+        <div class="gnt-bar-hr"></div>
+      </div>`;
+    }).join('');
+    const countBadge = stages.length > 1 ? ` <span class="gnt-stage-count">×${stages.length}</span>` : '';
+    return `<div class="gnt-row gnt-stage-row"
+      data-stage-id="${stages[0].id}"
+      data-proj-id="${p.id}"
+      style="cursor:pointer">
+      <div class="gnt-lbl gnt-stage-lbl" style="border-left:3px solid ${color}">
+        <div class="gnt-stage-dot" style="background:${color}"></div>
+        <div class="gnt-lbl-text">
+          <span class="gnt-stage-name">${escHtml(name)}${countBadge}</span>
+        </div>
+      </div>
+      <div class="gnt-timeline">${bgCells}${todayLine}${bars}</div>
+    </div>`;
+  }).join('');
+}
+
+function _ganttDateFromClick(e, rangeStart, totalDays) {
+  const timeline = e.target.closest('.gnt-timeline');
+  if (!timeline) return null;
+  const rect = timeline.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  const d = new Date(rangeStart + 'T00:00:00');
+  d.setDate(d.getDate() + Math.floor(pct * totalDays));
+  return toDateStr(d);
+}
+
 function _ganttAddDays(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + n);
@@ -1104,6 +1341,15 @@ function _ganttAddDays(dateStr, n) {
 }
 
 function _onGanttDragMove(e) {
+  if (ganttDraw) {
+    const { rect, startDayOffset, ghostEl, totalDays, rangeStart } = ganttDraw;
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const endDayOffset = Math.max(startDayOffset, Math.floor(pct * totalDays));
+    ganttDraw.endDate = _ganttAddDays(rangeStart, endDayOffset);
+    ghostEl.style.left  = (startDayOffset / totalDays * 100).toFixed(2) + '%';
+    ghostEl.style.width = ((endDayOffset - startDayOffset + 1) / totalDays * 100).toFixed(2) + '%';
+    return;
+  }
   if (!ganttDrag) return;
   const { type, barEl, origStart, origEnd, startX, timelineWidth, totalDays, rangeStart } = ganttDrag;
   const pxPerDay = timelineWidth / totalDays;
@@ -1134,6 +1380,29 @@ function _onGanttDragMove(e) {
 }
 
 async function _onGanttDragEnd() {
+  if (ganttDraw) {
+    const d = ganttDraw;
+    ganttDraw = null;
+    document.body.style.userSelect = '';
+    d.ghostEl.remove();
+    if (d.startDate !== d.endDate || d.endDate) {
+      ganttJustDragged = true;
+      setTimeout(() => { ganttJustDragged = false; }, 300);
+      const existing = state.stages.filter(s => s.project_id == d.projId);
+      await remoteQuery({ action: 'insert', table: 'project_stages', data: {
+        project_id: d.projId,
+        name:       d.stageName,
+        color:      d.stageColor,
+        sort_order: existing.length,
+        start_date: d.startDate,
+        end_date:   d.endDate || d.startDate,
+      }});
+      await loadStages();
+      renderGantt();
+      toast(`'${d.stageName}' toegevoegd`);
+    }
+    return;
+  }
   if (!ganttDrag) return;
   const d = ganttDrag;
   ganttDrag = null;
@@ -1162,21 +1431,62 @@ async function _onGanttDragEnd() {
 
 function wireGanttInteractions(rangeStart, totalDays) {
   const wrap = document.getElementById('gantt-wrap');
+  const content = document.getElementById('content');
+
+  // Clean up previous wheel listener before attaching a new one
+  if (ganttWheelController) ganttWheelController.abort();
+  ganttWheelController = new AbortController();
+
+  // Attach wheel to full content area so it works even when cursor is below the gantt rows
+  let wheelAccum = 0;
+  content.addEventListener('wheel', e => {
+    const isHorizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    const isShift = e.shiftKey;
+    if (!isHorizontal && !isShift) return; // let vertical scroll through naturally
+    e.preventDefault();
+    const delta = isHorizontal ? e.deltaX : e.deltaY;
+    wheelAccum += delta;
+    const threshold = state.ganttMode === 'day' ? 60 : 120;
+    if (Math.abs(wheelAccum) < threshold) return;
+    const dir = wheelAccum > 0 ? 1 : -1;
+    wheelAccum = 0;
+    const step = state.ganttMode === 'day' ? 1 : 7;
+    state.cursor.setDate(state.cursor.getDate() + dir * step);
+    renderGantt();
+  }, { passive: false, signal: ganttWheelController.signal });
+
   if (!wrap) return;
 
-  // Wheel → pan timeline by 1 week per tick
-  wrap.addEventListener('wheel', e => {
-    e.preventDefault();
-    const dir = e.deltaY > 0 ? 1 : -1;
-    state.cursor.setDate(state.cursor.getDate() + dir * 7);
-    renderGantt();
-  }, { passive: false });
-
-  // Mousedown on bar → move or resize
+  // Mousedown on bar → move or resize; on empty stage row timeline → draw new bar
   wrap.addEventListener('mousedown', e => {
-    const barEl = e.target.closest('.gnt-bar');
-    if (!barEl) return;
     if (e.target.closest('.gnt-toggle')) return;
+    const barEl = e.target.closest('.gnt-bar');
+
+    // Draw new bar: mousedown on stage row timeline but NOT on a bar
+    if (!barEl) {
+      const stageRow = e.target.closest('.gnt-stage-row');
+      const timeline  = e.target.closest('.gnt-timeline');
+      if (stageRow && timeline) {
+        e.preventDefault();
+        const rect = timeline.getBoundingClientRect();
+        const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const startDayOffset = Math.floor(pct * totalDays);
+        const startDate = _ganttAddDays(rangeStart, startDayOffset);
+        const refStage  = state.stages.find(s => s.id == stageRow.dataset.stageId);
+        const color = refStage?.color || '#4f8ef7';
+        const ghost = document.createElement('div');
+        ghost.className = 'gnt-draw-ghost';
+        ghost.style.cssText = `left:${(startDayOffset/totalDays*100).toFixed(2)}%;width:${(1/totalDays*100).toFixed(2)}%;background:${color}`;
+        timeline.appendChild(ghost);
+        ganttDraw = { rect, startDayOffset, startDate, endDate: startDate, ghostEl: ghost,
+          stageName: refStage?.name || '', stageColor: color, projId: Number(stageRow.dataset.projId),
+          rangeStart, totalDays };
+        document.body.style.userSelect = 'none';
+      }
+      return;
+    }
+
+    if (!barEl) return;
 
     e.preventDefault();
     e.stopPropagation();
@@ -1208,21 +1518,189 @@ function wireGanttInteractions(rangeStart, totalDays) {
   });
 }
 
+/* ─── Gantt Day View (30-day, day-level precision) ─────────────────────────── */
+function renderGanttDay() {
+  const N_DAYS    = 30;
+  const NAV_STEP  = 7;
+  const content   = document.getElementById('content');
+  const todayStr  = toDateStr(state.today);
+
+  // Anchor = cursor date
+  const anchor = new Date(state.cursor);
+  anchor.setHours(0, 0, 0, 0);
+
+  const days = Array.from({ length: N_DAYS }, (_, i) => {
+    const d = new Date(anchor);
+    d.setDate(anchor.getDate() + i);
+    return d;
+  });
+
+  const rangeStart = toDateStr(days[0]);
+  const rangeEnd   = toDateStr(days[N_DAYS - 1]);
+  const totalDays  = N_DAYS;
+
+  const fmt = d => `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
+  const rangeLabel = `${fmt(days[0])} – ${fmt(days[N_DAYS - 1])} ${days[N_DAYS - 1].getFullYear()}`;
+
+  ganttToolbarNav(
+    rangeLabel,
+    () => { state.cursor = new Date(anchor); state.cursor.setDate(anchor.getDate() - NAV_STEP); renderGantt(); },
+    () => { state.cursor = new Date(anchor); state.cursor.setDate(anchor.getDate() + NAV_STEP); renderGantt(); }
+  );
+
+  const NL_DAYS_SHORT = ['zo','ma','di','wo','do','vr','za'];
+
+  // Day column headers
+  const headerCells = days.map(d => {
+    const ds = toDateStr(d);
+    const isToday = ds === todayStr;
+    const dow = d.getDay();
+    const isWeekend = dow === 0 || dow === 6;
+    return `<div class="gnt-day-h${isToday?' today-h':''}${isWeekend?' weekend-h':''}">
+      <span class="gnt-dh-dow">${NL_DAYS_SHORT[dow]}</span>
+      <span class="gnt-dh-num">${d.getDate()}</span>
+    </div>`;
+  }).join('');
+
+  // Background cells
+  const bgCells = days.map(d => {
+    const ds = toDateStr(d);
+    const isToday = ds === todayStr;
+    const dow = d.getDay();
+    const isWeekend = dow === 0 || dow === 6;
+    return `<div class="gnt-day-cell${isWeekend?' weekend-cell':''}${isToday?' today-cell':''}"></div>`;
+  }).join('');
+
+  // Today line
+  const todayOffDays = _dayOffset(rangeStart, todayStr);
+  const todayLine = (todayOffDays >= 0 && todayOffDays < totalDays)
+    ? `<div class="gnt-today-line" style="left:${((todayOffDays + 0.5) / totalDays * 100).toFixed(2)}%"></div>`
+    : '';
+
+  // Visible projects (any overlap with range)
+  const visibleProjects = state.projects
+    .filter(p => (!state.ganttHideInactive || p.status === 'active') && p.start_date && p.end_date && p.start_date <= rangeEnd && p.end_date >= rangeStart);
+
+  if (visibleProjects.length === 0) {
+    content.innerHTML = `<div id="gantt-wrap"><div class="empty"><div class="empty-icon">📁</div><p>Geen projecten in dit bereik. Maak een project aan via <strong>Projecten</strong> en stel start/einddatum in.</p></div></div>`;
+    wireGanttInteractions(rangeStart, totalDays);
+    return;
+  }
+
+  const rowsHtml = visibleProjects.map(p => {
+    const clampStart = p.start_date < rangeStart ? rangeStart : p.start_date;
+    const clampEnd   = p.end_date   > rangeEnd   ? rangeEnd   : p.end_date;
+    const startOff   = _dayOffset(rangeStart, clampStart);
+    const endOff     = _dayOffset(rangeStart, clampEnd);
+    const leftPct    = (startOff / totalDays * 100).toFixed(2);
+    const widthPct   = ((endOff - startOff + 1) / totalDays * 100).toFixed(2);
+    const done       = p.status === 'done';
+    const taskCount  = state.tasks.filter(t => t.project_id == p.id).length;
+    const doneCount  = state.tasks.filter(t => t.project_id == p.id && t.status === 'done').length;
+    const pct        = taskCount ? Math.round(doneCount / taskCount * 100) : 0;
+    const isExpanded = state.expandedProjects.has(p.id);
+
+    const projStages = state.stages
+      .filter(s => s.project_id == p.id)
+      .sort((a, b) => {
+        if (!a.start_date && !b.start_date) return 0;
+        if (!a.start_date) return 1;
+        if (!b.start_date) return -1;
+        return a.start_date.localeCompare(b.start_date);
+      });
+
+    // Stage rows (only when expanded) — grouped by name
+    const stageRows = isExpanded ? _ganttGroupedStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd, totalDays) : '';
+
+    return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}" style="border-left:4px solid ${p.color||'#4f8ef7'}">
+      <div class="gnt-lbl">
+        <button class="gnt-toggle${isExpanded?' expanded':''}" data-proj-id="${p.id}"
+                title="${isExpanded?'Inklappen':'Uitklappen'}">${isExpanded?'▼':'▶'}</button>
+        <div class="gnt-lbl-text">
+          <div class="gnt-task-name${done?' done':''}">${escHtml(p.name)}</div>
+          <div class="gnt-task-who">${doneCount}/${taskCount} taken · ${pct}%</div>
+        </div>
+      </div>
+      <div class="gnt-timeline">
+        ${bgCells}${todayLine}
+        <div class="gnt-bar${done?' done':''}" data-proj-id="${p.id}"
+             data-start="${p.start_date}" data-end="${p.end_date}"
+             style="left:${leftPct}%;width:${widthPct}%;background:${p.color||'#4f8ef7'}"
+             title="${escHtml(p.name)}">
+          <div class="gnt-bar-hl"></div>
+          <span class="gnt-bar-label">${escHtml(p.name)}</span>
+          <div class="gnt-bar-hr"></div>
+        </div>
+      </div>
+    </div>${stageRows}`;
+  }).join('');
+
+  content.innerHTML = `
+    <div id="gantt-wrap">
+      <div class="gnt-head">
+        <div class="gnt-lbl-h"></div>
+        <div class="gnt-timeline-h">${headerCells}</div>
+      </div>
+      ${rowsHtml}
+    </div>`;
+
+  content.querySelectorAll('.gnt-toggle').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const projId = Number(btn.dataset.projId);
+      if (state.expandedProjects.has(projId)) state.expandedProjects.delete(projId);
+      else state.expandedProjects.add(projId);
+      renderGanttDay();
+    });
+  });
+
+  content.querySelectorAll('.gnt-stage-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (ganttJustDragged) return;
+      const barEl = e.target.closest('.gnt-bar');
+      const stageId = barEl ? barEl.dataset.stageId : row.dataset.stageId;
+      const stage = state.stages.find(s => s.id == stageId);
+      if (stage) openStageModal(stage, Number(row.dataset.projId), _ganttDateFromClick(e, rangeStart, totalDays));
+    });
+  });
+
+  content.querySelectorAll('.gnt-bar[data-proj-id]:not(.gnt-stage-bar), .gnt-proj-row').forEach(el => {
+    el.addEventListener('click', e => {
+      if (ganttJustDragged) return;
+      if (e.target.closest('.gnt-toggle')) return;
+      if (el.classList.contains('gnt-bar')) e.stopPropagation();
+      const proj = state.projects.find(p => p.id == (el.dataset.projId || el.closest('[data-proj-id]')?.dataset.projId));
+      if (proj) openProjectModal(proj);
+    });
+  });
+
+  wireGanttInteractions(rangeStart, totalDays);
+}
+
 /* ─── Projects View ────────────────────────────────────────────────────────── */
 function renderProjectsView() {
   const content = document.getElementById('content');
   const ctrl    = document.getElementById('toolbar-controls');
 
-  ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-proj-btn">+ Nieuw project</button>`;
+  ctrl.innerHTML = `
+    <button class="btn btn-primary btn-sm" id="new-proj-btn">+ Nieuw project</button>
+    <button class="btn btn-sm${state.projectsHideInactive?' btn-primary':' btn-ghost'}" id="proj-filter-btn">
+      ${state.projectsHideInactive ? 'Toon alles' : 'Alleen actief'}
+    </button>`;
   document.getElementById('new-proj-btn').onclick = () => openProjectModal(null);
+  document.getElementById('proj-filter-btn').onclick = () => { state.projectsHideInactive = !state.projectsHideInactive; renderProjectsView(); };
 
-  if (state.projects.length === 0) {
+  const visibleProjects = state.projectsHideInactive
+    ? state.projects.filter(p => p.status === 'active')
+    : state.projects;
+
+  if (visibleProjects.length === 0) {
     content.innerHTML = `<div class="empty"><div class="empty-icon">📁</div><p>Nog geen projecten. Maak een project aan om te beginnen.</p></div>`;
     return;
   }
 
   const html = `<div class="proj-grid">` +
-    state.projects.map(p => {
+    visibleProjects.map(p => {
       const taskCount = state.tasks.filter(t => t.project_id == p.id).length;
       const doneCount = state.tasks.filter(t => t.project_id == p.id && t.status === 'done').length;
       const pct = taskCount ? Math.round(doneCount / taskCount * 100) : 0;
@@ -1328,11 +1806,13 @@ function renderProjectDetail(proj) {
 
   // Stages section
   const projStages = state.stages.filter(s => s.project_id == proj.id);
-  const existingNames = new Set(projStages.map(s => s.name));
+  const nameCounts = {};
+  projStages.forEach(s => { nameCounts[s.name] = (nameCounts[s.name] || 0) + 1; });
   const presetBtns = DEFAULT_STAGES.map(ds => {
-    const used = existingNames.has(ds.name);
-    return `<button class="phase-preset-btn${used?' used':''}" data-name="${escHtml(ds.name)}" data-color="${ds.color}"
-      style="border-left-color:${ds.color}" ${used?'disabled':''}>${escHtml(ds.name)}</button>`;
+    const count = nameCounts[ds.name] || 0;
+    const badge = count > 0 ? ` <span class="phase-preset-count">×${count}</span>` : '';
+    return `<button class="phase-preset-btn${count>0?' used':''}" data-name="${escHtml(ds.name)}" data-color="${ds.color}"
+      style="border-left-color:${ds.color}">${escHtml(ds.name)}${badge}</button>`;
   }).join('');
   html += `<div class="proj-stages-section">
     <div class="proj-stages-header">
@@ -1345,15 +1825,21 @@ function renderProjectDetail(proj) {
   if (projStages.length === 0) {
     html += `<div class="proj-stages-empty">Nog geen fases. Klik een fase hierboven om toe te voegen.</div>`;
   } else {
+    const instanceIndex = {};
     html += projStages.map(s => {
       const c = s.color || proj.color || '#4f8ef7';
+      instanceIndex[s.name] = (instanceIndex[s.name] || 0) + 1;
+      const label = nameCounts[s.name] > 1
+        ? `${escHtml(s.name)} <span class="proj-stage-index">#${instanceIndex[s.name]}</span>`
+        : escHtml(s.name);
       return `<div class="proj-stage-row" data-stage-id="${s.id}" style="border-left:3px solid ${c};cursor:pointer">
         <div class="proj-stage-color" style="background:${c}"></div>
         <div class="proj-stage-info">
-          <div class="proj-stage-name">${escHtml(s.name)}</div>
+          <div class="proj-stage-name">${label}</div>
           <div class="proj-stage-dates">${(s.start_date && s.end_date) ? `${s.start_date} → ${s.end_date}` : '<span style="opacity:.5">Nog geen datums — klik om in te stellen</span>'}</div>
         </div>
         <button class="btn btn-sm btn-ghost dup-stage-btn" data-stage-id="${s.id}" title="Dupliceer fase">⊕</button>
+        <button class="btn btn-sm btn-ghost del-stage-btn" data-stage-id="${s.id}" title="Verwijder fase">🗑</button>
       </div>`;
     }).join('');
   }
@@ -1379,7 +1865,7 @@ function renderProjectDetail(proj) {
   });
 
   document.getElementById('add-stage-btn').onclick = () => openStageModal(null, proj.id);
-  content.querySelectorAll('.phase-preset-btn:not(.phase-preset-custom):not(.used)').forEach(btn => {
+  content.querySelectorAll('.phase-preset-btn:not(.phase-preset-custom)').forEach(btn => {
     btn.onclick = async () => {
       const existing = state.stages.filter(s => s.project_id == proj.id);
       await remoteQuery({ action: 'insert', table: 'project_stages', data: {
@@ -1397,9 +1883,21 @@ function renderProjectDetail(proj) {
   });
   content.querySelectorAll('.proj-stage-row').forEach(row => {
     row.onclick = e => {
-      if (e.target.closest('.dup-stage-btn')) return; // handled below
+      if (e.target.closest('.dup-stage-btn')) return;
+      if (e.target.closest('.del-stage-btn')) return;
       const stage = state.stages.find(s => s.id == row.dataset.stageId);
       if (stage) openStageModal(stage, proj.id);
+    };
+  });
+
+  content.querySelectorAll('.del-stage-btn').forEach(btn => {
+    btn.onclick = async e => {
+      e.stopPropagation();
+      if (!confirm('Fase verwijderen?')) return;
+      await remoteQuery({ action: 'delete', table: 'project_stages', where: { id: Number(btn.dataset.stageId) } });
+      await loadStages();
+      renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
+      toast('Fase verwijderd');
     };
   });
 
@@ -1527,17 +2025,63 @@ function fmtProjStatus(s) {
 
 /* ─── Stage Modal ─────────────────────────────────────────────────────────── */
 
-function openStageModal(stage, projectId) {
+function openStageModal(stage, projectId, suggestedDate = null) {
   state.editingStage = stage ? { ...stage } : { _projectId: projectId };
   const isEdit = !!stage;
   document.getElementById('stage-modal-title').textContent = isEdit ? 'Fase bewerken' : 'Nieuwe fase';
   document.getElementById('stage-name').value  = stage?.name       || '';
-  document.getElementById('stage-start').value = stage?.start_date || '';
-  document.getElementById('stage-end').value   = stage?.end_date   || '';
+  document.getElementById('stage-start').value = stage?.start_date || suggestedDate || '';
+  document.getElementById('stage-end').value   = stage?.end_date   || suggestedDate || '';
+  document.getElementById('stage-notes').value = stage?.notes      || '';
   document.getElementById('stage-delete').classList.toggle('hidden', !isEdit);
   buildStageColorSwatches(stage?.color || COLORS[0]);
+  // Stage tasks section (only for saved stages)
+  const tasksSection = document.getElementById('stage-tasks-section');
+  tasksSection.classList.toggle('hidden', !isEdit);
+  if (isEdit) {
+    remoteQuery({ action: 'select', table: 'team_members' }).then(members => {
+      const sel = document.getElementById('stage-task-assignee');
+      sel.innerHTML = `<option value="">— Niemand —</option>` +
+        members.map(m => `<option value="${escHtml(m.name)}">${escHtml(m.name)}</option>`).join('');
+    });
+    renderStageTasks(stage.id);
+  }
   document.getElementById('stage-modal').classList.remove('hidden');
   document.getElementById('stage-name').focus();
+}
+
+function renderStageTasks(stageId) {
+  const list = document.getElementById('stage-task-list');
+  if (!list) return;
+  const tasks = stageId ? state.tasks.filter(t => t.stage_id == stageId) : [];
+  if (tasks.length === 0) {
+    list.innerHTML = `<p class="stage-task-empty">Geen taken — voeg er een toe hieronder.</p>`;
+    return;
+  }
+  list.innerHTML = tasks.map(t => `
+    <div class="stage-task-item" data-id="${t.id}">
+      <input type="checkbox" class="stage-task-check" ${t.status === 'done' ? 'checked' : ''} />
+      <span class="stage-task-title ${t.status === 'done' ? 'done' : ''}">${escHtml(t.title)}</span>
+      ${t.assigned_to ? `<span class="stage-task-assignee">${escHtml(t.assigned_to)}</span>` : ''}
+      <button class="stage-task-delete" data-id="${t.id}">×</button>
+    </div>
+  `).join('');
+  list.querySelectorAll('.stage-task-check').forEach(cb => {
+    cb.onchange = async () => {
+      const id = Number(cb.closest('.stage-task-item').dataset.id);
+      await remoteQuery({ action: 'update', table: 'tasks', data: { status: cb.checked ? 'done' : 'pending' }, where: { id } });
+      await loadTasks();
+      renderStageTasks(stageId);
+    };
+  });
+  list.querySelectorAll('.stage-task-delete').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Taak verwijderen?')) return;
+      await remoteQuery({ action: 'delete', table: 'tasks', where: { id: Number(btn.dataset.id) } });
+      await loadTasks();
+      renderStageTasks(stageId);
+    };
+  });
 }
 
 function closeStageModal() {
@@ -1564,6 +2108,31 @@ function wireStageModal() {
     if (e.target === document.getElementById('stage-modal')) closeStageModal();
   });
 
+  document.getElementById('stage-task-add-btn').onclick = async () => {
+    const titleEl = document.getElementById('stage-task-title');
+    const title = titleEl.value.trim();
+    if (!title) { shake(titleEl); return; }
+    const assignedTo = document.getElementById('stage-task-assignee').value;
+    const stage = state.editingStage;
+    if (!stage?.id) return;
+    await remoteQuery({ action: 'insert', table: 'tasks', data: {
+      title,
+      assigned_to: assignedTo,
+      project_id: stage.project_id || null,
+      stage_id: stage.id,
+      status: 'pending',
+      priority: 'medium',
+      created_by: state.config?.name || '',
+    }});
+    titleEl.value = '';
+    await loadTasks();
+    renderStageTasks(stage.id);
+  };
+
+  document.getElementById('stage-task-title').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('stage-task-add-btn').click();
+  });
+
   document.getElementById('stage-start').addEventListener('input', () => {
     const end = document.getElementById('stage-end');
     if (!end.value) end.value = document.getElementById('stage-start').value;
@@ -1582,6 +2151,7 @@ function wireStageModal() {
       start_date: document.getElementById('stage-start').value || '',
       end_date:   document.getElementById('stage-end').value   || '',
       color:      selectedSwatch?.dataset.color || COLORS[0],
+      notes:      document.getElementById('stage-notes').value.trim(),
     };
     if (state.editingStage?.id) {
       await remoteQuery({ action: 'update', table: 'project_stages', data, where: { id: state.editingStage.id } });
@@ -1932,7 +2502,6 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
 
   document.getElementById('task-modal').classList.remove('hidden');
   document.getElementById('task-title').focus();
-  maybeShowCalDavCheckbox(task);
 }
 
 function closeTaskModal() {
@@ -1955,9 +2524,6 @@ function wireTaskModal() {
     document.getElementById('task-time-group').classList.toggle('hidden', e.target.checked);
     if (e.target.checked) document.getElementById('task-time').value = '';
   });
-  // Show/hide calendar checkbox when date changes
-  document.getElementById('task-date').addEventListener('change', () => maybeShowCalDavCheckbox(state.editingTask));
-
   document.getElementById('task-save').onclick = async () => {
     const title = document.getElementById('task-title').value.trim();
     if (!title) { shake(document.getElementById('task-title')); return; }
@@ -1989,13 +2555,7 @@ function wireTaskModal() {
       });
     }
     await saveTask(taskData);
-    // Reload to get the persisted ID (needed for CalDAV push)
     await loadTasks();
-    // Find saved task (by title + date — good enough after just saving)
-    const saved = state.tasks.find(t =>
-      t.title === taskData.title && t.date === taskData.date &&
-      (taskData.id ? t.id === taskData.id : true)
-    );
     closeTaskModal();
     if (state.activeProject) {
       renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
@@ -2003,7 +2563,6 @@ function wireTaskModal() {
       renderView();
     }
     toast('Task saved');
-    if (saved) await maybePushTaskToCalDav(saved);
   };
 
   document.getElementById('task-delete').onclick = async () => {
@@ -2018,13 +2577,6 @@ function wireTaskModal() {
         await loadTasks(); renderView();
       });
       await remoteQuery({ action: 'delete', table: 'tasks', where: { id: task.id } });
-
-      // If this task was pushed to the calendar, delete it there too
-      if (task.caldav_uid) {
-        const result = await api.caldavDeleteTask(task.caldav_uid);
-        if (!result.ok) console.warn('CalDAV delete failed:', result.error);
-      }
-
       await loadTasks();
       closeTaskModal();
       if (state.activeProject) {
@@ -2108,6 +2660,9 @@ function wireSettings() {
     document.getElementById('cfg-api-url').value = cfg.apiUrl || 'http://raspberrypi.local:5000';
     const mode = cfg.mode || 'file';
     document.querySelector(`input[name=mode][value=${mode}]`).checked = true;
+    const theme = cfg.theme || 'light';
+    document.querySelector(`input[name=theme][value=${theme}]`).checked = true;
+    updateThemeCards(theme);
     tempFilePath = cfg.filePath || null;
     updateCfgPathDisplay(tempFilePath);
     toggleModeFields(mode);
@@ -2133,13 +2688,22 @@ function wireSettings() {
     });
   });
 
+  document.querySelectorAll('input[name=theme]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      applyTheme(radio.value);
+      updateThemeCards(radio.value);
+    });
+  });
+
   document.getElementById('settings-save').onclick = async () => {
     const mode = document.querySelector('input[name=mode]:checked').value;
+    const theme = document.querySelector('input[name=theme]:checked')?.value || 'light';
     const newConfig = {
       name: document.getElementById('cfg-name').value.trim() || state.config?.name || '',
       mode,
       filePath: tempFilePath || state.config?.filePath || '',
       apiUrl: document.getElementById('cfg-api-url').value.trim(),
+      theme,
     };
     await api.configSet(newConfig);
     state.config = newConfig;
@@ -2168,6 +2732,11 @@ function wireSettings() {
   function updateRadioCards(mode) {
     document.getElementById('radio-file').classList.toggle('selected', mode === 'file');
     document.getElementById('radio-api').classList.toggle('selected', mode === 'api');
+  }
+
+  function updateThemeCards(theme) {
+    document.getElementById('radio-light').classList.toggle('selected', theme === 'light');
+    document.getElementById('radio-dark').classList.toggle('selected', theme === 'dark');
   }
 }
 
@@ -2235,7 +2804,8 @@ function wireNav() {
   document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.cursor = new Date(state.today);
-      setView(btn.dataset.view);
+      const view = btn.dataset.view === 'calendar' ? 'monthly' : btn.dataset.view;
+      setView(view);
     });
   });
 
@@ -2266,6 +2836,14 @@ function buildColorSwatches() {
 
 /* ─── Helpers ──────────────────────────────────────────────────────────────── */
 // Returns the display color for a task: project color if assigned, else own color
+function contrastColor(hex) {
+  if (!hex || hex[0] !== '#' || hex.length < 7) return '#fff';
+  const r = parseInt(hex.slice(1,3), 16);
+  const g = parseInt(hex.slice(3,5), 16);
+  const b = parseInt(hex.slice(5,7), 16);
+  return (0.299*r + 0.587*g + 0.114*b) / 255 > 0.55 ? '#1a1a1a' : '#fff';
+}
+
 function taskColor(task) {
   if (task.project_id) {
     const proj = state.projects.find(p => p.id == task.project_id);
@@ -2959,79 +3537,48 @@ function updateSyncPill(text, type) {
   pill.classList.remove('hidden');
 }
 
-function initCalDavListeners() {
-  api.onCalDavSynced(async ({ time, imported }) => {
-    const t = new Date(time).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
-    updateSyncPill(`☁ ${t}`, 'ok');
-    if (imported > 0) {
-      await loadAll();
-      renderView();
-      toast(`${imported} agenda-item${imported !== 1 ? 's' : ''} gesynchroniseerd`);
-    }
-  });
-  api.onCalDavError((msg) => {
-    updateSyncPill('☁ sync fout', 'error');
-  });
-
+function initListeners() {
   api.onDbChanged(async () => {
     await loadAll();
     renderView();
   });
 
   api.onUpdateAvailable(({ latest, url }) => {
+    const XATTR_CMD = 'xattr -cr /Applications/Project\\ Manager.app';
     const banner = document.createElement('div');
     banner.id = 'update-banner';
     banner.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:4px">
         <span>Nieuwe versie <strong>v${latest}</strong> beschikbaar</span>
-        <span style="font-size:11px;color:var(--text2)">Na installatie: rechtsklik op de app → <strong>Open</strong>, of voer uit in Terminal:<br><code style="user-select:all;background:var(--bg3);padding:1px 5px;border-radius:3px">xattr -cr /Applications/Project\\ Manager.app</code></span>
       </div>
       <button class="btn btn-primary" style="padding:4px 12px;font-size:12px;flex-shrink:0" id="update-download-btn">Download</button>
       <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;flex-shrink:0" id="update-dismiss-btn">✕</button>
     `;
     document.body.appendChild(banner);
-    document.getElementById('update-download-btn').onclick = () => api.openUrl(url);
+
+    document.getElementById('update-download-btn').onclick = () => {
+      // Open download
+      api.openUrl(url);
+      // Copy xattr command to clipboard
+      navigator.clipboard.writeText(XATTR_CMD).catch(() => {});
+      // Replace banner with how-to guide
+      banner.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:6px;flex:1">
+          <span style="font-weight:600">📥 Installatie-instructies v${latest}</span>
+          <ol style="margin:0;padding-left:18px;font-size:12px;color:var(--text);line-height:1.7">
+            <li>Open het gedownloade <strong>.dmg</strong> bestand</li>
+            <li>Sleep <strong>Project Manager</strong> naar je <strong>Applications</strong> map</li>
+            <li>Open <strong>Terminal</strong> en plak de gekopieerde opdracht: <code style="background:var(--bg3);padding:1px 6px;border-radius:3px;user-select:all">${XATTR_CMD}</code></li>
+            <li>Druk op <strong>Enter</strong>, open daarna de app</li>
+          </ol>
+          <span style="font-size:11px;color:var(--green)">✓ Opdracht gekopieerd naar klembord</span>
+        </div>
+        <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;flex-shrink:0;align-self:flex-start" id="update-dismiss-btn">✕</button>
+      `;
+      document.getElementById('update-dismiss-btn').onclick = () => banner.remove();
+    };
     document.getElementById('update-dismiss-btn').onclick = () => banner.remove();
   });
-}
-
-// ── Task modal — calendar push checkbox ────────────────────────────────────────
-
-async function maybeShowCalDavCheckbox(task) {
-  const group = document.getElementById('task-caldav-group');
-  const cb    = document.getElementById('task-caldav-push');
-  if (!group || !cb) return;
-
-  const cfg = await api.caldavGetConfig();
-  const dateVal = document.getElementById('task-date').value;
-
-  if ((cfg.enabled || cfg.hasPassword) && dateVal) {
-    group.classList.remove('hidden');
-    cb.checked = false;
-  } else {
-    group.classList.add('hidden');
-    cb.checked = false;
-  }
-}
-
-// ── Push task to CalDAV after save ────────────────────────────────────────────
-
-async function maybePushTaskToCalDav(savedTask) {
-  const cb = document.getElementById('task-caldav-push');
-  if (!cb?.checked) return;
-
-  updateSyncPill('☁ pushen…', 'syncing');
-  const result = await api.caldavPushTask(savedTask);
-  if (result.ok) {
-    updateSyncPill('☁ gepusht ✓', 'ok');
-    setTimeout(() => {
-      const pill = document.getElementById('sync-status-pill');
-      if (pill) pill.classList.add('hidden');
-    }, 4000);
-  } else {
-    updateSyncPill('☁ push fout', 'error');
-    toast(`Kalender push mislukt: ${result.error}`);
-  }
 }
 
 /* ─── Boot ─────────────────────────────────────────────────────────────────── */

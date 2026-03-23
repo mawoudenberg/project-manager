@@ -131,12 +131,6 @@
       <label>Color</label>
       <div class="color-swatches" id="task-color-swatches"></div>
     </div>
-    <div class="form-group hidden" id="task-caldav-group">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
-        <input type="checkbox" id="task-caldav-push" style="accent-color:var(--accent);flex-shrink:0;width:14px;height:14px">
-        📅 Ook toevoegen aan kalender
-      </label>
-    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="task-cancel">Cancel</button>
       <button class="btn btn-danger hidden" id="task-delete">Delete</button>
@@ -196,6 +190,25 @@
       <div class="form-group">
         <label>Your name</label>
         <input type="text" id="cfg-name" placeholder="Name" />
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>Theme</h3>
+      <div class="radio-group">
+        <label class="radio-card" id="radio-light">
+          <input type="radio" name="theme" value="light" />
+          <div>
+            <div style="font-weight:600">☀️ Light</div>
+            <div style="font-size:11px;color:var(--text2)">Warm cream palette</div>
+          </div>
+        </label>
+        <label class="radio-card" id="radio-dark">
+          <input type="radio" name="theme" value="dark" />
+          <div>
+            <div style="font-weight:600">🌙 Dark</div>
+            <div style="font-size:11px;color:var(--text2)">Dark charcoal palette</div>
+          </div>
+        </label>
       </div>
     </div>
     <div class="settings-section">
@@ -304,6 +317,21 @@
       <label>Kleur</label>
       <div class="color-swatches" id="stage-color-swatches"></div>
     </div>
+    <div class="form-group">
+      <label>Notities</label>
+      <textarea id="stage-notes" rows="3" placeholder="Opmerkingen voor deze fase…" style="width:100%;resize:vertical"></textarea>
+    </div>
+    <div class="form-group hidden" id="stage-tasks-section">
+      <label>Taken in deze fase</label>
+      <div id="stage-task-list" class="stage-task-list"></div>
+      <div class="stage-task-add-row">
+        <input type="text" id="stage-task-title" placeholder="Nieuwe taak…" autocomplete="off" />
+        <select id="stage-task-assignee">
+          <option value="">— Niemand —</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" id="stage-task-add-btn">+</button>
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="stage-cancel">Annuleer</button>
       <button class="btn btn-danger hidden" id="stage-delete">Verwijder</button>
@@ -321,17 +349,8 @@
       <div id="sidebar-user"></div>
     </div>
     <div id="nav">
-      <button class="nav-btn" data-view="daily">
-        <span class="icon">☀️</span><span>Daily</span>
-      </button>
-      <button class="nav-btn" data-view="weekly">
-        <span class="icon">🗓️</span><span>Weekly</span>
-      </button>
-      <button class="nav-btn active" data-view="monthly">
-        <span class="icon">📅</span><span>Monthly</span>
-      </button>
-      <button class="nav-btn" data-view="yearly">
-        <span class="icon">🗓</span><span>Yearly</span>
+      <button class="nav-btn active" data-view="calendar">
+        <span class="icon">📅</span><span>Kalender</span>
       </button>
       <button class="nav-btn" data-view="mytasks">
         <span class="icon">👤</span><span>Mijn Taken</span>
