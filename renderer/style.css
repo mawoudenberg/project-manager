@@ -145,6 +145,15 @@ a { color: var(--accent); text-decoration: none; }
   flex-shrink: 0;
 }
 #toolbar h2 { font-size: 16px; font-weight: 600; flex: 1; }
+#toolbar h2.cal-title {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  line-height: 1.2;
+}
+.cal-period-label { font-size: 20px; font-weight: 700; color: var(--text); line-height: 1.1; }
+.cal-period-year  { font-size: 12px; font-weight: 400; color: var(--text2); }
 #content { flex: 1; overflow: auto; padding: 20px; }
 
 /* ─── Buttons ──────────────────────────────────────────────────────────────── */

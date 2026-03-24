@@ -246,8 +246,10 @@ function setView(view) {
     const isActive = b.dataset.view === view || (b.dataset.view === 'calendar' && CAL_VIEWS.has(view));
     b.classList.toggle('active', isActive);
   });
-  const titles = { monthly:'Kalender', weekly:'Kalender', daily:'Kalender', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
-  document.getElementById('toolbar-title').textContent = titles[view] || '';
+  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
+  const titleEl = document.getElementById('toolbar-title');
+  titleEl.className = '';
+  titleEl.textContent = titles[view] ?? '';
   if (view !== 'monthly') document.getElementById('content').className = '';
   if (!CAL_VIEWS.has(view)) document.getElementById('cal-filter-bar')?.remove();
   renderView();
@@ -291,7 +293,7 @@ function renderCalFilterBar() {
   });
 }
 function wireCalViewToggle() {
-  document.getElementById('cvt-day')?.addEventListener('click',   () => setView('daily'));
+  document.getElementById('cvt-day')?.addEventListener('click',   () => { state.cursor = new Date(state.today); setView('daily'); });
   document.getElementById('cvt-week')?.addEventListener('click',  () => setView('weekly'));
   document.getElementById('cvt-month')?.addEventListener('click', () => setView('monthly'));
 }
@@ -446,10 +448,14 @@ function renderMonthly() {
   const cy = state.cursor.getFullYear(), cm = state.cursor.getMonth();
   const todayStr = toDateStr(state.today);
 
+  const titleEl = document.getElementById('toolbar-title');
+  titleEl.className = 'cal-title';
+  titleEl.innerHTML = `<span class="cal-period-label">${MONTHS[cm]}</span><span class="cal-period-year">${cy}</span>`;
+
   ctrl.innerHTML = `
     <div class="cal-nav">
       <button class="btn-icon" id="cal-prev">‹</button>
-      <span id="cal-month-label">${MONTHS[cm]} ${cy}</span>
+      <span id="cal-month-label" style="display:none"></span>
       <button class="btn-icon" id="cal-next">›</button>
       ${calViewToggleHTML('monthly')}
       <button class="btn btn-primary btn-sm" id="cal-add">+ Add Task</button>
@@ -478,8 +484,8 @@ function renderMonthly() {
       if (e.isIntersecting) {
         const y = parseInt(e.target.dataset.year), m = parseInt(e.target.dataset.month);
         state.cursor = new Date(y, m, 1);
-        const label = document.getElementById('cal-month-label');
-        if (label) label.textContent = `${MONTHS[m]} ${y}`;
+        const titleEl = document.getElementById('toolbar-title');
+        if (titleEl) titleEl.innerHTML = `<span class="cal-period-label">${MONTHS[m]}</span><span class="cal-period-year">${y}</span>`;
       }
     });
   }, { threshold: 0.5, root: scroll });
@@ -852,10 +858,13 @@ function renderWeekly() {
   const endFmt   = `${weekDates[6].getDate()} ${MONTHS[weekDates[6].getMonth()].slice(0,3)}`;
   const weekLabel = `Week ${wkNum} · ${startFmt} – ${endFmt} ${weekDates[6].getFullYear()}`;
 
+  const wkTitleEl = document.getElementById('toolbar-title');
+  wkTitleEl.className = 'cal-title';
+  wkTitleEl.innerHTML = `<span class="cal-period-label">Week ${wkNum}</span><span class="cal-period-year">${startFmt} – ${endFmt}</span>`;
+
   ctrl.innerHTML = `
     <div class="cal-nav">
       <button class="btn-icon" id="wk-prev">‹</button>
-      <span>${weekLabel}</span>
       <button class="btn-icon" id="wk-next">›</button>
       ${calViewToggleHTML('weekly')}
     </div>`;
@@ -970,10 +979,15 @@ function renderDaily() {
   const dateStr = toDateStr(state.cursor);
 
   const dailyHoliday = getDutchHolidays(state.cursor.getFullYear())[dateStr];
+  const dayName = state.cursor.toLocaleDateString('nl-NL', { weekday: 'long' });
+  const dayDate = state.cursor.toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' });
+  const dayTitleEl = document.getElementById('toolbar-title');
+  dayTitleEl.className = 'cal-title';
+  dayTitleEl.innerHTML = `<span class="cal-period-label">${dayName.charAt(0).toUpperCase() + dayName.slice(1)}</span><span class="cal-period-year">${dayDate}${dailyHoliday ? ` · ${escHtml(dailyHoliday)}` : ''}</span>`;
+
   ctrl.innerHTML = `
     <div class="cal-nav">
       <button class="btn-icon" id="day-prev">‹</button>
-      <span>${formatDateLong(state.cursor)}${dailyHoliday ? ` · <span class="daily-holiday-badge">${escHtml(dailyHoliday)}</span>` : ''}</span>
       <button class="btn-icon" id="day-next">›</button>
       ${calViewToggleHTML('daily')}
       <button class="btn btn-primary btn-sm" id="day-add">+ Add Task</button>
