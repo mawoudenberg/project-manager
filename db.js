@@ -18,7 +18,15 @@ function openDatabase(filePath) {
   }
 
   db = new Database(filePath);
-  db.pragma('journal_mode = WAL');
+  // WAL mode is preferred (faster, safer for synced folders on macOS/Linux).
+  // On Windows, WAL requires shared-memory files that Google Drive may lock —
+  // fall back to DELETE mode if WAL cannot be set.
+  try {
+    const mode = db.pragma('journal_mode = WAL', { simple: true });
+    if (mode !== 'wal') db.pragma('journal_mode = DELETE');
+  } catch (_) {
+    db.pragma('journal_mode = DELETE');
+  }
   db.pragma('foreign_keys = ON');
   createSchema();
   migrateSchema();

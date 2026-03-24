@@ -2380,7 +2380,12 @@ function renderTodo() {
 /* ─── Todo Operations ──────────────────────────────────────────────────────── */
 async function addTodoItem(listId, text) {
   const data = { list_id: listId, text, created_by: state.config.name || '' };
-  await remoteQuery({ action: 'insert', table: 'todo_items', data });
+  try {
+    await remoteQuery({ action: 'insert', table: 'todo_items', data });
+  } catch (err) {
+    toast(`Fout bij opslaan: ${err.message || err}`, 'error');
+    return;
+  }
   await loadTodoLists();
   renderTodo();
 }
@@ -2917,11 +2922,13 @@ function escHtml(str) {
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-function toast(msg, ms = 2000) {
+function toast(msg, type = 'info', ms = 2000) {
   const el = document.getElementById('toast');
   el.textContent = msg;
+  el.classList.remove('toast-error');
+  if (type === 'error') { el.classList.add('toast-error'); ms = 4000; }
   el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), ms);
+  setTimeout(() => { el.classList.remove('show', 'toast-error'); }, ms);
 }
 
 function shake(el) {

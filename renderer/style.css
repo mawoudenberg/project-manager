@@ -713,6 +713,7 @@ a { color: var(--accent); text-decoration: none; }
   opacity: 0; transition: opacity .3s; pointer-events: none;
 }
 #toast.show { opacity: 1; }
+#toast.toast-error { background: var(--red); color: #fff; border-color: var(--red); }
 
 /* ─── CalDAV sync status pill ──────────────────────────────────────────────── */
 #sync-status-pill {
