@@ -15,6 +15,7 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALLOWED_TABLES = {
     'tasks', 'todo_lists', 'todo_items', 'team_members',
     'projects', 'project_stages', 'quotes', 'quote_items',
+    'presets',
 }
 
 # ── Static file serving ─────────────────────────────────────────────────────────
@@ -133,6 +134,13 @@ def init_db():
                 quantity    REAL DEFAULT 1, unit TEXT DEFAULT '',
                 unit_price  REAL DEFAULT 0, sort_order INTEGER DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS presets (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                category    TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                price       REAL DEFAULT 0,
+                sort_order  INTEGER DEFAULT 0
+            );
         """)
     # Migrate: add sort_order to todo_lists if missing
     cols = [r[1] for r in db.execute("PRAGMA table_info(todo_lists)").fetchall()]
@@ -153,6 +161,7 @@ def order_for(table):
         'project_stages': 'ORDER BY sort_order ASC, id ASC',
         'quotes':         'ORDER BY created_at DESC',
         'quote_items':    'ORDER BY sort_order ASC, id ASC',
+        'presets':        'ORDER BY sort_order ASC, id ASC',
     }.get(table, '')
 
 
@@ -207,6 +216,36 @@ def handle_query():
             else:
                 return jsonify({'error': f'Unknown action: {action}'}), 400
 
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
+@app.route('/api/presets', methods=['GET'])
+def get_presets():
+    try:
+        with get_db() as db:
+            rows = db.execute("SELECT * FROM presets ORDER BY sort_order ASC, id ASC").fetchall()
+            return jsonify([dict(r) for r in rows])
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
+@app.route('/api/presets', methods=['PUT'])
+def save_presets():
+    """Bulk-replace all presets. Body: { items: [ {category, name, price, sort_order}, ... ] }"""
+    try:
+        body = request.get_json(force=True)
+        items = body.get('items', [])
+        with get_db() as db:
+            db.execute("DELETE FROM presets")
+            for item in items:
+                db.execute(
+                    "INSERT INTO presets (category, name, price, sort_order) VALUES (?, ?, ?, ?)",
+                    (item.get('category',''), item.get('name',''), item.get('price', 0), item.get('sort_order', 0))
+                )
+        return jsonify({'ok': True, 'count': len(items)})
     except Exception as e:
         import traceback
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500

@@ -94,7 +94,6 @@ function applyTheme(theme) {
 }
 
 async function init() {
-  loadPresets();
   buildColorSwatches();
   wireWizard();
   wireTaskModal();
@@ -133,6 +132,7 @@ async function init() {
   } else {
     state.config = config;
     applyTheme(config.theme);
+    await loadPresets();
     showApp();
     await loadAll();
     renderView();
@@ -3257,7 +3257,24 @@ let PRESET_MATERIALS = [];
 let PRESET_SERVICES  = [];
 let PRESET_EXCLUSIONS = [];
 
-function loadPresets() {
+async function loadPresets() {
+  try {
+    if (state.config?.mode === 'api' && state.config?.apiUrl) {
+      const r = await api.apiFetch({ method: 'GET', url: `${state.config.apiUrl}/api/presets` });
+      if (r.status < 400 && Array.isArray(r.data) && r.data.length > 0) {
+        PRESET_MATERIALS  = r.data.filter(p => p.category === 'mat').map(p => ({ name: p.name, price: p.price }));
+        PRESET_SERVICES   = r.data.filter(p => p.category === 'svc').map(p => ({ name: p.name, rate: p.price }));
+        PRESET_EXCLUSIONS = r.data.filter(p => p.category === 'excl').map(p => p.name);
+        // Cache locally as fallback
+        localStorage.setItem('presets_mat', JSON.stringify(PRESET_MATERIALS));
+        localStorage.setItem('presets_svc', JSON.stringify(PRESET_SERVICES));
+        localStorage.setItem('presets_excl', JSON.stringify(PRESET_EXCLUSIONS));
+        return;
+      }
+    }
+  } catch (_) { /* fall through to localStorage */ }
+
+  // Fallback: localStorage or defaults
   try {
     const mat = localStorage.getItem('presets_mat');
     const svc = localStorage.getItem('presets_svc');
@@ -3272,10 +3289,25 @@ function loadPresets() {
   }
 }
 
-function savePresets() {
+async function savePresets() {
+  // Save locally as cache
   localStorage.setItem('presets_mat', JSON.stringify(PRESET_MATERIALS));
   localStorage.setItem('presets_svc', JSON.stringify(PRESET_SERVICES));
   localStorage.setItem('presets_excl', JSON.stringify(PRESET_EXCLUSIONS));
+
+  // Sync to Pi
+  if (state.config?.mode === 'api' && state.config?.apiUrl) {
+    const items = [
+      ...PRESET_MATERIALS.map((p, i) => ({ category: 'mat', name: p.name, price: p.price || 0, sort_order: i })),
+      ...PRESET_SERVICES.map((p, i)  => ({ category: 'svc', name: p.name, price: p.rate || 0, sort_order: i })),
+      ...PRESET_EXCLUSIONS.map((ex, i) => ({ category: 'excl', name: ex, price: 0, sort_order: i })),
+    ];
+    try {
+      await api.apiFetch({ method: 'PUT', url: `${state.config.apiUrl}/api/presets`, body: { items } });
+    } catch (err) {
+      console.warn('Failed to sync presets to Pi:', err);
+    }
+  }
 }
 
 // ─── Quote State ──────────────────────────────────────────────────────────────
