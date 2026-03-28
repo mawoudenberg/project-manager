@@ -98,6 +98,8 @@ app.on('window-all-closed', () => {
 
 // ─── IPC Handlers ─────────────────────────────────────────────────────────────
 
+ipcMain.handle('app:quit', () => { app.quit(); });
+
 ipcMain.handle('config:get', () => loadConfig());
 
 ipcMain.handle('config:set', (_e, config) => {

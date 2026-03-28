@@ -30,4 +30,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // DB sync (Google Drive changed the file)
   onDbChanged: (cb) => ipcRenderer.on('db:changed', () => cb()),
+
+  // Quit app (for update flow)
+  quitApp: () => ipcRenderer.invoke('app:quit'),
 });

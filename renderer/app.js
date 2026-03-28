@@ -4551,15 +4551,22 @@ function initListeners() {
         <div style="display:flex;flex-direction:column;gap:6px;flex:1">
           <span style="font-weight:600">📥 Installatie-instructies v${latest}</span>
           <ol style="margin:0;padding-left:18px;font-size:12px;color:var(--text);line-height:1.7">
+            <li>Wacht tot de download klaar is</li>
             <li>Open het gedownloade <strong>.dmg</strong> bestand</li>
             <li>Sleep <strong>Project Manager</strong> naar je <strong>Applications</strong> map</li>
             <li>Open <strong>Terminal</strong> en plak de gekopieerde opdracht: <code style="background:var(--bg3);padding:1px 6px;border-radius:3px;user-select:all">${XATTR_CMD}</code></li>
             <li>Druk op <strong>Enter</strong>, open daarna de app</li>
           </ol>
           <span style="font-size:11px;color:var(--green)">✓ Opdracht staat al op je klembord</span>
+          <div style="margin-top:6px;display:flex;gap:8px">
+            <button class="btn btn-primary" style="padding:5px 14px;font-size:12px" id="update-quit-btn">Afsluiten & installeren</button>
+            <button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" id="update-dismiss-btn">Later</button>
+          </div>
         </div>
-        <button class="btn btn-ghost" style="padding:4px 8px;font-size:12px;flex-shrink:0;align-self:flex-start" id="update-dismiss-btn">✕</button>
       `;
+      document.getElementById('update-quit-btn').onclick = () => {
+        if (api.quitApp) api.quitApp();
+      };
       document.getElementById('update-dismiss-btn').onclick = () => banner.remove();
     };
     document.getElementById('update-dismiss-btn').onclick = () => banner.remove();
