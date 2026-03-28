@@ -2787,7 +2787,8 @@ function wireCatalog() {
 
 function renderCatalogTab(type) {
   const body = document.getElementById('catalog-body');
-  if (type === 'excl') { renderCatalogExcl(body); return; }
+  if (type === 'excl')  { renderCatalogSimpleList(body, PRESET_EXCLUSIONS, 'excl',  'Omschrijving'); return; }
+  if (type === 'check') { renderCatalogSimpleList(body, PRESET_CHECKLIST,  'check', 'Checklistpunt'); return; }
 
   const arr  = type === 'mat' ? PRESET_MATERIALS : PRESET_SERVICES;
   const isMat = type === 'mat';
@@ -2826,19 +2827,19 @@ function renderCatalogTab(type) {
   });
 }
 
-function renderCatalogExcl(body) {
+function renderCatalogSimpleList(body, arr, tabKey, placeholder) {
   body.innerHTML = `
     <table class="catalog-table">
       <thead><tr>
         <th style="width:28px"></th>
-        <th>Omschrijving</th>
+        <th>${escHtml(placeholder)}</th>
         <th style="width:32px"></th>
       </tr></thead>
       <tbody id="catalog-tbody">
-        ${PRESET_EXCLUSIONS.map((ex, i) => `
+        ${arr.map((item, i) => `
           <tr data-idx="${i}" draggable="true">
             <td class="drag-handle" title="Versleep">⠿</td>
-            <td><input class="catalog-input" data-i="${i}" value="${escHtml(ex)}" placeholder="Omschrijving" /></td>
+            <td><input class="catalog-input" data-i="${i}" value="${escHtml(item)}" placeholder="${escHtml(placeholder)}" /></td>
             <td><button class="catalog-del" data-i="${i}" title="Verwijderen">✕</button></td>
           </tr>`).join('')}
       </tbody>
@@ -2849,15 +2850,15 @@ function renderCatalogExcl(body) {
   const tbody = document.getElementById('catalog-tbody');
   tbody.querySelectorAll('.catalog-input').forEach(inp => {
     inp.addEventListener('input', () => {
-      PRESET_EXCLUSIONS[parseInt(inp.dataset.i)] = inp.value;
+      arr[parseInt(inp.dataset.i)] = inp.value;
       savePresets();
     });
   });
   tbody.querySelectorAll('.catalog-del').forEach(btn => {
     btn.addEventListener('click', () => {
-      PRESET_EXCLUSIONS.splice(parseInt(btn.dataset.i), 1);
+      arr.splice(parseInt(btn.dataset.i), 1);
       savePresets();
-      renderCatalogTab('excl');
+      renderCatalogTab(tabKey);
     });
   });
 
@@ -2873,16 +2874,16 @@ function renderCatalogExcl(body) {
       if (dragSrc === null) return;
       const tgt = parseInt(row.dataset.idx);
       if (dragSrc === tgt) return;
-      const [moved] = PRESET_EXCLUSIONS.splice(dragSrc, 1);
-      PRESET_EXCLUSIONS.splice(tgt, 0, moved);
-      dragSrc = null; savePresets(); renderCatalogTab('excl');
+      const [moved] = arr.splice(dragSrc, 1);
+      arr.splice(tgt, 0, moved);
+      dragSrc = null; savePresets(); renderCatalogTab(tabKey);
     });
   });
 
   document.getElementById('catalog-add-row').addEventListener('click', () => {
-    PRESET_EXCLUSIONS.push('');
+    arr.push('');
     savePresets();
-    renderCatalogTab('excl');
+    renderCatalogTab(tabKey);
     const rows = document.querySelectorAll('#catalog-tbody tr');
     rows[rows.length - 1]?.querySelector('input')?.focus();
   });
@@ -3256,6 +3257,7 @@ const DEFAULT_PRESET_SERVICES = [
 let PRESET_MATERIALS = [];
 let PRESET_SERVICES  = [];
 let PRESET_EXCLUSIONS = [];
+let PRESET_CHECKLIST  = [];
 
 async function loadPresets() {
   try {
@@ -3265,10 +3267,13 @@ async function loadPresets() {
         PRESET_MATERIALS  = r.data.filter(p => p.category === 'mat').map(p => ({ name: p.name, price: p.price }));
         PRESET_SERVICES   = r.data.filter(p => p.category === 'svc').map(p => ({ name: p.name, rate: p.price }));
         PRESET_EXCLUSIONS = r.data.filter(p => p.category === 'excl').map(p => p.name);
+        PRESET_CHECKLIST  = r.data.filter(p => p.category === 'check').map(p => p.name);
+        if (PRESET_CHECKLIST.length === 0) PRESET_CHECKLIST = [...DEFAULT_CHECKLIST];
         // Cache locally as fallback
         localStorage.setItem('presets_mat', JSON.stringify(PRESET_MATERIALS));
         localStorage.setItem('presets_svc', JSON.stringify(PRESET_SERVICES));
         localStorage.setItem('presets_excl', JSON.stringify(PRESET_EXCLUSIONS));
+        localStorage.setItem('presets_check', JSON.stringify(PRESET_CHECKLIST));
         return;
       }
     }
@@ -3282,10 +3287,13 @@ async function loadPresets() {
     PRESET_MATERIALS  = mat  ? JSON.parse(mat)  : DEFAULT_PRESET_MATERIALS.map(p => ({ ...p }));
     PRESET_SERVICES   = svc  ? JSON.parse(svc)  : DEFAULT_PRESET_SERVICES.map(p => ({ ...p }));
     PRESET_EXCLUSIONS = excl ? JSON.parse(excl) : [...DEFAULT_EXCLUSIONS];
+    const chk = localStorage.getItem('presets_check');
+    PRESET_CHECKLIST  = chk  ? JSON.parse(chk)  : [...DEFAULT_CHECKLIST];
   } catch (_) {
     PRESET_MATERIALS  = DEFAULT_PRESET_MATERIALS.map(p => ({ ...p }));
     PRESET_SERVICES   = DEFAULT_PRESET_SERVICES.map(p => ({ ...p }));
     PRESET_EXCLUSIONS = [...DEFAULT_EXCLUSIONS];
+    PRESET_CHECKLIST  = [...DEFAULT_CHECKLIST];
   }
 }
 
@@ -3294,6 +3302,7 @@ async function savePresets() {
   localStorage.setItem('presets_mat', JSON.stringify(PRESET_MATERIALS));
   localStorage.setItem('presets_svc', JSON.stringify(PRESET_SERVICES));
   localStorage.setItem('presets_excl', JSON.stringify(PRESET_EXCLUSIONS));
+  localStorage.setItem('presets_check', JSON.stringify(PRESET_CHECKLIST));
 
   // Sync to Pi
   if (state.config?.mode === 'api' && state.config?.apiUrl) {
@@ -3301,6 +3310,7 @@ async function savePresets() {
       ...PRESET_MATERIALS.map((p, i) => ({ category: 'mat', name: p.name, price: p.price || 0, sort_order: i })),
       ...PRESET_SERVICES.map((p, i)  => ({ category: 'svc', name: p.name, price: p.rate || 0, sort_order: i })),
       ...PRESET_EXCLUSIONS.map((ex, i) => ({ category: 'excl', name: ex, price: 0, sort_order: i })),
+      ...PRESET_CHECKLIST.map((ch, i) => ({ category: 'check', name: ch, price: 0, sort_order: i })),
     ];
     try {
       await api.apiFetch({ method: 'PUT', url: `${state.config.apiUrl}/api/presets`, body: { items } });
@@ -3414,7 +3424,7 @@ function openQuoteWizard() {
     <label class="qw-check-item">
       <input type="checkbox" class="qw-mat-cb" data-idx="${i}" />
       <span>${escHtml(p.name)}</span>
-      ${p.price ? `<span class="qw-check-rate">€${p.price}/${p.unit}</span>` : `<span class="qw-check-unit">${p.unit}</span>`}
+      ${p.price ? `<span class="qw-check-rate">€${p.price}</span>` : ''}
     </label>`).join('');
 
   const svcChecks = document.getElementById('qw-svc-checks');
@@ -3422,7 +3432,14 @@ function openQuoteWizard() {
     <label class="qw-check-item">
       <input type="checkbox" class="qw-svc-cb" data-idx="${i}" />
       <span>${escHtml(p.name)}</span>
-      <span class="qw-check-rate">€${p.rate}/u</span>
+      ${p.rate ? `<span class="qw-check-rate">€${p.rate}/u</span>` : ''}
+    </label>`).join('');
+
+  const exclChecks = document.getElementById('qw-excl-checks');
+  exclChecks.innerHTML = PRESET_EXCLUSIONS.map((ex, i) => `
+    <label class="qw-check-item">
+      <input type="checkbox" class="qw-excl-cb" data-idx="${i}" />
+      <span>${escHtml(ex)}</span>
     </label>`).join('');
 
   qwGoto(0);
@@ -3484,9 +3501,11 @@ function wireQuoteWizard() {
     const notes  = document.getElementById('qw-desc').value.trim();
 
     const selectedMaterials = [...document.querySelectorAll('.qw-mat-cb:checked')]
-      .map(cb => { const p = PRESET_MATERIALS[parseInt(cb.dataset.idx)]; return { name: p.name, quantity: 1, unit: p.unit, unit_price: p.price }; });
+      .map(cb => { const p = PRESET_MATERIALS[parseInt(cb.dataset.idx)]; return { name: p.name, quantity: 1, unit: '', unit_price: p.price || 0, margin: null }; });
     const selectedServices = [...document.querySelectorAll('.qw-svc-cb:checked')]
-      .map(cb => { const p = PRESET_SERVICES[parseInt(cb.dataset.idx)]; return { name: p.name, quantity: 1, unit: 'uur', unit_price: p.rate }; });
+      .map(cb => { const p = PRESET_SERVICES[parseInt(cb.dataset.idx)]; return { name: p.name, quantity: 1, unit: 'uur', unit_price: p.rate || 0 }; });
+    const selectedExclusions = [...document.querySelectorAll('.qw-excl-cb:checked')]
+      .map(cb => PRESET_EXCLUSIONS[parseInt(cb.dataset.idx)]);
 
     document.getElementById('quote-wizard-overlay').classList.add('hidden');
 
@@ -3497,6 +3516,7 @@ function wireQuoteWizard() {
     qe.image_data = qwImageData;
     qe.materials  = selectedMaterials;
     qe.services   = selectedServices;
+    qe.exclusions = selectedExclusions;
     renderQuoteEditorView();
   };
 }
@@ -3905,6 +3925,12 @@ const DEFAULT_EXCLUSIONS = [
   'Ontwerp­aanpassingen na goedkeuring',
 ];
 
+const DEFAULT_CHECKLIST = [
+  'Is duidelijk of transport inbegrepen is of niet?',
+  'Is duidelijk dat de offerte gebaseerd is op een 3D-model aangeleverd door de klant?',
+  'Is duidelijk dat wij alleen de basiskleur schilderen en stickerwerk voor rekening van de klant is?',
+];
+
 function renderExclusions() {
   const list = document.getElementById('excl-list');
   if (!list) return;
@@ -4021,16 +4047,9 @@ function updateTotals() {
 
 // ─── Save / Delete Quote ──────────────────────────────────────────────────────
 
-// ─── Checklist items — voeg hier nieuwe punten toe ───────────────────────────
-const SAVE_CHECKLIST = [
-  'Is duidelijk of transport inbegrepen is of niet?',
-  'Is duidelijk dat de offerte gebaseerd is op een 3D-model aangeleverd door de klant?',
-  'Is duidelijk dat wij alleen de basiskleur schilderen en stickerwerk voor rekening van de klant is?',
-];
-
 function openSaveChecklist(onConfirm) {
   const container = document.getElementById('checklist-items');
-  container.innerHTML = SAVE_CHECKLIST.map((item, i) => `
+  container.innerHTML = PRESET_CHECKLIST.map((item, i) => `
     <div class="checklist-item" data-idx="${i}">
       <input type="checkbox" id="clcb-${i}" class="cl-cb" />
       <label for="clcb-${i}">${escHtml(item)}</label>

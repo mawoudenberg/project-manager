@@ -225,7 +225,7 @@
       <button class="btn btn-ghost" id="settings-cancel">Annuleer</button>
       <button class="btn btn-primary" id="settings-save">Instellingen opslaan</button>
     </div>
-    <button type="button" class="btn btn-ghost" id="open-catalog-btn" style="width:100%;margin-top:8px">Catalogus beheren →</button>
+    <button type="button" class="btn btn-ghost" id="open-catalog-btn" style="width:100%;margin-top:8px">Offerte-instellingen →</button>
   </div>
 </div>
 
@@ -451,7 +451,7 @@
 
     <!-- Stap 3: Diensten & Materialen -->
     <div class="wizard-step" id="qw-step-2">
-      <h2>Diensten &amp; Materialen</h2>
+      <h2>Diensten, Materialen &amp; Exclusief</h2>
       <p class="wizard-subtitle">Selecteer wat van toepassing is. Je kunt later nog aanpassen.</p>
       <div class="qw-selection-grid">
         <div class="qw-selection-col">
@@ -461,6 +461,10 @@
         <div class="qw-selection-col">
           <div class="qw-col-title">Diensten</div>
           <div id="qw-svc-checks"></div>
+        </div>
+        <div class="qw-selection-col">
+          <div class="qw-col-title">Exclusief</div>
+          <div id="qw-excl-checks"></div>
         </div>
       </div>
       <div class="modal-actions">
@@ -475,13 +479,14 @@
 <div id="catalog-overlay" class="modal-overlay hidden">
   <div class="modal catalog-modal">
     <div class="catalog-header">
-      <h2 id="catalog-title">Catalogus beheren</h2>
+      <h2 id="catalog-title">Offerte-instellingen</h2>
       <button class="modal-close" id="catalog-close">✕</button>
     </div>
     <div class="catalog-tabs">
       <button class="catalog-tab active" data-tab="mat">Materialen</button>
       <button class="catalog-tab" data-tab="svc">Diensten</button>
       <button class="catalog-tab" data-tab="excl">Exclusief</button>
+      <button class="catalog-tab" data-tab="check">Checklist</button>
     </div>
     <div class="catalog-body" id="catalog-body">
       <!-- rendered by JS -->
