@@ -112,7 +112,7 @@ ipcMain.handle('config:set', (_e, config) => {
 ipcMain.handle('dialog:openFolder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
-    title: 'Select shared folder (e.g. Google Drive)',
+    title: 'Selecteer gedeelde map (bijv. Google Drive)',
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];

@@ -135,6 +135,9 @@ function migrateSchema() {
   if (!cols.includes('task_time'))  db.exec("ALTER TABLE tasks ADD COLUMN task_time   TEXT    DEFAULT ''");
   if (!cols.includes('stage_id'))   db.exec("ALTER TABLE tasks ADD COLUMN stage_id    INTEGER DEFAULT NULL");
 
+  const quoteCols = db.pragma('table_info(quotes)').map(c => c.name);
+  if (!quoteCols.includes('image_data')) db.exec("ALTER TABLE quotes ADD COLUMN image_data TEXT DEFAULT ''");
+
   const itemCols = db.pragma('table_info(todo_items)').map(c => c.name);
   if (!itemCols.includes('sort_order')) {
     db.exec("ALTER TABLE todo_items ADD COLUMN sort_order INTEGER DEFAULT 0");

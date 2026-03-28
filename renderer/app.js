@@ -46,6 +46,7 @@ let state = {
   ganttHideInactive: true,
   projectsHideInactive: true,
   myTasksHideInactive: true,
+  todoHideDone: false,
   calFilter: { tasks: 'active', stages: 'active' }, // tasks: 'all'|'active'|'none'  stages: 'all'|'active'|'none'
 };
 
@@ -93,12 +94,14 @@ function applyTheme(theme) {
 }
 
 async function init() {
+  loadPresets();
   buildColorSwatches();
   wireWizard();
   wireTaskModal();
   wireListModal();
   wireStageModal();
   wireSettings();
+  wireCatalog();
   wireNav();
   wireTeam();
   wireProjectModal();
@@ -107,6 +110,11 @@ async function init() {
   // Gantt drag: document-level listeners (registered once)
   document.addEventListener('mousemove', _onGanttDragMove);
   document.addEventListener('mouseup',   _onGanttDragEnd);
+
+  // Close preset dropdown menus when clicking outside
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.preset-wrap')) closeAllPresetMenus();
+  });
 
   // Global Escape key: close whichever modal is open
   document.addEventListener('keydown', e => {
@@ -145,8 +153,15 @@ async function remoteQuery(params) {
     url:    `${state.config.apiUrl}/api/query`,
     body:   params,
   });
+  if (r.status >= 400) {
+    const msg = (r.data && typeof r.data === 'object' && r.data.error)
+      ? r.data.error
+      : `HTTP ${r.status}`;
+    if (r.data?.trace) console.error('Server traceback:\n' + r.data.trace);
+    throw new Error(msg);
+  }
   // select returns array; insert returns {id}; update/delete returns {ok}
-  return Array.isArray(r) ? r : (r.data ?? r);
+  return Array.isArray(r.data) ? r.data : (r.data ?? r);
 }
 
 /* ─── API polling (API mode only) ─────────────────────────────────────────── */
@@ -246,7 +261,7 @@ function setView(view) {
     const isActive = b.dataset.view === view || (b.dataset.view === 'calendar' && CAL_VIEWS.has(view));
     b.classList.toggle('active', isActive);
   });
-  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Todo Lists', quotes:'Offertes', gantt:'Gantt Chart', projects:'Projecten' };
+  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten' };
   const titleEl = document.getElementById('toolbar-title');
   titleEl.className = '';
   titleEl.textContent = titles[view] ?? '';
@@ -265,25 +280,42 @@ function calViewToggleHTML(active) {
 }
 function renderCalFilterBar() {
   const f = state.calFilter;
+  const wasOpen = document.getElementById('cfb-content')?.classList.contains('open');
   let bar = document.getElementById('cal-filter-bar');
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'cal-filter-bar';
     document.getElementById('toolbar').after(bar);
   }
+
+  const activeLabel = [
+    f.tasks   !== 'active' ? `Taken: ${f.tasks === 'all' ? 'alles' : 'uit'}` : '',
+    f.stages  !== 'active' ? `Fases: ${f.stages === 'all' ? 'alles' : 'uit'}` : '',
+  ].filter(Boolean).join(' · ') || 'Filters';
+
   bar.innerHTML = `
-    <span class="cfp-label">Taken</span>
-    <div class="gantt-mode-toggle">
-      <button class="gmt-btn${f.tasks==='all'?' active':''}"    data-cf="tasks-all">Alles</button>
-      <button class="gmt-btn${f.tasks==='active'?' active':''}" data-cf="tasks-active">Open</button>
-      <button class="gmt-btn${f.tasks==='none'?' active':''}"   data-cf="tasks-none">Uit</button>
-    </div>
-    <span class="cfp-label">Fases</span>
-    <div class="gantt-mode-toggle">
-      <button class="gmt-btn${f.stages==='all'?' active':''}"    data-cf="stages-all">Alles</button>
-      <button class="gmt-btn${f.stages==='active'?' active':''}" data-cf="stages-active">Actief</button>
-      <button class="gmt-btn${f.stages==='none'?' active':''}"   data-cf="stages-none">Uit</button>
+    <button class="cfb-toggle-btn" id="cfb-toggle">${activeLabel} ▾</button>
+    <div class="cfb-content${wasOpen ? ' open' : ''}" id="cfb-content">
+      <span class="cfp-label">Taken</span>
+      <div class="gantt-mode-toggle">
+        <button class="gmt-btn${f.tasks==='all'?' active':''}"    data-cf="tasks-all">Alles</button>
+        <button class="gmt-btn${f.tasks==='active'?' active':''}" data-cf="tasks-active">Open</button>
+        <button class="gmt-btn${f.tasks==='none'?' active':''}"   data-cf="tasks-none">Uit</button>
+      </div>
+      <span class="cfp-label">Fases</span>
+      <div class="gantt-mode-toggle">
+        <button class="gmt-btn${f.stages==='all'?' active':''}"    data-cf="stages-all">Alles</button>
+        <button class="gmt-btn${f.stages==='active'?' active':''}" data-cf="stages-active">Actief</button>
+        <button class="gmt-btn${f.stages==='none'?' active':''}"   data-cf="stages-none">Uit</button>
+      </div>
     </div>`;
+
+  document.getElementById('cfb-toggle').addEventListener('click', () => {
+    const content = document.getElementById('cfb-content');
+    const open = content.classList.toggle('open');
+    document.getElementById('cfb-toggle').textContent = (open ? activeLabel + ' ▴' : activeLabel + ' ▾');
+  });
+
   bar.querySelectorAll('[data-cf]').forEach(btn => {
     btn.addEventListener('click', () => {
       const [key, val] = btn.dataset.cf.split('-');
@@ -294,8 +326,8 @@ function renderCalFilterBar() {
 }
 function wireCalViewToggle() {
   document.getElementById('cvt-day')?.addEventListener('click',   () => { state.cursor = new Date(state.today); setView('daily'); });
-  document.getElementById('cvt-week')?.addEventListener('click',  () => setView('weekly'));
-  document.getElementById('cvt-month')?.addEventListener('click', () => setView('monthly'));
+  document.getElementById('cvt-week')?.addEventListener('click',  () => { state.cursor = new Date(state.today); setView('weekly'); });
+  document.getElementById('cvt-month')?.addEventListener('click', () => { state.cursor = new Date(state.today); setView('monthly'); });
 }
 
 /* ─── Monthly View ─────────────────────────────────────────────────────────── */
@@ -458,7 +490,7 @@ function renderMonthly() {
       <span id="cal-month-label" style="display:none"></span>
       <button class="btn-icon" id="cal-next">›</button>
       ${calViewToggleHTML('monthly')}
-      <button class="btn btn-primary btn-sm" id="cal-add">+ Add Task</button>
+      <button class="btn btn-primary btn-sm" id="cal-add">+ Taak toevoegen</button>
     </div>`;
   wireCalViewToggle();
   renderCalFilterBar();
@@ -913,7 +945,7 @@ function renderWeekly() {
         ${holiday ? `<span class="wk-holiday">${escHtml(holiday)}</span>` : ''}
       </div>
       <div class="week-tasks" data-date="${dateStr}">${cards}</div>
-      <button class="week-add-btn" data-date="${dateStr}">+ Add</button>
+      <button class="week-add-btn" data-date="${dateStr}">+ Toevoegen</button>
     </div>`;
   });
   html += '</div>';
@@ -990,7 +1022,7 @@ function renderDaily() {
       <button class="btn-icon" id="day-prev">‹</button>
       <button class="btn-icon" id="day-next">›</button>
       ${calViewToggleHTML('daily')}
-      <button class="btn btn-primary btn-sm" id="day-add">+ Add Task</button>
+      <button class="btn btn-primary btn-sm" id="day-add">+ Taak toevoegen</button>
     </div>`;
   wireCalViewToggle();
   renderCalFilterBar();
@@ -1029,7 +1061,7 @@ function renderDaily() {
     </div>`;
   });
   if (dayTasks.length === 0 && dayStages.length === 0) {
-    html += `<div class="empty"><div class="empty-icon">🗓️</div><p>No tasks for this day. Click + Add Task to get started.</p></div>`;
+    html += `<div class="empty"><div class="empty-icon">🗓️</div><p>Geen taken voor deze dag. Klik op "+ Taak toevoegen" om te beginnen.</p></div>`;
   } else {
     dayTasks.forEach(t => {
       const done    = t.status === 'done';
@@ -1037,7 +1069,7 @@ function renderDaily() {
       html += `<div class="daily-task-row" data-id="${t.id}">
         <div class="daily-time-col">${hasTime ? `<span class="daily-time">${t.task_time}</span>` : '<span class="daily-time daily-time-allday">Heel de dag</span>'}</div>
         <div class="priority-dot priority-${t.priority||'medium'}"></div>
-        <input type="checkbox" class="status-cb" data-id="${t.id}" ${done?'checked':''} title="Toggle done" />
+        <input type="checkbox" class="status-cb" data-id="${t.id}" ${done?'checked':''} title="Markeer als afgerond" />
         <div class="daily-task-info">
           <div class="daily-task-title ${done?'done':''}">${escHtml(t.title)}</div>
           <div class="daily-task-meta">
@@ -1793,7 +1825,7 @@ function renderProjectDetail(proj) {
     const isDone = t.status === 'done';
     return `<div class="daily-task-row" data-id="${t.id}">
       <div class="priority-dot priority-${t.priority || 'medium'}"></div>
-      <input type="checkbox" class="status-cb" data-id="${t.id}" ${isDone ? 'checked' : ''} title="Toggle done" />
+      <input type="checkbox" class="status-cb" data-id="${t.id}" ${isDone ? 'checked' : ''} title="Markeer als afgerond" />
       <div class="daily-task-info">
         <div class="daily-task-title ${isDone ? 'done' : ''}">${escHtml(t.title)}</div>
         <div class="daily-task-meta">
@@ -2034,7 +2066,7 @@ async function insertDefaultStages(projectId) {
 }
 
 function fmtProjStatus(s) {
-  return { active: 'Actief', done: 'Afgerond', on_hold: 'On hold' }[s] || s;
+  return { active: 'Actief', done: 'Afgerond', on_hold: 'In de wacht' }[s] || s;
 }
 
 /* ─── Stage Modal ─────────────────────────────────────────────────────────── */
@@ -2199,8 +2231,16 @@ function renderTodo() {
   const content = document.getElementById('content');
   const ctrl = document.getElementById('toolbar-controls');
 
-  ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-list-btn">+ New List</button>`;
+  ctrl.innerHTML = `
+    <button class="btn btn-primary btn-sm" id="new-list-btn">+ Nieuwe lijst</button>
+    <button class="btn btn-sm ${state.todoHideDone ? 'btn-primary' : 'btn-ghost'}" id="hide-done-btn">
+      ${state.todoHideDone ? 'Toon alles' : 'Verberg afgerond'}
+    </button>`;
   document.getElementById('new-list-btn').onclick = () => openListModal(null);
+  document.getElementById('hide-done-btn').onclick = () => {
+    state.todoHideDone = !state.todoHideDone;
+    renderTodo();
+  };
 
   if (state.todoLists.length === 0) {
     content.innerHTML = `<div class="empty"><div class="empty-icon">✅</div><p>No lists yet. Create one to get started!</p></div>`;
@@ -2212,8 +2252,9 @@ function renderTodo() {
     const items = state.todoItems[list.id] || [];
     const done = items.filter(i => i.completed).length;
     const pct = items.length ? Math.round((done/items.length)*100) : 0;
+    const visibleItems = state.todoHideDone ? items.filter(i => !i.completed) : items;
 
-    const itemsHtml = items.map(item => `
+    const itemsHtml = visibleItems.map(item => `
       <div class="todo-item-row" data-item-id="${item.id}" data-list-id="${list.id}" draggable="true">
         <span class="todo-drag-handle" title="Slepen">⠿</span>
         <input type="checkbox" ${item.completed?'checked':''} class="todo-cb" data-item-id="${item.id}" data-list-id="${list.id}" />
@@ -2222,21 +2263,24 @@ function renderTodo() {
       </div>`).join('');
 
     html += `<div class="todo-card" data-list-id="${list.id}">
-      <div class="todo-card-header">
-        <div class="todo-card-title">${escHtml(list.name)}</div>
+      <div class="todo-card-header" draggable="true">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="card-drag-handle">⠿</span>
+          <div class="todo-card-title">${escHtml(list.name)}</div>
+        </div>
         ${list.description ? `<div class="todo-card-desc">${escHtml(list.description)}</div>` : ''}
         <div class="todo-progress">
           <div class="todo-progress-bar" style="width:${pct}%"></div>
         </div>
-        <div style="font-size:11px;color:var(--text2);margin-top:4px">${done}/${items.length} done</div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px">${done}/${items.length} afgerond</div>
       </div>
       <div class="todo-items" data-list-id="${list.id}">${itemsHtml}</div>
       <form class="todo-add-item-form" data-list-id="${list.id}">
-        <input type="text" placeholder="Add item…" class="add-item-input" autocomplete="off" />
-        <button type="submit" class="btn btn-primary btn-sm">Add</button>
+        <input type="text" placeholder="Item toevoegen…" class="add-item-input" autocomplete="off" />
+        <button type="submit" class="btn btn-primary btn-sm">Toevoegen</button>
       </form>
       <div class="todo-card-actions">
-        <button class="btn btn-ghost btn-sm edit-list-btn" data-list-id="${list.id}">Edit</button>
+        <button class="btn btn-ghost btn-sm edit-list-btn" data-list-id="${list.id}">Bewerken</button>
       </div>
     </div>`;
   });
@@ -2277,9 +2321,10 @@ function renderTodo() {
     };
   });
 
-  // ── Drag-and-drop reordering ──────────────────────────────────────────────
+  // ── Item drag-and-drop reordering ─────────────────────────────────────────
   let dragListId = null;
   let placeholder = null;
+  let cardDragSrc = null;
 
   function getAfterElement(zone, y) {
     const rows = [...zone.querySelectorAll('.todo-item-row:not(.dragging)')];
@@ -2305,17 +2350,19 @@ function renderTodo() {
 
   content.querySelectorAll('.todo-item-row').forEach(row => {
     row.addEventListener('dragstart', (e) => {
+      if (cardDragSrc) return;
       dragListId = row.dataset.listId;
       row.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
       placeholder = document.createElement('div');
       placeholder.className = 'todo-drag-placeholder';
+      e.stopPropagation();
     });
 
     row.addEventListener('dragend', async () => {
+      if (!dragListId) return;
       row.classList.remove('dragging');
       if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
-
       const newListId = row.dataset.listId;
       const toUpdate = new Set([dragListId, newListId].filter(Boolean));
       for (const id of toUpdate) await persistOrder(id);
@@ -2328,6 +2375,7 @@ function renderTodo() {
 
   content.querySelectorAll('.todo-items').forEach(zone => {
     zone.addEventListener('dragover', (e) => {
+      if (cardDragSrc) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       if (!placeholder) return;
@@ -2337,6 +2385,7 @@ function renderTodo() {
     });
 
     zone.addEventListener('drop', (e) => {
+      if (cardDragSrc) return;
       e.preventDefault();
       const dragging = content.querySelector('.todo-item-row.dragging');
       if (!dragging) return;
@@ -2348,6 +2397,43 @@ function renderTodo() {
       }
       if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
     });
+  });
+
+  // ── Card drag-and-drop reordering ─────────────────────────────────────────
+  const grid = document.getElementById('todo-grid');
+
+  content.querySelectorAll('.todo-card-header').forEach(header => {
+    header.addEventListener('dragstart', (e) => {
+      cardDragSrc = header.closest('.todo-card');
+      cardDragSrc.classList.add('card-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+
+    header.addEventListener('dragend', async () => {
+      if (!cardDragSrc) return;
+      cardDragSrc.classList.remove('card-dragging');
+      const cards = [...grid.querySelectorAll('.todo-card[data-list-id]')];
+      for (let i = 0; i < cards.length; i++) {
+        await remoteQuery({ action: 'update', table: 'todo_lists',
+          data: { sort_order: i }, where: { id: Number(cards[i].dataset.listId) } });
+      }
+      cardDragSrc = null;
+      await loadTodoLists();
+      renderTodo();
+    });
+  });
+
+  grid.addEventListener('dragover', (e) => {
+    if (!cardDragSrc) return;
+    e.preventDefault();
+    const targetCard = e.target.closest('.todo-card');
+    if (!targetCard || targetCard === cardDragSrc) return;
+    const rect = targetCard.getBoundingClientRect();
+    if (e.clientX < rect.left + rect.width / 2) {
+      grid.insertBefore(cardDragSrc, targetCard);
+    } else {
+      grid.insertBefore(cardDragSrc, targetCard.nextSibling);
+    }
   });
 
   // ── Inline editing (double-click) ─────────────────────────────────────────
@@ -2383,7 +2469,7 @@ function renderTodo() {
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
         if (e.key === 'Escape') {
-          committed = true;  // prevent blur from saving
+          committed = true;
           input.replaceWith(span);
         }
       });
@@ -2491,7 +2577,7 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
   state.editingTask = task || null;
   const isEdit = !!task;
 
-  document.getElementById('task-modal-title').textContent = isEdit ? 'Edit Task' : 'Add Task';
+  document.getElementById('task-modal-title').textContent = isEdit ? 'Taak bewerken' : 'Taak toevoegen';
   document.getElementById('task-title').value    = task?.title || '';
   document.getElementById('task-desc').value     = task?.description || '';
   document.getElementById('task-date').value     = task?.date || defaultDate || toDateStr(state.cursor);
@@ -2581,12 +2667,12 @@ function wireTaskModal() {
     } else {
       renderView();
     }
-    toast('Task saved');
+    toast('Taak opgeslagen');
   };
 
   document.getElementById('task-delete').onclick = async () => {
     if (!state.editingTask) return;
-    if (!confirm('Delete this task?')) return;
+    if (!confirm('Taak verwijderen?')) return;
     try {
       const task = state.editingTask;
       const snap = { ...task };
@@ -2603,7 +2689,7 @@ function wireTaskModal() {
       } else {
         renderView();
       }
-      toast('Task deleted');
+      toast('Taak verwijderd');
     } catch (err) {
       toast('Verwijderen mislukt: ' + err.message);
     }
@@ -2619,7 +2705,7 @@ function wireTaskModal() {
 function openListModal(list) {
   state.editingList = list || null;
   const isEdit = !!list;
-  document.getElementById('list-modal-title').textContent = isEdit ? 'Edit List' : 'New List';
+  document.getElementById('list-modal-title').textContent = isEdit ? 'Lijst bewerken' : 'Nieuwe lijst';
   document.getElementById('list-name').value = list?.name || '';
   document.getElementById('list-desc').value = list?.description || '';
   document.getElementById('list-delete').classList.toggle('hidden', !isEdit);
@@ -2651,17 +2737,17 @@ function wireListModal() {
     await loadTodoLists();
     closeListModal();
     renderTodo();
-    toast('List saved');
+    toast('Lijst opgeslagen');
   };
 
   document.getElementById('list-delete').onclick = async () => {
     if (!state.editingList) return;
-    if (!confirm('Delete this list and all its items?')) return;
+    if (!confirm('Lijst en alle items verwijderen?')) return;
     await remoteQuery({ action: 'delete', table: 'todo_lists', where: { id: state.editingList.id } });
     await loadTodoLists();
     closeListModal();
     renderTodo();
-    toast('List deleted');
+    toast('Lijst verwijderd');
   };
 
   document.getElementById('list-modal').addEventListener('click', e => {
@@ -2670,42 +2756,224 @@ function wireListModal() {
 }
 
 /* ─── Settings Modal ───────────────────────────────────────────────────────── */
-function wireSettings() {
-  let tempFilePath = null;
+/* ─── Catalog Editor ──────────────────────────────────────────────────────── */
 
+let _catalogTab = 'mat';
+let _catDragSrc = null;
+
+function wireCatalog() {
+  document.getElementById('open-catalog-btn')?.addEventListener('click', () => {
+    _catalogTab = 'mat';
+    document.getElementById('settings-modal').classList.add('hidden');
+    document.getElementById('catalog-overlay').classList.remove('hidden');
+    renderCatalogTab('mat');
+  });
+
+  document.getElementById('catalog-close').addEventListener('click', () => {
+    document.getElementById('catalog-overlay').classList.add('hidden');
+  });
+
+  document.querySelectorAll('.catalog-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.catalog-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _catalogTab = btn.dataset.tab;
+      renderCatalogTab(_catalogTab);
+    });
+  });
+
+}
+
+
+function renderCatalogTab(type) {
+  const body = document.getElementById('catalog-body');
+  if (type === 'excl') { renderCatalogExcl(body); return; }
+
+  const arr  = type === 'mat' ? PRESET_MATERIALS : PRESET_SERVICES;
+  const isMat = type === 'mat';
+
+  body.innerHTML = `
+    <table class="catalog-table">
+      <thead>
+        <tr>
+          <th style="width:28px"></th>
+          <th>Naam</th>
+          ${isMat
+            ? `<th style="width:100px">Prijs (€)</th>`
+            : `<th style="width:100px">Tarief (€/u)</th>`}
+          <th style="width:32px"></th>
+        </tr>
+      </thead>
+      <tbody id="catalog-tbody">
+        ${arr.map((p, i) => renderCatalogRow(p, i, isMat)).join('')}
+      </tbody>
+    </table>
+    <button class="catalog-add-btn" id="catalog-add-row">＋ Rij toevoegen</button>
+  `;
+
+  wireCatalogTable(type);
+  wireCatalogDrag(type);
+
+  document.getElementById('catalog-add-row').addEventListener('click', () => {
+    const arr = type === 'mat' ? PRESET_MATERIALS : PRESET_SERVICES;
+    if (type === 'mat') arr.push({ name: '', price: 0 });
+    else arr.push({ name: '', rate: 0 });
+    savePresets();
+    renderCatalogTab(type);
+    const rows = document.querySelectorAll('#catalog-tbody tr');
+    const lastRow = rows[rows.length - 1];
+    lastRow?.querySelector('input')?.focus();
+  });
+}
+
+function renderCatalogExcl(body) {
+  body.innerHTML = `
+    <table class="catalog-table">
+      <thead><tr>
+        <th style="width:28px"></th>
+        <th>Omschrijving</th>
+        <th style="width:32px"></th>
+      </tr></thead>
+      <tbody id="catalog-tbody">
+        ${PRESET_EXCLUSIONS.map((ex, i) => `
+          <tr data-idx="${i}" draggable="true">
+            <td class="drag-handle" title="Versleep">⠿</td>
+            <td><input class="catalog-input" data-i="${i}" value="${escHtml(ex)}" placeholder="Omschrijving" /></td>
+            <td><button class="catalog-del" data-i="${i}" title="Verwijderen">✕</button></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    <button class="catalog-add-btn" id="catalog-add-row">＋ Rij toevoegen</button>
+  `;
+
+  const tbody = document.getElementById('catalog-tbody');
+  tbody.querySelectorAll('.catalog-input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      PRESET_EXCLUSIONS[parseInt(inp.dataset.i)] = inp.value;
+      savePresets();
+    });
+  });
+  tbody.querySelectorAll('.catalog-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      PRESET_EXCLUSIONS.splice(parseInt(btn.dataset.i), 1);
+      savePresets();
+      renderCatalogTab('excl');
+    });
+  });
+
+  // Drag & drop
+  let dragSrc = null;
+  tbody.querySelectorAll('tr[draggable]').forEach(row => {
+    row.addEventListener('dragstart', e => { dragSrc = parseInt(row.dataset.idx); e.dataTransfer.effectAllowed = 'move'; row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => { row.classList.remove('dragging'); tbody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over')); });
+    row.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; tbody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over')); row.classList.add('drag-over'); });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', e => {
+      e.preventDefault(); row.classList.remove('drag-over');
+      if (dragSrc === null) return;
+      const tgt = parseInt(row.dataset.idx);
+      if (dragSrc === tgt) return;
+      const [moved] = PRESET_EXCLUSIONS.splice(dragSrc, 1);
+      PRESET_EXCLUSIONS.splice(tgt, 0, moved);
+      dragSrc = null; savePresets(); renderCatalogTab('excl');
+    });
+  });
+
+  document.getElementById('catalog-add-row').addEventListener('click', () => {
+    PRESET_EXCLUSIONS.push('');
+    savePresets();
+    renderCatalogTab('excl');
+    const rows = document.querySelectorAll('#catalog-tbody tr');
+    rows[rows.length - 1]?.querySelector('input')?.focus();
+  });
+}
+
+function renderCatalogRow(p, i, isMat) {
+  return `<tr data-idx="${i}" draggable="true">
+    <td class="drag-handle" title="Versleep om te sorteren">⠿</td>
+    <td><input class="catalog-input" data-i="${i}" data-f="name" value="${escHtml(p.name)}" placeholder="Naam" /></td>
+    ${isMat
+      ? `<td><input class="catalog-input catalog-input--sm num" data-i="${i}" data-f="price" type="number" min="0" step="any" value="${p.price || 0}" /></td>`
+      : `<td><input class="catalog-input catalog-input--sm num" data-i="${i}" data-f="rate" type="number" min="0" step="any" value="${p.rate || 0}" /></td>`}
+    <td><button class="catalog-del" data-i="${i}" title="Verwijderen">✕</button></td>
+  </tr>`;
+}
+
+function wireCatalogTable(type) {
+  const tbody = document.getElementById('catalog-tbody');
+  if (!tbody) return;
+  const arr = type === 'mat' ? PRESET_MATERIALS : PRESET_SERVICES;
+
+  tbody.querySelectorAll('.catalog-input').forEach(inp => {
+    if (inp.type === 'number') inp.addEventListener('focus', () => inp.select());
+    inp.addEventListener('input', () => {
+      const i = parseInt(inp.dataset.i);
+      const f = inp.dataset.f;
+      if (!arr[i]) return;
+      arr[i][f] = inp.type === 'number' ? (parseFloat(inp.value) || 0) : inp.value;
+      savePresets();
+    });
+  });
+
+  tbody.querySelectorAll('.catalog-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = parseInt(btn.dataset.i);
+      arr.splice(i, 1);
+      savePresets();
+      renderCatalogTab(type);
+    });
+  });
+}
+
+function wireCatalogDrag(type) {
+  const tbody = document.getElementById('catalog-tbody');
+  if (!tbody) return;
+  const arr = type === 'mat' ? PRESET_MATERIALS : PRESET_SERVICES;
+
+  tbody.querySelectorAll('tr[draggable]').forEach(row => {
+    row.addEventListener('dragstart', e => {
+      _catDragSrc = parseInt(row.dataset.idx);
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => row.classList.add('dragging'), 0);
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      tbody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+    });
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      tbody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+      row.classList.add('drag-over');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      if (_catDragSrc === null) return;
+      const tgt = parseInt(row.dataset.idx);
+      if (_catDragSrc === tgt) return;
+      const [moved] = arr.splice(_catDragSrc, 1);
+      arr.splice(tgt, 0, moved);
+      _catDragSrc = null;
+      savePresets();
+      renderCatalogTab(type);
+    });
+  });
+}
+
+function wireSettings() {
   document.getElementById('settings-btn').onclick = async () => {
     const cfg = state.config || {};
     document.getElementById('cfg-name').value = cfg.name || '';
     document.getElementById('cfg-api-url').value = cfg.apiUrl || 'http://raspberrypi.local:5000';
-    const mode = cfg.mode || 'file';
-    document.querySelector(`input[name=mode][value=${mode}]`).checked = true;
     const theme = cfg.theme || 'light';
     document.querySelector(`input[name=theme][value=${theme}]`).checked = true;
     updateThemeCards(theme);
-    tempFilePath = cfg.filePath || null;
-    updateCfgPathDisplay(tempFilePath);
-    toggleModeFields(mode);
-    updateRadioCards(mode);
     document.getElementById('settings-modal').classList.remove('hidden');
   };
 
   document.getElementById('settings-cancel').onclick = () =>
     document.getElementById('settings-modal').classList.add('hidden');
-
-  document.getElementById('cfg-pick-folder').onclick = async () => {
-    const folder = await api.openFolder();
-    if (folder) {
-      tempFilePath = folder + '/project-manager.db';
-      updateCfgPathDisplay(tempFilePath);
-    }
-  };
-
-  document.querySelectorAll('input[name=mode]').forEach(radio => {
-    radio.addEventListener('change', () => {
-      toggleModeFields(radio.value);
-      updateRadioCards(radio.value);
-    });
-  });
 
   document.querySelectorAll('input[name=theme]').forEach(radio => {
     radio.addEventListener('change', () => {
@@ -2715,12 +2983,10 @@ function wireSettings() {
   });
 
   document.getElementById('settings-save').onclick = async () => {
-    const mode = document.querySelector('input[name=mode]:checked').value;
     const theme = document.querySelector('input[name=theme]:checked')?.value || 'light';
     const newConfig = {
       name: document.getElementById('cfg-name').value.trim() || state.config?.name || '',
-      mode,
-      filePath: tempFilePath || state.config?.filePath || '',
+      mode: 'api',
       apiUrl: document.getElementById('cfg-api-url').value.trim(),
       theme,
     };
@@ -2731,27 +2997,13 @@ function wireSettings() {
     await loadAll();
     renderView();
     startApiPolling();
-    toast('Settings saved');
+    toast('Instellingen opgeslagen');
   };
 
   document.getElementById('settings-modal').addEventListener('click', e => {
     if (e.target === document.getElementById('settings-modal'))
       document.getElementById('settings-modal').classList.add('hidden');
   });
-
-  function updateCfgPathDisplay(p) {
-    document.getElementById('cfg-path-display').textContent = p || 'Not set';
-  }
-
-  function toggleModeFields(mode) {
-    document.getElementById('cfg-file-section').classList.toggle('hidden', mode !== 'file');
-    document.getElementById('cfg-api-section').classList.toggle('hidden', mode !== 'api');
-  }
-
-  function updateRadioCards(mode) {
-    document.getElementById('radio-file').classList.toggle('selected', mode === 'file');
-    document.getElementById('radio-api').classList.toggle('selected', mode === 'api');
-  }
 
   function updateThemeCards(theme) {
     document.getElementById('radio-light').classList.toggle('selected', theme === 'light');
@@ -2780,6 +3032,18 @@ function wizardGoto(step) {
 }
 
 function wireWizard() {
+  if (window.__WEB_MODE__) {
+    document.getElementById('wiz-next-0').onclick = async () => {
+      const name = document.getElementById('wiz-name').value.trim();
+      if (!name) { shake(document.getElementById('wiz-name')); return; }
+      const config = { name, mode: 'api', apiUrl: window.location.origin };
+      await api.configSet(config);
+      state.config = config;
+      showApp(); await loadAll(); renderView();
+    };
+    return;
+  }
+
   document.getElementById('wiz-next-0').onclick = () => {
     const name = document.getElementById('wiz-name').value.trim();
     if (!name) { shake(document.getElementById('wiz-name')); return; }
@@ -2797,7 +3061,7 @@ function wireWizard() {
   };
 
   document.getElementById('wiz-next-1').onclick = () => {
-    if (!wizardFilePath) { toast('Please select a folder first'); return; }
+    if (!wizardFilePath) { toast('Selecteer eerst een map'); return; }
     document.getElementById('wiz-final-path').textContent = wizardFilePath;
     wizardGoto(2);
   };
@@ -2832,8 +3096,16 @@ function wireNav() {
     await api.refresh();
     await loadAll();
     renderView();
-    toast('Refreshed');
+    toast('Refresh');
   };
+
+  document.getElementById('hamburger-btn')?.addEventListener('click', () =>
+    document.getElementById('sidebar').classList.add('open'));
+  document.getElementById('sidebar-close-btn')?.addEventListener('click', () =>
+    document.getElementById('sidebar').classList.remove('open'));
+  document.querySelectorAll('.nav-btn').forEach(btn =>
+    btn.addEventListener('click', () =>
+      document.getElementById('sidebar').classList.remove('open')));
 }
 
 /* ─── Color Swatches ───────────────────────────────────────────────────────── */
@@ -2923,11 +3195,11 @@ function getDutchHolidays(year) {
 }
 
 function formatDateLong(date) {
-  return date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  return date.toLocaleDateString('nl-NL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 }
 
 function fmtStatus(s) {
-  return { pending: 'Pending', in_progress: 'In Progress', done: 'Done' }[s] || s;
+  return { pending: 'Openstaand', in_progress: 'In uitvoering', done: 'Afgerond' }[s] || s;
 }
 
 function escHtml(str) {
@@ -2953,28 +3225,58 @@ function shake(el) {
 }
 
 /* ─── Quote Presets ─────────────────────────────────────────────────────────── */
-const PRESET_MATERIALS = [
-  { name: 'Polyurea',     unit: 'm²',  price: 0 },
-  { name: 'Spuiten',      unit: 'm²',  price: 0 },
-  { name: 'Grafisch',     unit: 'm²',  price: 0 },
-  { name: 'Stickeren',    unit: 'm²',  price: 0 },
-  { name: 'Underlayment', unit: 'vel', price: 60 },
-  { name: 'Hout',         unit: 'm²',  price: 0 },
-  { name: 'Staal',        unit: 'kg',  price: 0 },
-  { name: 'Filament',     unit: 'g',   price: 0 },
-  { name: 'Epoxy',        unit: 'kg',  price: 0 },
-  { name: 'Transport',    unit: 'rit', price: 0 },
-  { name: 'Overig',       unit: 'st',  price: 0 },
+const DEFAULT_PRESET_MATERIALS = [
+  { name: 'Polyurea',    price: 0 },
+  { name: 'Spuiten',     price: 0 },
+  { name: 'Grafisch',    price: 0 },
+  { name: 'Stickeren',   price: 0 },
+  { name: 'Folie',       price: 0 },
+  { name: 'Primer',      price: 0 },
+  { name: 'Verf',        price: 0 },
+  { name: 'Hout / MDF',  price: 0 },
+  { name: 'Staal',       price: 0 },
+  { name: 'Bevestiging', price: 0 },
+  { name: 'Transport',   price: 0 },
+  { name: 'Overig',      price: 0 },
 ];
 
-const PRESET_SERVICES = [
-  { name: 'Tekenen',     rate: 70 },
-  { name: '3D frezen',   rate: 120 },
-  { name: 'CNC frezen',  rate: 120 },
-  { name: 'Werkplaats',  rate: 70 },
-  { name: 'Coördinatie', rate: 70 },
-  { name: 'Handling',    rate: 55 },
+const DEFAULT_PRESET_SERVICES = [
+  { name: 'Tekenen',            rate: 0 },
+  { name: '3D modelleren',      rate: 0 },
+  { name: '3D frezen',          rate: 0 },
+  { name: 'CNC frezen',         rate: 0 },
+  { name: 'Werkplaats',         rate: 0 },
+  { name: 'Spuiten',            rate: 0 },
+  { name: 'Projectbegeleiding', rate: 0 },
+  { name: 'Advies',             rate: 0 },
 ];
+
+// ─── Dynamic presets (loaded from localStorage, fall back to defaults) ──────
+
+let PRESET_MATERIALS = [];
+let PRESET_SERVICES  = [];
+let PRESET_EXCLUSIONS = [];
+
+function loadPresets() {
+  try {
+    const mat = localStorage.getItem('presets_mat');
+    const svc = localStorage.getItem('presets_svc');
+    const excl = localStorage.getItem('presets_excl');
+    PRESET_MATERIALS  = mat  ? JSON.parse(mat)  : DEFAULT_PRESET_MATERIALS.map(p => ({ ...p }));
+    PRESET_SERVICES   = svc  ? JSON.parse(svc)  : DEFAULT_PRESET_SERVICES.map(p => ({ ...p }));
+    PRESET_EXCLUSIONS = excl ? JSON.parse(excl) : [...DEFAULT_EXCLUSIONS];
+  } catch (_) {
+    PRESET_MATERIALS  = DEFAULT_PRESET_MATERIALS.map(p => ({ ...p }));
+    PRESET_SERVICES   = DEFAULT_PRESET_SERVICES.map(p => ({ ...p }));
+    PRESET_EXCLUSIONS = [...DEFAULT_EXCLUSIONS];
+  }
+}
+
+function savePresets() {
+  localStorage.setItem('presets_mat', JSON.stringify(PRESET_MATERIALS));
+  localStorage.setItem('presets_svc', JSON.stringify(PRESET_SERVICES));
+  localStorage.setItem('presets_excl', JSON.stringify(PRESET_EXCLUSIONS));
+}
 
 // ─── Quote State ──────────────────────────────────────────────────────────────
 
@@ -2990,8 +3292,11 @@ function freshQE(quote) {
     margin:     quote?.margin     ?? 20,
     status:     quote?.status     ?? 'draft',
     notes:      quote?.notes      ?? '',
+    image_data:     quote?.image_data || (quote?.id ? localStorage.getItem('qimg_' + quote.id) : '') || '',
+    checklist_done: quote?.id ? true : false,  // existing quotes skip checklist
     materials:  [],
     services:   [],
+    exclusions: [],
   };
 }
 
@@ -3001,7 +3306,7 @@ async function renderQuoteList() {
   const ctrl = document.getElementById('toolbar-controls');
   const content = document.getElementById('content');
   ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-quote-btn">+ Nieuwe offerte</button>`;
-  document.getElementById('new-quote-btn').onclick = () => openQuoteEditor(null);
+  document.getElementById('new-quote-btn').onclick = () => openQuoteWizard();
   content.innerHTML = '';
 
   const quotes = await remoteQuery({ action: 'select', table: 'quotes' });
@@ -3022,7 +3327,7 @@ async function renderQuoteList() {
   let html = `<table class="quotes-table">
     <thead><tr>
       <th>Project</th><th>Klant</th><th>Datum</th>
-      <th style="text-align:right">Totaal incl. BTW</th><th>Status</th>
+      <th style="text-align:right">Totaal incl. BTW</th><th>Status</th><th></th>
     </tr></thead><tbody>`;
 
   rows.forEach(({ q, total }) => {
@@ -3032,6 +3337,7 @@ async function renderQuoteList() {
       <td>${q.quote_date || '—'}</td>
       <td class="amount">${fmtEur(total)}</td>
       <td><span class="badge badge-${q.status}">${fmtQuoteStatus(q.status)}</span></td>
+      <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
   });
   html += `</tbody></table>`;
@@ -3043,6 +3349,135 @@ async function renderQuoteList() {
       if (quote) openQuoteEditor(quote);
     };
   });
+
+  document.querySelectorAll('.quote-delete-btn').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const quote = quotes.find(q => q.id == btn.dataset.id);
+      if (!quote) return;
+      if (!confirm(`Verwijder offerte "${quote.name}"?`)) return;
+      await remoteQuery({ action: 'delete', table: 'quotes', where: { id: quote.id } });
+      toast(`Offerte "${quote.name}" verwijderd`);
+      renderQuoteList();
+    };
+  });
+}
+
+// ─── Quote Wizard ─────────────────────────────────────────────────────────────
+
+let qwImageData = '';
+
+function openQuoteWizard() {
+  qwImageData = '';
+  document.getElementById('qw-client').value = '';
+  document.getElementById('qw-name').value = '';
+  document.getElementById('qw-desc').value = '';
+  document.getElementById('qw-img-preview').classList.add('hidden');
+  document.getElementById('qw-drop-zone').classList.remove('hidden');
+  document.getElementById('qw-file-input').value = '';
+
+  // Build checkboxes
+  const matChecks = document.getElementById('qw-mat-checks');
+  matChecks.innerHTML = PRESET_MATERIALS.map((p, i) => `
+    <label class="qw-check-item">
+      <input type="checkbox" class="qw-mat-cb" data-idx="${i}" />
+      <span>${escHtml(p.name)}</span>
+      ${p.price ? `<span class="qw-check-rate">€${p.price}/${p.unit}</span>` : `<span class="qw-check-unit">${p.unit}</span>`}
+    </label>`).join('');
+
+  const svcChecks = document.getElementById('qw-svc-checks');
+  svcChecks.innerHTML = PRESET_SERVICES.map((p, i) => `
+    <label class="qw-check-item">
+      <input type="checkbox" class="qw-svc-cb" data-idx="${i}" />
+      <span>${escHtml(p.name)}</span>
+      <span class="qw-check-rate">€${p.rate}/u</span>
+    </label>`).join('');
+
+  qwGoto(0);
+  document.getElementById('quote-wizard-overlay').classList.remove('hidden');
+  wireQuoteWizard();
+}
+
+function qwGoto(step) {
+  document.querySelectorAll('#quote-wizard .wizard-step').forEach((s, i) => s.classList.toggle('active', i === step));
+  document.querySelectorAll('#quote-wizard .step-dot').forEach((d, i) => d.classList.toggle('done', i <= step));
+}
+
+function wireQuoteWizard() {
+  // Only wire once
+  if (document.getElementById('quote-wizard-overlay').dataset.wired) return;
+  document.getElementById('quote-wizard-overlay').dataset.wired = '1';
+
+  document.getElementById('qw-cancel').onclick = () =>
+    document.getElementById('quote-wizard-overlay').classList.add('hidden');
+
+  document.getElementById('qw-next-0').onclick = () => {
+    const client = document.getElementById('qw-client').value.trim();
+    const name   = document.getElementById('qw-name').value.trim();
+    if (!client) { shake(document.getElementById('qw-client')); return; }
+    if (!name)   { shake(document.getElementById('qw-name')); return; }
+    qwGoto(1);
+  };
+
+  document.getElementById('qw-back-1').onclick = () => qwGoto(0);
+  document.getElementById('qw-next-1').onclick = () => qwGoto(2);
+  document.getElementById('qw-back-2').onclick = () => qwGoto(1);
+
+  // Drag & drop
+  const dropZone = document.getElementById('qw-drop-zone');
+  dropZone.addEventListener('click', () => document.getElementById('qw-file-input').click());
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-active'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-active'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-active');
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) qwLoadImage(file);
+  });
+  document.getElementById('qw-file-input').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (file) qwLoadImage(file);
+  });
+  document.getElementById('qw-img-remove').onclick = () => {
+    qwImageData = '';
+    document.getElementById('qw-img-preview').classList.add('hidden');
+    document.getElementById('qw-drop-zone').classList.remove('hidden');
+    document.getElementById('qw-file-input').value = '';
+  };
+
+  // Finish wizard
+  document.getElementById('qw-finish').onclick = () => {
+    const client = document.getElementById('qw-client').value.trim();
+    const name   = document.getElementById('qw-name').value.trim();
+    const notes  = document.getElementById('qw-desc').value.trim();
+
+    const selectedMaterials = [...document.querySelectorAll('.qw-mat-cb:checked')]
+      .map(cb => { const p = PRESET_MATERIALS[parseInt(cb.dataset.idx)]; return { name: p.name, quantity: 1, unit: p.unit, unit_price: p.price }; });
+    const selectedServices = [...document.querySelectorAll('.qw-svc-cb:checked')]
+      .map(cb => { const p = PRESET_SERVICES[parseInt(cb.dataset.idx)]; return { name: p.name, quantity: 1, unit: 'uur', unit_price: p.rate }; });
+
+    document.getElementById('quote-wizard-overlay').classList.add('hidden');
+
+    qe = freshQE(null);
+    qe.client     = client;
+    qe.name       = name;
+    qe.notes      = notes;
+    qe.image_data = qwImageData;
+    qe.materials  = selectedMaterials;
+    qe.services   = selectedServices;
+    renderQuoteEditorView();
+  };
+}
+
+function qwLoadImage(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    qwImageData = e.target.result;
+    document.getElementById('qw-preview-img').src = qwImageData;
+    document.getElementById('qw-img-preview').classList.remove('hidden');
+    document.getElementById('qw-drop-zone').classList.add('hidden');
+  };
+  reader.readAsDataURL(file);
 }
 
 // ─── Quote Editor ─────────────────────────────────────────────────────────────
@@ -3053,8 +3488,9 @@ async function openQuoteEditor(quote) {
   // Load existing items if editing
   if (qe.id) {
     const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: qe.id } });
-    qe.materials = items.filter(i => i.type === 'material').map(i => ({ ...i }));
-    qe.services  = items.filter(i => i.type === 'service').map(i => ({ ...i }));
+    qe.materials  = items.filter(i => i.type === 'material').map(i => ({ ...i }));
+    qe.services   = items.filter(i => i.type === 'service').map(i => ({ ...i }));
+    qe.exclusions = items.filter(i => i.type === 'exclusion').map(i => i.name);
   }
 
   renderQuoteEditorView();
@@ -3090,7 +3526,20 @@ function renderQuoteEditorView() {
         </select>
       </div>
     </div>
-    <textarea class="qe-notes" id="qe-notes" placeholder="Notities / omschrijving…">${escHtml(qe.notes)}</textarea>
+    <input type="file" id="qe-file-input" accept="image/*" style="display:none" />
+    ${qe.image_data
+      ? `<div class="qe-image-preview">
+           <img src="${qe.image_data}" alt="Projectafbeelding" />
+           <div class="qe-img-actions">
+             <button class="qe-img-btn" id="qe-img-change-btn">↑ Wijzigen</button>
+             <button class="qe-img-btn qe-img-btn--remove" onclick="qe.image_data='';if(qe.id)localStorage.removeItem('qimg_'+qe.id);renderQuoteEditorView()">✕ Verwijder</button>
+           </div>
+         </div>`
+      : `<button class="qe-add-img-btn" id="qe-img-add-btn">
+           <svg viewBox="0 0 20 20" fill="none" style="width:15px;height:15px;vertical-align:middle;margin-right:6px"><rect x="2" y="4" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><circle cx="7.5" cy="9" r="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 14l4-4 3 3 2-2 5 5" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Afbeelding toevoegen
+         </button>`
+    }
+    <textarea class="qe-notes" id="qe-notes" placeholder="Toelichting — omschrijf het project, de aanpak of bijzondere afspraken…">${escHtml(qe.notes)}</textarea>
 
     <!-- Materials -->
     <div class="qe-section">
@@ -3100,14 +3549,22 @@ function renderQuoteEditorView() {
           Marge <input type="number" id="qe-margin" value="${qe.margin}" min="0" max="200" step="1" />%
         </div>
       </div>
-      <div class="preset-btns" id="mat-presets"></div>
+      <div class="preset-wrap" id="mat-preset-wrap">
+        <button class="qe-add-btn" id="mat-add-btn" type="button">＋ Materiaal toevoegen</button>
+        <div class="preset-menu hidden" id="mat-preset-menu">
+          <input class="preset-search" placeholder="Zoeken…" id="mat-preset-search" autocomplete="off" />
+          <div class="preset-list" id="mat-preset-list"></div>
+          <button class="preset-empty-btn" id="mat-empty-btn" type="button">＋ Lege regel</button>
+        </div>
+      </div>
       <table class="qi-table">
         <thead><tr>
-          <th style="width:36%">Omschrijving</th>
+          <th style="width:3%"></th>
+          <th style="width:37%">Omschrijving</th>
           <th style="width:10%">Aantal</th>
-          <th style="width:10%">Eenheid</th>
+          <th class="num" style="width:8%" title="Marge per item (leeg = globale marge)">%</th>
           <th class="num" style="width:16%">Stukprijs</th>
-          <th class="num" style="width:16%">Totaal</th>
+          <th class="num" style="width:22%">Totaal</th>
           <th style="width:4%"></th>
         </tr></thead>
         <tbody id="mat-tbody"></tbody>
@@ -3120,10 +3577,18 @@ function renderQuoteEditorView() {
       <div class="qe-section-header">
         <span class="qe-section-title">Diensten</span>
       </div>
-      <div class="preset-btns" id="svc-presets"></div>
+      <div class="preset-wrap" id="svc-preset-wrap">
+        <button class="qe-add-btn" id="svc-add-btn" type="button">＋ Dienst toevoegen</button>
+        <div class="preset-menu hidden" id="svc-preset-menu">
+          <input class="preset-search" placeholder="Zoeken…" id="svc-preset-search" autocomplete="off" />
+          <div class="preset-list" id="svc-preset-list"></div>
+          <button class="preset-empty-btn" id="svc-empty-btn" type="button">＋ Lege regel</button>
+        </div>
+      </div>
       <table class="qi-table">
         <thead><tr>
-          <th style="width:40%">Dienst</th>
+          <th style="width:3%"></th>
+          <th style="width:41%">Dienst</th>
           <th style="width:14%">Uren</th>
           <th class="num" style="width:18%">Tarief/uur</th>
           <th class="num" style="width:20%">Totaal</th>
@@ -3134,28 +3599,25 @@ function renderQuoteEditorView() {
       <div style="height:4px"></div>
     </div>
 
+    <!-- Exclusions -->
+    <div class="qe-section qe-excl-section">
+      <div class="qe-section-header">
+        <span class="qe-section-title">Exclusief</span>
+      </div>
+      <div class="excl-list" id="excl-list"></div>
+      <div class="excl-add-row">
+        <input class="qi-input excl-new-input" id="excl-new-input" placeholder="Toevoegen…" />
+        <button class="btn btn-ghost btn-sm" id="excl-add-btn">＋</button>
+      </div>
+      <div class="excl-presets" id="excl-presets"></div>
+    </div>
+
     <!-- Totals -->
     <div class="qe-totals-panel" id="qe-totals-panel"></div>
   `;
 
-  // Build preset buttons
-  const matPresets = document.getElementById('mat-presets');
-  PRESET_MATERIALS.forEach(p => {
-    const btn = document.createElement('button');
-    btn.className = 'preset-btn';
-    btn.innerHTML = `${escHtml(p.name)}${p.price ? ` <span class="rate">€${p.price}</span>` : ''}`;
-    btn.onclick = () => { qe.materials.push({ name: p.name, quantity: 1, unit: p.unit, unit_price: p.price }); renderMatTable(); updateTotals(); };
-    matPresets.appendChild(btn);
-  });
-
-  const svcPresets = document.getElementById('svc-presets');
-  PRESET_SERVICES.forEach(p => {
-    const btn = document.createElement('button');
-    btn.className = 'preset-btn';
-    btn.innerHTML = `${escHtml(p.name)} <span class="rate">€${p.rate}/u</span>`;
-    btn.onclick = () => { qe.services.push({ name: p.name, quantity: 1, unit: 'uur', unit_price: p.rate }); renderSvcTable(); updateTotals(); };
-    svcPresets.appendChild(btn);
-  });
+  // Wire preset dropdown menus
+  wirePresetMenus();
 
   // Wire live-field changes (header fields)
   document.getElementById('qe-name').addEventListener('input',   e => { qe.name = e.target.value; document.getElementById('toolbar-title').textContent = qe.name || 'Nieuwe offerte'; });
@@ -3163,11 +3625,31 @@ function renderQuoteEditorView() {
   document.getElementById('qe-date').addEventListener('change',   e => qe.quote_date = e.target.value);
   document.getElementById('qe-status').addEventListener('change', e => qe.status = e.target.value);
   document.getElementById('qe-notes').addEventListener('input',   e => qe.notes = e.target.value);
-  document.getElementById('qe-margin').addEventListener('input',  e => { qe.margin = parseFloat(e.target.value) || 0; updateTotals(); });
+  document.getElementById('qe-margin').addEventListener('focus',  e => e.target.select());
+  document.getElementById('qe-margin').addEventListener('input',  e => {
+    qe.margin = parseFloat(e.target.value) || 0;
+    // Refresh placeholders on per-item margin fields that have no override
+    document.querySelectorAll('.qi-margin').forEach(inp => { inp.placeholder = qe.margin; });
+    updateTotals();
+  });
+
+  // Image change / add wiring
+  const qeFileInput = document.getElementById('qe-file-input');
+  qeFileInput.addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => { qe.image_data = ev.target.result; renderQuoteEditorView(); };
+    reader.readAsDataURL(file);
+  });
+  document.getElementById('qe-img-change-btn')?.addEventListener('click', () => qeFileInput.click());
+  document.getElementById('qe-img-add-btn')?.addEventListener('click',    () => qeFileInput.click());
 
   renderMatTable();
   renderSvcTable();
+  wireExclusions();
   updateTotals();
+  updateChecklistBadge();
 }
 
 // ─── Render sub-tables ────────────────────────────────────────────────────────
@@ -3177,16 +3659,18 @@ function renderMatTable() {
   if (!tbody) return;
 
   tbody.innerHTML = qe.materials.map((m, i) => `
-    <tr data-idx="${i}">
+    <tr draggable="true" data-idx="${i}">
+      <td class="drag-handle" title="Versleep">⠿</td>
       <td><input class="qi-input" data-t="mat" data-i="${i}" data-f="name"       value="${escHtml(m.name)}"       placeholder="Omschrijving" /></td>
       <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="quantity"  value="${m.quantity}"  type="number" min="0" step="any" /></td>
-      <td><input class="qi-input" data-t="mat" data-i="${i}" data-f="unit"       value="${escHtml(m.unit)}"  placeholder="m²" /></td>
+      <td><input class="qi-input num qi-margin" data-t="mat" data-i="${i}" data-f="margin" value="${m.margin ?? ''}" type="number" min="0" max="500" step="1" placeholder="${qe.margin}" title="Marge % (leeg = globaal ${qe.margin}%)" /></td>
       <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="unit_price" value="${m.unit_price}" type="number" min="0" step="any" /></td>
       <td class="num" id="mat-row-total-${i}">${fmtEur(m.quantity * m.unit_price)}</td>
       <td><button class="qi-del" data-t="mat" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="6" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="7" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('mat');
+  wireDragDrop('mat');
   updateMatSubtotals();
 }
 
@@ -3195,15 +3679,17 @@ function renderSvcTable() {
   if (!tbody) return;
 
   tbody.innerHTML = qe.services.map((s, i) => `
-    <tr data-idx="${i}">
+    <tr draggable="true" data-idx="${i}">
+      <td class="drag-handle" title="Versleep">⠿</td>
       <td><input class="qi-input" data-t="svc" data-i="${i}" data-f="name"       value="${escHtml(s.name)}"      placeholder="Dienst" /></td>
       <td><input class="qi-input num" data-t="svc" data-i="${i}" data-f="quantity"  value="${s.quantity}" type="number" min="0" step="0.5" /></td>
       <td class="num"><input class="qi-input num" data-t="svc" data-i="${i}" data-f="unit_price" value="${s.unit_price}" type="number" min="0" step="any" /></td>
       <td class="num" id="svc-row-total-${i}">${fmtEur(s.quantity * s.unit_price)}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="6" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('svc');
+  wireDragDrop('svc');
 }
 
 function wireTableInputs(type) {
@@ -3211,12 +3697,19 @@ function wireTableInputs(type) {
   if (!tbody) return;
 
   tbody.querySelectorAll('.qi-input').forEach(inp => {
+    if (inp.type === 'number') inp.addEventListener('focus', () => inp.select());
     inp.addEventListener('input', () => {
       const i = parseInt(inp.dataset.i);
       const field = inp.dataset.f;
       const arr = type === 'mat' ? qe.materials : qe.services;
       if (!arr[i]) return;
-      arr[i][field] = (field === 'name' || field === 'unit') ? inp.value : (parseFloat(inp.value) || 0);
+      if (field === 'name' || field === 'unit') {
+        arr[i][field] = inp.value;
+      } else if (field === 'margin') {
+        arr[i][field] = inp.value === '' ? null : (parseFloat(inp.value) ?? null);
+      } else {
+        arr[i][field] = parseFloat(inp.value) || 0;
+      }
       // Update just the row total cell
       const rowTotal = document.getElementById(`${type}-row-total-${i}`);
       if (rowTotal) rowTotal.textContent = fmtEur(arr[i].quantity * arr[i].unit_price);
@@ -3235,21 +3728,222 @@ function wireTableInputs(type) {
   });
 }
 
+// ─── Drag & Drop ──────────────────────────────────────────────────────────────
+
+let _dragSrcIdx = null;
+let _dragType   = null;
+
+function wireDragDrop(type) {
+  const tbody = document.getElementById(type === 'mat' ? 'mat-tbody' : 'svc-tbody');
+  if (!tbody) return;
+  tbody.querySelectorAll('tr[draggable]').forEach(row => {
+    row.addEventListener('dragstart', e => {
+      _dragSrcIdx = parseInt(row.dataset.idx);
+      _dragType   = type;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => row.classList.add('dragging'), 0);
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      tbody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+    });
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      tbody.querySelectorAll('tr').forEach(r => r.classList.remove('drag-over'));
+      row.classList.add('drag-over');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      if (_dragType !== type || _dragSrcIdx === null) return;
+      const tgtIdx = parseInt(row.dataset.idx);
+      if (_dragSrcIdx === tgtIdx) return;
+      const arr = type === 'mat' ? qe.materials : qe.services;
+      const [moved] = arr.splice(_dragSrcIdx, 1);
+      arr.splice(tgtIdx, 0, moved);
+      _dragSrcIdx = null;
+      if (type === 'mat') { renderMatTable(); updateTotals(); }
+      else { renderSvcTable(); updateTotals(); }
+    });
+  });
+}
+
+// ─── Preset Dropdown Menus ────────────────────────────────────────────────────
+
+function wirePresetMenus() {
+  _wirePresetMenu('mat', PRESET_MATERIALS,
+    p    => { qe.materials.push({ name: p.name, quantity: 1, unit: p.unit, unit_price: p.price, margin: null }); renderMatTable(); updateTotals(); },
+    name => { qe.materials.push({ name: name || '', quantity: 1, unit: 'st', unit_price: 0, margin: null }); renderMatTable(); updateTotals(); }
+  );
+  _wirePresetMenu('svc', PRESET_SERVICES,
+    p    => { qe.services.push({ name: p.name, quantity: 1, unit: 'uur', unit_price: p.rate }); renderSvcTable(); updateTotals(); },
+    name => { qe.services.push({ name: name || '', quantity: 1, unit: 'uur', unit_price: 0 }); renderSvcTable(); updateTotals(); }
+  );
+}
+
+function _wirePresetMenu(type, presets, onAdd, onEmpty) {
+  const addBtn   = document.getElementById(`${type}-add-btn`);
+  const menu     = document.getElementById(`${type}-preset-menu`);
+  const search   = document.getElementById(`${type}-preset-search`);
+  const list     = document.getElementById(`${type}-preset-list`);
+  const emptyBtn = document.getElementById(`${type}-empty-btn`);
+  if (!addBtn || !menu) return;
+
+  const renderList = (filter = '') => {
+    const lc = filter.trim().toLowerCase();
+    const groups = {};
+    presets.forEach(p => {
+      if (lc && !p.name.toLowerCase().includes(lc)) return;
+      const cat = p.category || 'Overig';
+      (groups[cat] = groups[cat] || []).push(p);
+    });
+    const entries = Object.entries(groups);
+
+    // "Aanmaken: [naam]" row when search text matches nothing exactly
+    const exactMatch = presets.some(p => p.name.toLowerCase() === lc);
+    const customRow = (filter.trim() && !exactMatch) ? `
+      <div class="preset-item preset-item--custom" data-custom="${escHtml(filter.trim())}">
+        <span>＋ Aanmaken: <strong>${escHtml(filter.trim())}</strong></span>
+      </div>` : '';
+
+    list.innerHTML = customRow + (entries.length ? entries.map(([cat, items]) => `
+      <div class="preset-group">
+        <div class="preset-group-label">${cat}</div>
+        ${items.map(p => `
+          <div class="preset-item" data-name="${escHtml(p.name)}">
+            <span>${escHtml(p.name)}</span>
+            <span class="preset-item-meta">${p.rate != null ? `€${p.rate}/u` : p.unit}</span>
+          </div>`).join('')}
+      </div>`).join('')
+      : (!filter.trim() ? `<div class="preset-no-results">Geen resultaten</div>` : ''));
+
+    list.querySelectorAll('.preset-item[data-name]').forEach(item => {
+      item.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const p = presets.find(x => x.name === item.dataset.name);
+        if (p) onAdd(p);
+        closeAllPresetMenus();
+      });
+    });
+    list.querySelectorAll('.preset-item--custom').forEach(item => {
+      item.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const name = item.dataset.custom;
+        onEmpty(name);  // pass name to create a pre-filled empty row
+        closeAllPresetMenus();
+      });
+    });
+  };
+
+  addBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    const isOpen = !menu.classList.contains('hidden');
+    closeAllPresetMenus();
+    if (!isOpen) {
+      menu.classList.remove('hidden');
+      search.value = '';
+      renderList();
+      search.focus();
+    }
+  });
+
+  search.addEventListener('input', () => renderList(search.value));
+  search.addEventListener('keydown', e => { if (e.key === 'Escape') closeAllPresetMenus(); });
+  emptyBtn.addEventListener('mousedown', e => { e.preventDefault(); onEmpty(''); closeAllPresetMenus(); });
+}
+
+function closeAllPresetMenus() {
+  ['mat', 'svc'].forEach(t => document.getElementById(`${t}-preset-menu`)?.classList.add('hidden'));
+}
+
+// ─── Exclusions ───────────────────────────────────────────────────────────────
+
+const DEFAULT_EXCLUSIONS = [
+  'Transportkosten',
+  'Parkeerkosten',
+  'Meerwerk buiten scope',
+  'Stickerwerk / belettering',
+  'Aanlevering 3D-bestanden door klant',
+  'Hef- of kraankosten',
+  'Vergunningen',
+  'Opslag na levering',
+  'Elektra / stroom op locatie',
+  'Ontwerp­aanpassingen na goedkeuring',
+];
+
+function renderExclusions() {
+  const list = document.getElementById('excl-list');
+  if (!list) return;
+
+  list.innerHTML = qe.exclusions.map((ex, i) => `
+    <div class="excl-item" data-idx="${i}">
+      <span class="excl-text">${escHtml(ex)}</span>
+      <button class="excl-del" data-i="${i}" title="Verwijder">✕</button>
+    </div>`).join('');
+
+  list.querySelectorAll('.excl-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      qe.exclusions.splice(parseInt(btn.dataset.i), 1);
+      renderExclusions();
+    });
+  });
+
+  // Preset suggestions: only show those not yet added
+  const presets = document.getElementById('excl-presets');
+  if (!presets) return;
+  const added = new Set(qe.exclusions.map(e => e.toLowerCase()));
+  const available = PRESET_EXCLUSIONS.filter(e => !added.has(e.toLowerCase()));
+
+  presets.innerHTML = available.length
+    ? available.map(e => `<button class="excl-suggest-btn" data-val="${escHtml(e)}">${escHtml(e)}</button>`).join('')
+    : '';
+
+  presets.querySelectorAll('.excl-suggest-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      qe.exclusions.push(btn.dataset.val);
+      renderExclusions();
+    });
+  });
+}
+
+function wireExclusions() {
+  const input = document.getElementById('excl-new-input');
+  const addBtn = document.getElementById('excl-add-btn');
+  if (!input || !addBtn) return;
+
+  const addExcl = () => {
+    const val = input.value.trim();
+    if (!val) return;
+    qe.exclusions.push(val);
+    input.value = '';
+    renderExclusions();
+  };
+
+  addBtn.addEventListener('click', addExcl);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addExcl(); } });
+  renderExclusions();
+}
+
 // ─── Calculations ─────────────────────────────────────────────────────────────
 
-function calcQuoteTotals(items, margin) {
+function calcQuoteTotals(items, globalMargin) {
   const matItems = items.filter(i => i.type === 'material');
   const svcItems = items.filter(i => i.type === 'service');
-  const marginPct = parseFloat(margin) || 20;
+  const globalMarginPct = parseFloat(globalMargin) || 20;
 
-  const matEx      = matItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
-  const matMargin  = matEx * (marginPct / 100);
-  const matTotal   = matEx + matMargin;
-  const svcTotal   = svcItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
-  const subtotal   = matTotal + svcTotal;
-  const btw        = subtotal * 0.21;
+  const matEx = matItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
+  const matTotal = matItems.reduce((s, i) => {
+    const pct = (i.margin != null && i.margin !== '') ? parseFloat(i.margin) : globalMarginPct;
+    return s + (i.quantity * i.unit_price * (1 + pct / 100));
+  }, 0);
+  const matMargin = matTotal - matEx;
+  const svcTotal = svcItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
+  const subtotal = matTotal + svcTotal;
+  const btw = subtotal * 0.21;
   const grandTotal = subtotal + btw;
-  return { matEx, matMargin, matTotal, svcTotal, subtotal, btw, grandTotal, marginPct };
+  return { matEx, matMargin, matTotal, svcTotal, subtotal, btw, grandTotal, marginPct: globalMarginPct };
 }
 
 function calcQETotals() {
@@ -3260,13 +3954,19 @@ function calcQETotals() {
   return calcQuoteTotals(allItems, qe.margin);
 }
 
+function margeLabel(marginPct) {
+  // Only show % when all materials use the same (global) margin
+  const hasOverride = qe?.materials?.some(m => m.margin != null && m.margin !== '' && parseFloat(m.margin) !== marginPct);
+  return hasOverride ? 'Marge' : `Marge (${marginPct}%)`;
+}
+
 function updateMatSubtotals() {
   const el = document.getElementById('mat-subtotals');
   if (!el || !qe) return;
   const t = calcQETotals();
   el.innerHTML = `
     <div class="row"><span>Subtotaal materialen</span><span>${fmtEur(t.matEx)}</span></div>
-    <div class="row"><span>Marge (${t.marginPct}%)</span><span>+ ${fmtEur(t.matMargin)}</span></div>
+    <div class="row"><span>${margeLabel(t.marginPct)}</span><span>+ ${fmtEur(t.matMargin)}</span></div>
     <div class="row bold"><span>Totaal materialen</span><span>${fmtEur(t.matTotal)}</span></div>`;
 }
 
@@ -3277,7 +3977,7 @@ function updateTotals() {
   const t = calcQETotals();
   el.innerHTML = `
     <div class="qt-row"><span class="qt-label">Materialen (excl. marge)</span><span class="qt-val">${fmtEur(t.matEx)}</span></div>
-    <div class="qt-row"><span class="qt-label">Marge (${t.marginPct}%)</span><span class="qt-val">+ ${fmtEur(t.matMargin)}</span></div>
+    <div class="qt-row"><span class="qt-label">${margeLabel(t.marginPct)}</span><span class="qt-val">+ ${fmtEur(t.matMargin)}</span></div>
     <div class="qt-row"><span class="qt-label">Totaal materialen</span><span class="qt-val">${fmtEur(t.matTotal)}</span></div>
     <div class="qt-row"><span class="qt-label">Totaal diensten</span><span class="qt-val">${fmtEur(t.svcTotal)}</span></div>
     <div class="qt-divider"></div>
@@ -3289,42 +3989,121 @@ function updateTotals() {
 
 // ─── Save / Delete Quote ──────────────────────────────────────────────────────
 
+// ─── Checklist items — voeg hier nieuwe punten toe ───────────────────────────
+const SAVE_CHECKLIST = [
+  'Is duidelijk of transport inbegrepen is of niet?',
+  'Is duidelijk dat de offerte gebaseerd is op een 3D-model aangeleverd door de klant?',
+  'Is duidelijk dat wij alleen de basiskleur schilderen en stickerwerk voor rekening van de klant is?',
+];
+
+function openSaveChecklist(onConfirm) {
+  const container = document.getElementById('checklist-items');
+  container.innerHTML = SAVE_CHECKLIST.map((item, i) => `
+    <div class="checklist-item" data-idx="${i}">
+      <input type="checkbox" id="clcb-${i}" class="cl-cb" />
+      <label for="clcb-${i}">${escHtml(item)}</label>
+    </div>`).join('');
+
+  const confirmBtn = document.getElementById('checklist-confirm');
+  confirmBtn.disabled = true;
+
+  const updateConfirm = () => {
+    const allChecked = [...container.querySelectorAll('.cl-cb')].every(c => c.checked);
+    confirmBtn.disabled = !allChecked;
+  };
+
+  container.querySelectorAll('.checklist-item').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.tagName === 'INPUT') return;
+      const cb = row.querySelector('.cl-cb');
+      cb.checked = !cb.checked;
+      row.classList.toggle('checked', cb.checked);
+      updateConfirm();
+    });
+  });
+  container.querySelectorAll('.cl-cb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      cb.closest('.checklist-item').classList.toggle('checked', cb.checked);
+      updateConfirm();
+    });
+  });
+
+  document.getElementById('checklist-cancel').onclick = () =>
+    document.getElementById('checklist-overlay').classList.add('hidden');
+
+  document.getElementById('checklist-confirm').onclick = () => {
+    document.getElementById('checklist-overlay').classList.add('hidden');
+    onConfirm();
+  };
+
+  document.getElementById('checklist-overlay').classList.remove('hidden');
+}
+
 async function saveQuote() {
   if (!qe.name.trim()) { shake(document.getElementById('qe-name')); toast('Vul een projectnaam in'); return; }
+  if (qe.checklist_done) {
+    performSave();
+  } else {
+    openSaveChecklist(() => { qe.checklist_done = true; updateChecklistBadge(); performSave(); });
+  }
+}
 
+function updateChecklistBadge() {
+  const btn = document.getElementById('qe-save-btn');
+  if (!btn) return;
+  btn.title = qe.checklist_done ? '✓ Controlelijst afgerond' : '';
+  // Small dot indicator on save button
+  let dot = btn.querySelector('.checklist-dot');
+  if (qe.checklist_done && !dot) {
+    dot = document.createElement('span');
+    dot.className = 'checklist-dot';
+    dot.title = 'Controlelijst afgerond';
+    btn.appendChild(dot);
+  } else if (!qe.checklist_done && dot) {
+    dot.remove();
+  }
+}
+
+async function performSave() {
   const quoteData = {
     name: qe.name.trim(), client: qe.client.trim(), quote_date: qe.quote_date,
     margin: qe.margin, status: qe.status, notes: qe.notes.trim(),
     created_by: state.config?.name || '',
   };
 
-  let quoteId = qe.id;
-  if (quoteId) {
-    await remoteQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
-    await remoteQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
-  } else {
-    const res = await remoteQuery({ action: 'insert', table: 'quotes', data: quoteData });
-    quoteId = res.id;
-    qe.id = quoteId;
+  try {
+    let quoteId = qe.id;
+    if (quoteId) {
+      await remoteQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
+      await remoteQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
+    } else {
+      const res = await remoteQuery({ action: 'insert', table: 'quotes', data: quoteData });
+      quoteId = res.id;
+      qe.id = quoteId;
+    }
+    // Store image locally (Pi DB may not have image_data column yet)
+    if (quoteId) {
+      if (qe.image_data) localStorage.setItem('qimg_' + quoteId, qe.image_data);
+      else localStorage.removeItem('qimg_' + quoteId);
+    }
+
+    const allItems = [
+      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i })),
+      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i })),
+      ...qe.exclusions.map((ex, i) => ({ quote_id: quoteId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i })),
+    ];
+    for (const item of allItems) {
+      await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
+    }
+
+    const delBtn = document.getElementById('qe-delete-btn');
+    if (delBtn) delBtn.style.display = '';
+
+    toast('Offerte opgeslagen');
+  } catch (err) {
+    toast('Opslaan mislukt: ' + (err.message || err), 'error', 4000);
+    console.error('saveQuote error:', err);
   }
-
-  const allItems = [
-    ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit, unit_price: m.unit_price, sort_order: i })),
-    ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price,  sort_order: i })),
-  ];
-  for (const item of allItems) {
-    await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
-  }
-
-  // Reload to get server-generated ids on items
-  const saved = await remoteQuery({ action: 'select', table: 'quotes', where: { id: quoteId } });
-  if (saved[0]) { qe.id = saved[0].id; }
-
-  // Show delete button now that it's saved
-  const delBtn = document.getElementById('qe-delete-btn');
-  if (delBtn) delBtn.style.display = '';
-
-  toast('Offerte opgeslagen');
 }
 
 async function deleteQuote() {
@@ -3338,124 +4117,276 @@ async function deleteQuote() {
 
 // ─── PDF Export ───────────────────────────────────────────────────────────────
 
+const COMPANY = {
+  name:    'Studio Vonk &amp; Vorm',
+  address: 'Haarlemerstraatweg 79 · 1165MK Halfweg',
+  email:   'info@vonkenvorm.com',
+  kvk:     'KvK 99307294',
+  btw:     'BTW NL868926176B01',
+  iban:    'NL60 BUNQ 2180 4804 15',
+  tel:     'George 06-11772820 · Maurits 06-15000229',
+};
+
+function buildQuoteNum(id, dateStr) {
+  const d = dateStr ? new Date(dateStr) : new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `O-${y}${m}${day}-${String(id).padStart(4, '0')}`;
+}
+
 async function exportQuotePdf() {
+  try {
   if (!qe.id) {
-    await saveQuote();
-    if (!qe.id) return;
+    await performSave();
+    if (!qe.id) { toast('Sla de offerte eerst op', 'error'); return; }
   }
 
-  const logoDataUrl = await api.getLogoDataUrl();
+  const logoDataUrl = await api.getLogoDataUrl().catch(() => null);
   const t = calcQETotals();
-  const quoteNum = `Q-${String(qe.id).padStart(4, '0')}`;
+  const quoteNum = buildQuoteNum(qe.id, qe.quote_date);
   const dateFmt = qe.quote_date
     ? new Date(qe.quote_date).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' })
     : '';
 
-  const matRows = qe.materials.map(m => `
+  const companyFooter = `
+    <div style="font-weight:600;margin-bottom:3px">${COMPANY.name}</div>
+    <div>${COMPANY.address}</div>
+    <div>${COMPANY.email} · ${COMPANY.kvk} · ${COMPANY.btw}</div>
+    <div>${COMPANY.iban} · ${COMPANY.tel}</div>`;
+
+  const matRows = qe.materials.map(m => {
+    const effectivePct = (m.margin != null && m.margin !== '') ? parseFloat(m.margin) : t.marginPct;
+    const displayPrice = m.unit_price * (1 + effectivePct / 100);
+    return `
     <tr>
       <td>${escHtml(m.name)}</td>
-      <td style="text-align:right">${m.quantity}</td>
-      <td>${escHtml(m.unit)}</td>
-      <td style="text-align:right">${fmtEur(m.unit_price)}</td>
-      <td style="text-align:right">${fmtEur(m.quantity * m.unit_price)}</td>
-    </tr>`).join('');
+      <td class="r">${m.quantity}</td>
+      <td class="r">${fmtEur(displayPrice)}</td>
+      <td class="r">${fmtEur(m.quantity * displayPrice)}</td>
+    </tr>`;
+  }).join('');
 
   const svcRows = qe.services.map(s => `
     <tr>
       <td>${escHtml(s.name)}</td>
-      <td style="text-align:right">${s.quantity}</td>
-      <td style="text-align:right">${fmtEur(s.unit_price)}/u</td>
-      <td style="text-align:right">${fmtEur(s.quantity * s.unit_price)}</td>
+      <td class="r">${s.quantity} u</td>
+      <td class="r">${fmtEur(s.unit_price)}/u</td>
+      <td class="r">${fmtEur(s.quantity * s.unit_price)}</td>
     </tr>`).join('');
+
+  const accent  = '#13ABBD';
+  const accentD = '#0D8B9B';
+  const bgTint  = '#f0f9fb';
+  const thBg    = '#e2f4f7';
 
   const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8">
 <style>
+  @page { size: A4; margin: 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a2e; font-size: 12px; padding: 48px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; }
-  .logo-area img { max-height: 72px; max-width: 220px; }
-  .logo-area .company-name { font-size: 22px; font-weight: 700; color: #4f8ef7; }
-  .quote-meta { text-align: right; line-height: 1.8; }
-  .quote-meta .title { font-size: 26px; font-weight: 700; color: #1a1a2e; letter-spacing: 1px; }
-  .quote-meta .num { font-size: 14px; color: #4f8ef7; font-weight: 600; }
-  .client-block { background: #f5f7ff; border-left: 4px solid #4f8ef7; padding: 12px 16px; margin-bottom: 32px; border-radius: 0 6px 6px 0; }
-  .client-block .label { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: #888; }
-  .client-block .val { font-size: 14px; font-weight: 600; margin-top: 2px; }
-  h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #4f8ef7; margin: 24px 0 8px; }
-  table { width: 100%; border-collapse: collapse; }
-  th { background: #f0f4ff; padding: 7px 10px; text-align: left; font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: .4px; }
-  td { padding: 7px 10px; border-bottom: 1px solid #eee; }
-  .subtotals { margin-top: 6px; }
-  .subtotals tr td { border: none; padding: 3px 10px; color: #555; }
-  .subtotals tr.bold td { font-weight: 600; color: #1a1a2e; }
-  .totals-box { margin-top: 28px; border: 2px solid #4f8ef7; border-radius: 8px; overflow: hidden; }
-  .totals-box table { margin: 0; }
-  .totals-box th { background: #4f8ef7; color: #fff; letter-spacing: .5px; }
-  .totals-box td { padding: 8px 14px; }
-  .totals-box .row-final td { font-size: 15px; font-weight: 700; background: #f0f4ff; color: #1a1a2e; }
-  .totals-box .row-btw td { color: #555; }
-  .notes { margin-top: 32px; padding: 12px 14px; background: #fafafa; border: 1px solid #eee; border-radius: 6px; }
-  .notes .label { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: #888; margin-bottom: 6px; }
-  .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #eee; font-size: 10px; color: #aaa; text-align: center; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* ── Pagina 1: Titelblad ── */
+  .title-page {
+    width: 210mm; height: 297mm;
+    background: #ffffff;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    position: relative;
+    break-after: page; page-break-after: always;
+  }
+  .title-content {
+    display: flex; flex-direction: column; align-items: center;
+    margin-top: -18mm;
+  }
+  .title-logo-wrap {
+    display: flex; flex-direction: column; align-items: center;
+    margin-bottom: 28px;
+  }
+  .title-logo-wrap img { max-width: 300px; max-height: 160px; object-fit: contain; }
+  .title-wordmark { font-size: 32px; font-weight: 300; letter-spacing: 8px; color: #1c1917; text-transform: uppercase; }
+  .title-divider { width: 40px; height: 2px; background: ${accent}; margin: 12px auto; }
+  .title-quote-label { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: #bbb; }
+  .title-client-block { margin-top: 0; text-align: center; }
+  .title-client-block .for { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #ccc; margin-bottom: 6px; }
+  .title-client-block .cname { font-size: 22px; font-weight: 300; color: #1c1917; margin-bottom: 4px; }
+  .title-client-block .pname { font-size: 13px; color: #999; }
+  .title-project-img {
+    margin-top: 24px;
+    width: 150mm;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .title-project-img img { max-width: 100%; max-height: 72mm; object-fit: contain; border-radius: 6px; }
+  .title-footer {
+    position: absolute; bottom: 18mm; left: 20mm; right: 20mm;
+    text-align: center;
+    font-size: 8px; line-height: 1.8;
+    color: #ccc;
+    border-top: 1px solid #eee;
+    padding-top: 10px;
+  }
+
+  /* ── Pagina 2: Offerte ── */
+  .quote-page {
+    width: 210mm; min-height: 297mm;
+    background: #fff;
+    display: flex; flex-direction: column;
+    padding: 18mm 18mm 0;
+  }
+  .quote-body { flex: 1; }
+  .qp-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10mm; }
+  .qp-logo img { max-height: 48px; max-width: 160px; }
+  .qp-logo .wordmark { font-size: 16px; font-weight: 600; color: ${accent}; }
+  .qp-meta { text-align: right; }
+  .qp-meta .title { font-size: 22px; font-weight: 700; color: #1c1917; letter-spacing: .5px; }
+  .qp-meta .num { font-size: 11px; color: ${accent}; font-weight: 600; margin-top: 2px; }
+  .qp-meta .date { font-size: 10px; color: #999; margin-top: 2px; }
+  .client-block {
+    background: ${bgTint}; border-left: 3px solid ${accent};
+    padding: 8px 14px; margin-bottom: 8mm; border-radius: 0 4px 4px 0;
+  }
+  .client-block .lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 3px; }
+  .client-block .val { font-size: 13px; font-weight: 600; color: #1c1917; }
+  .client-block .proj { font-size: 11px; color: #666; margin-top: 2px; }
+  h3 { font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px; color: ${accentD}; margin: 6mm 0 2mm; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th { background: ${thBg}; padding: 6px 8px; text-align: left; font-size: 9px; color: #4a8f9a; text-transform: uppercase; letter-spacing: .4px; }
+  th.r { text-align: right; }
+  td { padding: 6px 8px; border-bottom: 1px solid #eaf5f7; color: #2a2520; }
+  td.r { text-align: right; }
+  .subtotals td { border: none; padding: 2px 8px; font-size: 10px; color: #888; }
+  .subtotals tr.bold td { color: #1c1917; font-weight: 600; }
+  .totals-box { margin-top: 6mm; border: 1.5px solid ${accent}; border-radius: 6px; overflow: hidden; }
+  .totals-box th { background: ${accent}; color: #fff; }
+  .totals-box td { padding: 6px 12px; border-bottom: 1px solid #eaf5f7; }
+  .totals-box .row-final td { font-size: 13px; font-weight: 700; background: ${bgTint}; border-bottom: none; }
+  .totals-box .row-btw td { color: #888; font-size: 10px; }
+  .excl-block { margin-top: 6mm; }
+  .excl-block .lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
+  .excl-pdf-list { margin: 0; padding: 0 0 0 5mm; font-size: 10px; color: #666; line-height: 1.8; }
+  .excl-pdf-list li { padding-left: 2px; }
+  .notes-block { margin-top: 6mm; padding: 8px 12px; background: ${bgTint}; border-radius: 4px; font-size: 10px; color: #666; line-height: 1.6; }
+  .notes-block .lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
+  .quote-footer {
+    margin-top: 10mm;
+    padding: 5mm 0 12mm;
+    border-top: 1px solid #d8eff3;
+  }
+  .quote-footer .validity {
+    font-size: 9px; color: #888; text-align: center; margin-bottom: 5mm; line-height: 1.6;
+    font-style: italic;
+  }
+  .quote-footer .company {
+    font-size: 8px; color: #bbb; text-align: center; line-height: 1.9;
+  }
+  .quote-footer .company strong { color: #999; font-weight: 600; }
 </style>
 </head><body>
 
-<div class="header">
-  <div class="logo-area">
-    ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Logo" />` : `<div class="company-name">Vonk &amp; Vorm</div>`}
+<!-- ── Pagina 1: Titelblad ── -->
+<div class="title-page">
+  <div class="title-content">
+    <div class="title-logo-wrap">
+      ${logoDataUrl
+        ? `<img src="${logoDataUrl}" alt="Studio Vonk &amp; Vorm" />`
+        : `<div class="title-wordmark">Vonk &amp; Vorm</div>`}
+    </div>
+    <div class="title-divider"></div>
+    <div class="title-quote-label">Offerte</div>
+    <div style="height:16px"></div>
+    <div class="title-client-block">
+      <div class="for">Opgesteld voor</div>
+      <div class="cname">${escHtml(qe.client || '—')}</div>
+      <div class="pname">${escHtml(qe.name)}</div>
+    </div>
+    ${qe.image_data ? `<div class="title-project-img"><img src="${qe.image_data}" alt="Projectafbeelding" /></div>` : ''}
   </div>
-  <div class="quote-meta">
-    <div class="title">OFFERTE</div>
-    <div class="num">${quoteNum}</div>
-    <div style="color:#888;margin-top:4px">${dateFmt}</div>
+  <div class="title-footer">
+    ${COMPANY.name} · ${COMPANY.address}<br>
+    ${COMPANY.email} · ${COMPANY.kvk} · ${COMPANY.btw}<br>
+    ${COMPANY.iban} · ${COMPANY.tel}
   </div>
 </div>
 
-<div class="client-block">
-  <div class="label">Klant &amp; Project</div>
-  <div class="val">${escHtml(qe.client || '—')}</div>
-  <div style="margin-top:2px;color:#555">${escHtml(qe.name)}</div>
+<!-- ── Pagina 2: Offerte ── -->
+<div class="quote-page">
+  <div class="quote-body">
+    <div class="qp-header">
+      <div class="qp-logo">
+        ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Logo" />` : `<div class="wordmark">Vonk &amp; Vorm</div>`}
+      </div>
+      <div class="qp-meta">
+        <div class="title">OFFERTE</div>
+        <div class="num">${quoteNum}</div>
+        <div class="date">${dateFmt}</div>
+      </div>
+    </div>
+
+    <div class="client-block">
+      <div class="lbl">Klant &amp; Project</div>
+      <div class="val">${escHtml(qe.client || '—')}</div>
+      <div class="proj">${escHtml(qe.name)}</div>
+    </div>
+
+    ${qe.materials.length > 0 ? `
+    <h3>Materialen</h3>
+    <table>
+      <thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Stukprijs</th><th class="r" style="width:17%">Totaal</th></tr></thead>
+      <tbody>${matRows}</tbody>
+    </table>
+    ` : ''}
+
+    ${qe.services.length > 0 ? `
+    <h3>Diensten</h3>
+    <table>
+      <thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Uren</th><th class="r" style="width:17%">Tarief/u</th><th class="r" style="width:17%">Totaal</th></tr></thead>
+      <tbody>${svcRows}</tbody>
+    </table>` : ''}
+
+    <div class="totals-box">
+      <table>
+        <thead><tr><th colspan="2">Totaaloverzicht</th></tr></thead>
+        <tbody>
+          ${qe.materials.length > 0 ? `<tr><td>Totaal materialen</td><td class="r">${fmtEur(t.matTotal)}</td></tr>` : ''}
+          ${qe.services.length > 0  ? `<tr><td>Totaal diensten</td><td class="r">${fmtEur(t.svcTotal)}</td></tr>` : ''}
+          <tr><td>Subtotaal excl. BTW</td><td class="r">${fmtEur(t.subtotal)}</td></tr>
+          <tr class="row-btw"><td>BTW (21%)</td><td class="r">+ ${fmtEur(t.btw)}</td></tr>
+          <tr class="row-final"><td>TOTAAL incl. BTW</td><td class="r">${fmtEur(t.grandTotal)}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    ${qe.exclusions.length > 0 ? `
+    <div class="excl-block">
+      <div class="lbl">Exclusief</div>
+      <ul class="excl-pdf-list">
+        ${qe.exclusions.map(ex => `<li>${escHtml(ex)}</li>`).join('')}
+      </ul>
+    </div>` : ''}
+
+    ${qe.notes ? `<div class="notes-block"><div class="lbl">Toelichting</div>${escHtml(qe.notes)}</div>` : ''}
+  </div>
+
+  <div class="quote-footer">
+    <div class="validity">
+      Deze offerte is 30 dagen geldig na dagtekening. &nbsp;·&nbsp; Levertijd in overleg.
+    </div>
+    <div class="company">
+      <strong>${COMPANY.name}</strong><br>
+      ${COMPANY.address}<br>
+      ${COMPANY.email} &nbsp;·&nbsp; ${COMPANY.kvk} &nbsp;·&nbsp; ${COMPANY.btw}<br>
+      ${COMPANY.iban} &nbsp;·&nbsp; ${COMPANY.tel}
+    </div>
+  </div>
 </div>
-
-${qe.materials.length > 0 ? `
-<h3>Materialen</h3>
-<table>
-  <thead><tr><th>Omschrijving</th><th style="text-align:right">Aantal</th><th>Eenheid</th><th style="text-align:right">Stukprijs</th><th style="text-align:right">Totaal</th></tr></thead>
-  <tbody>${matRows}</tbody>
-</table>
-<table class="subtotals">
-  <tr><td colspan="4">Subtotaal materialen</td><td style="text-align:right">${fmtEur(t.matEx)}</td></tr>
-  <tr><td colspan="4">Marge (${t.marginPct}%)</td><td style="text-align:right">+ ${fmtEur(t.matMargin)}</td></tr>
-  <tr class="bold"><td colspan="4">Totaal materialen</td><td style="text-align:right">${fmtEur(t.matTotal)}</td></tr>
-</table>` : ''}
-
-${qe.services.length > 0 ? `
-<h3>Diensten</h3>
-<table>
-  <thead><tr><th>Dienst</th><th style="text-align:right">Uren</th><th style="text-align:right">Tarief/uur</th><th style="text-align:right">Totaal</th></tr></thead>
-  <tbody>${svcRows}</tbody>
-</table>` : ''}
-
-<div class="totals-box">
-  <table>
-    <thead><tr><th colspan="2">Totaaloverzicht</th></tr></thead>
-    <tbody>
-      ${qe.materials.length > 0 ? `<tr><td>Totaal materialen (incl. marge)</td><td style="text-align:right">${fmtEur(t.matTotal)}</td></tr>` : ''}
-      ${qe.services.length > 0  ? `<tr><td>Totaal diensten</td><td style="text-align:right">${fmtEur(t.svcTotal)}</td></tr>` : ''}
-      <tr><td>Subtotaal excl. BTW</td><td style="text-align:right">${fmtEur(t.subtotal)}</td></tr>
-      <tr class="row-btw"><td>BTW (21%)</td><td style="text-align:right">+ ${fmtEur(t.btw)}</td></tr>
-      <tr class="row-final"><td>TOTAAL incl. BTW</td><td style="text-align:right">${fmtEur(t.grandTotal)}</td></tr>
-    </tbody>
-  </table>
-</div>
-
-${qe.notes ? `<div class="notes"><div class="label">Notities</div><div>${escHtml(qe.notes)}</div></div>` : ''}
-
-<div class="footer">Offerte ${quoteNum} · ${dateFmt} · Vonk &amp; Vorm</div>
 
 </body></html>`;
 
   await api.exportPdf(html, `${quoteNum}-${(qe.name || 'offerte').replace(/[^a-z0-9]/gi, '-')}.pdf`);
+  } catch (err) {
+    toast('PDF exporteren mislukt: ' + (err.message || err), 'error', 4000);
+    console.error('exportQuotePdf error:', err);
+  }
 }
 
 // ─── Quote helpers ────────────────────────────────────────────────────────────

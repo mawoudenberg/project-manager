@@ -6,10 +6,11 @@
 pip3 install flask
 ```
 
-## 2. Kopieer de server naar de Pi
+## 2. Kopieer de bestanden naar de Pi
 
 ```bash
-scp -r server/ vonk@100.80.1.96:/home/vonk/project-manager/
+rsync -av --exclude=node_modules --exclude=dist --exclude=.git \
+  /Users/maurits/project-manager/ vonk@100.80.1.96:/home/vonk/project-manager/
 ```
 
 ## 3. Start de server (test)
@@ -44,7 +45,11 @@ curl http://100.80.1.96:5000/api/health
 # → {"ok": true, "db": "/mnt/nas/shared/project-manager.db"}
 ```
 
-## 7. App instellen op de Macs
+## 7. Web access
+
+Open `http://100.80.1.96:5000` in any browser on the local network or via Tailscale.
+
+## 8. App instellen op de Macs
 
 Open de Project Manager app → Settings:
 - Database mode: **API (Raspberry Pi)**
