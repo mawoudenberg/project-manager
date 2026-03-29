@@ -396,7 +396,7 @@ function buildMonthGrid(year, month, todayStr) {
         const sBarBg = s.color || '#4f8ef7';
         html += `<div class="month-sbar" data-stage-id="${s.id}"
           style="left:${left}%;width:${width}%;top:${lane * 20 + 2}px;background:${sBarBg};color:${contrastColor(sBarBg)};border-radius:${br}"
-          title="${escHtml(label)}">${isStart ? escHtml(s.name) : ''}</div>`;
+          title="${escHtml(label)}">${isStart ? escHtml(label) : ''}</div>`;
       });
       html += `</div>`;
     } else {
@@ -624,9 +624,11 @@ function stagesForDate(dateStr, stages = visibleStages()) {
     const proj = state.projects.find(p => p.id === s.project_id);
     const projName = proj ? proj.name : '';
     if (s.start_date === dateStr) {
-      result.push({ ...s, isStage: true, stageEvent: s.end_date === dateStr ? 'both' : 'start', displayTitle: s.name, projName });
+      const displayTitle = projName ? `${projName} · ${s.name}` : s.name;
+      result.push({ ...s, isStage: true, stageEvent: s.end_date === dateStr ? 'both' : 'start', displayTitle, projName });
     } else if (s.end_date === dateStr) {
-      result.push({ ...s, isStage: true, stageEvent: 'end', displayTitle: s.name, projName });
+      const displayTitle = projName ? `${projName} · ${s.name}` : s.name;
+      result.push({ ...s, isStage: true, stageEvent: 'end', displayTitle, projName });
     }
   });
   return result;
@@ -642,7 +644,9 @@ function stagesActiveOnDate(dateStr) {
                   : s.start_date === dateStr ? 'start'
                   : s.end_date   === dateStr ? 'end'
                   : 'active';
-      return { ...s, isStage: true, stageEvent: event, displayTitle: s.name, projName: proj ? proj.name : '' };
+      const projName = proj ? proj.name : '';
+      const displayTitle = projName ? `${projName} · ${s.name}` : s.name;
+      return { ...s, isStage: true, stageEvent: event, displayTitle, projName };
     });
 }
 
