@@ -4568,13 +4568,24 @@ function initListeners() {
     document.body.appendChild(banner);
 
     document.getElementById('update-download-btn').onclick = () => {
+      const btn = document.getElementById('update-download-btn');
+      btn.textContent = 'Downloaden…';
+      btn.disabled = true;
       api.downloadUrl(url);
+
+      // Listen for download completion
+      if (api.onDownloadComplete) {
+        api.onDownloadComplete((filePath) => {
+          toast('Download voltooid: ' + filePath.split('/').pop());
+        });
+      }
+
       // Replace banner with install instructions
       banner.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:6px;flex:1">
           <span style="font-weight:600">📥 Installatie-instructies v${latest}</span>
           <ol style="margin:0;padding-left:18px;font-size:12px;color:var(--text);line-height:1.7">
-            <li>Wacht tot de download klaar is</li>
+            <li>Wacht tot de download klaar is (zie je Downloads map)</li>
             <li>Open het gedownloade <strong>.dmg</strong> bestand</li>
             <li>Sleep <strong>Project Manager</strong> naar je <strong>Applications</strong> map</li>
             <li>Open <strong>Terminal</strong> en plak de gekopieerde opdracht: <code style="background:var(--bg3);padding:1px 6px;border-radius:3px;user-select:all">${XATTR_CMD}</code></li>

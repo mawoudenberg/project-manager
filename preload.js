@@ -24,9 +24,10 @@ contextBridge.exposeInMainWorld('api', {
   getLogoDataUrl: () => ipcRenderer.invoke('logo:get'),
 
   // Auto-update
-  onUpdateAvailable: (cb)   => ipcRenderer.on('app:update-available', (_e, d) => cb(d)),
-  openUrl:           (url)  => ipcRenderer.invoke('app:open-url', url),
-  downloadUrl:       (url)  => ipcRenderer.invoke('app:download-url', url),
+  onUpdateAvailable:  (cb)  => ipcRenderer.on('app:update-available', (_e, d) => cb(d)),
+  onDownloadComplete: (cb)  => ipcRenderer.on('app:download-complete', (_e, p) => cb(p)),
+  openUrl:            (url) => ipcRenderer.invoke('app:open-url', url),
+  downloadUrl:        (url) => ipcRenderer.invoke('app:download-url', url),
 
   // DB sync (Google Drive changed the file)
   onDbChanged: (cb) => ipcRenderer.on('db:changed', () => cb()),

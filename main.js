@@ -204,6 +204,16 @@ ipcMain.handle('app:open-url', (_e, url) => {
 
 ipcMain.handle('app:download-url', (_e, url) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.session.once('will-download', (_ev, item) => {
+      const downloadsPath = app.getPath('downloads');
+      const filePath = path.join(downloadsPath, item.getFilename());
+      item.setSavePath(filePath);
+      item.once('done', (_e2, state) => {
+        if (state === 'completed' && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('app:download-complete', filePath);
+        }
+      });
+    });
     mainWindow.webContents.downloadURL(url);
   }
 });
