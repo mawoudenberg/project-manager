@@ -3330,19 +3330,36 @@ async function savePresets() {
 let qe = null;
 
 function freshQE(quote) {
+  const stored = quote?.id ? JSON.parse(localStorage.getItem('qextra_' + quote.id) || '{}') : {};
   return {
     id:         quote?.id         ?? null,
     name:       quote?.name       ?? '',
     client:     quote?.client     ?? '',
+    client_contact: stored.client_contact ?? '',
+    client_address: stored.client_address ?? '',
+    client_postcode: stored.client_postcode ?? '',
+    client_email: stored.client_email ?? '',
+    client_phone: stored.client_phone ?? '',
     quote_date: quote?.quote_date ?? toDateStr(new Date()),
     margin:     quote?.margin     ?? 20,
     status:     quote?.status     ?? 'draft',
     notes:      quote?.notes      ?? '',
     image_data:     quote?.image_data || (quote?.id ? localStorage.getItem('qimg_' + quote.id) : '') || '',
-    checklist_done: quote?.id ? true : false,  // existing quotes skip checklist
+    extra_images:   stored.extra_images ?? [],
+    checklist_done: quote?.id ? true : false,
     materials:  [],
     services:   [],
     exclusions: [],
+    // PDF options
+    pdf_opts: stored.pdf_opts ?? {
+      show_title_page: true,
+      show_project_image: true,
+      show_extra_images: true,
+      show_exclusions: true,
+      show_notes: true,
+      show_validity: true,
+      show_client_address: true,
+    },
   };
 }
 
@@ -3558,12 +3575,23 @@ function renderQuoteEditorView() {
     <button class="btn btn-ghost btn-sm" id="qe-back">← Offertes</button>
     <button class="btn btn-secondary btn-sm" id="qe-delete-btn" ${!qe.id ? 'style="display:none"' : ''}>Verwijder</button>
     <button class="btn btn-primary btn-sm" id="qe-save-btn">Opslaan</button>
-    <button class="btn btn-secondary btn-sm" id="qe-pdf-btn">📄 PDF exporteren</button>`;
+    <div class="pdf-dropdown" id="pdf-dropdown">
+      <button class="btn btn-secondary btn-sm" id="qe-pdf-btn">📄 PDF ▾</button>
+      <div class="pdf-dropdown-menu hidden" id="pdf-dropdown-menu">
+        <button class="pdf-dropdown-item" id="pdf-internal">📋 Interne offerte (volledig)</button>
+        <button class="pdf-dropdown-item" id="pdf-client">📄 Klantofferte (eindprijs)</button>
+      </div>
+    </div>`;
 
   document.getElementById('toolbar-title').textContent = qe.name || 'Nieuwe offerte';
   document.getElementById('qe-back').onclick = () => { qe = null; setView('quotes'); };
   document.getElementById('qe-save-btn').onclick = saveQuote;
-  document.getElementById('qe-pdf-btn').onclick = exportQuotePdf;
+  document.getElementById('qe-pdf-btn').onclick = () => {
+    document.getElementById('pdf-dropdown-menu').classList.toggle('hidden');
+  };
+  document.getElementById('pdf-internal').onclick = () => { document.getElementById('pdf-dropdown-menu').classList.add('hidden'); exportQuotePdf('internal'); };
+  document.getElementById('pdf-client').onclick = () => { document.getElementById('pdf-dropdown-menu').classList.add('hidden'); exportQuotePdf('client'); };
+  document.addEventListener('click', e => { if (!e.target.closest('#pdf-dropdown')) document.getElementById('pdf-dropdown-menu')?.classList.add('hidden'); });
   document.getElementById('qe-delete-btn')?.addEventListener('click', deleteQuote);
 
   const content = document.getElementById('content');
@@ -3572,7 +3600,6 @@ function renderQuoteEditorView() {
     <div class="qe-topbar">
       <div class="qe-fields">
         <input class="qi-input qe-name"   id="qe-name"   value="${escHtml(qe.name)}"       placeholder="Projectnaam *" />
-        <input class="qi-input qe-client" id="qe-client" value="${escHtml(qe.client)}"     placeholder="Klantnaam" />
         <input class="qi-input qe-date"   id="qe-date"   type="date" value="${qe.quote_date}" />
         <select class="qi-input qe-status" id="qe-status">
           <option value="draft"    ${qe.status==='draft'    ?'selected':''}>Concept</option>
@@ -3582,20 +3609,63 @@ function renderQuoteEditorView() {
         </select>
       </div>
     </div>
+
+    <!-- Client details (collapsible) -->
+    <details class="qe-details" open>
+      <summary class="qe-details-title">Klantgegevens</summary>
+      <div class="qe-client-grid">
+        <input class="qi-input" id="qe-client" value="${escHtml(qe.client)}" placeholder="Bedrijf / klantnaam" />
+        <input class="qi-input" id="qe-client-contact" value="${escHtml(qe.client_contact)}" placeholder="Contactpersoon" />
+        <input class="qi-input" id="qe-client-address" value="${escHtml(qe.client_address)}" placeholder="Adres" />
+        <input class="qi-input" id="qe-client-postcode" value="${escHtml(qe.client_postcode)}" placeholder="Postcode + Plaats" />
+        <input class="qi-input" id="qe-client-email" value="${escHtml(qe.client_email)}" placeholder="E-mail" type="email" />
+        <input class="qi-input" id="qe-client-phone" value="${escHtml(qe.client_phone)}" placeholder="Telefoon" type="tel" />
+      </div>
+    </details>
+
+    <!-- Images -->
     <input type="file" id="qe-file-input" accept="image/*" style="display:none" />
-    ${qe.image_data
-      ? `<div class="qe-image-preview">
-           <img src="${qe.image_data}" alt="Projectafbeelding" />
-           <div class="qe-img-actions">
-             <button class="qe-img-btn" id="qe-img-change-btn">↑ Wijzigen</button>
-             <button class="qe-img-btn qe-img-btn--remove" onclick="qe.image_data='';if(qe.id)localStorage.removeItem('qimg_'+qe.id);renderQuoteEditorView()">✕ Verwijder</button>
-           </div>
-         </div>`
-      : `<button class="qe-add-img-btn" id="qe-img-add-btn">
-           <svg viewBox="0 0 20 20" fill="none" style="width:15px;height:15px;vertical-align:middle;margin-right:6px"><rect x="2" y="4" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><circle cx="7.5" cy="9" r="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 14l4-4 3 3 2-2 5 5" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Afbeelding toevoegen
-         </button>`
-    }
+    <input type="file" id="qe-extra-file-input" accept="image/*" multiple style="display:none" />
+    <div class="qe-images-row">
+      <div class="qe-img-slot qe-img-main">
+        ${qe.image_data
+          ? `<div class="qe-image-preview">
+               <img src="${qe.image_data}" alt="Hoofdafbeelding" />
+               <div class="qe-img-actions">
+                 <button class="qe-img-btn" id="qe-img-change-btn">↑ Wijzigen</button>
+                 <button class="qe-img-btn qe-img-btn--remove" onclick="qe.image_data='';if(qe.id)localStorage.removeItem('qimg_'+qe.id);renderQuoteEditorView()">✕</button>
+               </div>
+             </div>`
+          : `<button class="qe-add-img-btn" id="qe-img-add-btn">
+               <svg viewBox="0 0 20 20" fill="none" style="width:15px;height:15px;vertical-align:middle;margin-right:6px"><rect x="2" y="4" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><circle cx="7.5" cy="9" r="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 14l4-4 3 3 2-2 5 5" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Hoofdafbeelding
+             </button>`
+        }
+      </div>
+      <div class="qe-extra-images" id="qe-extra-images">
+        ${(qe.extra_images||[]).map((img, i) => `
+          <div class="qe-extra-thumb">
+            <img src="${img}" alt="Extra ${i+1}" />
+            <button class="qe-extra-del" data-idx="${i}">✕</button>
+          </div>`).join('')}
+        <button class="qe-extra-add-btn" id="qe-extra-add-btn" title="Extra afbeelding toevoegen">＋</button>
+      </div>
+    </div>
+
     <textarea class="qe-notes" id="qe-notes" placeholder="Toelichting — omschrijf het project, de aanpak of bijzondere afspraken…">${escHtml(qe.notes)}</textarea>
+
+    <!-- PDF Options -->
+    <details class="qe-details">
+      <summary class="qe-details-title">PDF-opties</summary>
+      <div class="qe-pdf-opts" id="qe-pdf-opts">
+        <label class="qe-opt"><input type="checkbox" data-opt="show_title_page" ${qe.pdf_opts.show_title_page ? 'checked' : ''} /> Titelblad</label>
+        <label class="qe-opt"><input type="checkbox" data-opt="show_project_image" ${qe.pdf_opts.show_project_image ? 'checked' : ''} /> Projectafbeelding op titelblad</label>
+        <label class="qe-opt"><input type="checkbox" data-opt="show_extra_images" ${qe.pdf_opts.show_extra_images ? 'checked' : ''} /> Extra afbeeldingen (bijlagepagina)</label>
+        <label class="qe-opt"><input type="checkbox" data-opt="show_client_address" ${qe.pdf_opts.show_client_address ? 'checked' : ''} /> Klantadres op offerte</label>
+        <label class="qe-opt"><input type="checkbox" data-opt="show_exclusions" ${qe.pdf_opts.show_exclusions ? 'checked' : ''} /> Exclusief-lijst</label>
+        <label class="qe-opt"><input type="checkbox" data-opt="show_notes" ${qe.pdf_opts.show_notes ? 'checked' : ''} /> Toelichting</label>
+        <label class="qe-opt"><input type="checkbox" data-opt="show_validity" ${qe.pdf_opts.show_validity ? 'checked' : ''} /> Geldigheidsclausule (30 dagen)</label>
+      </div>
+    </details>
 
     <!-- Materials -->
     <div class="qe-section">
@@ -3678,18 +3748,27 @@ function renderQuoteEditorView() {
   // Wire live-field changes (header fields)
   document.getElementById('qe-name').addEventListener('input',   e => { qe.name = e.target.value; document.getElementById('toolbar-title').textContent = qe.name || 'Nieuwe offerte'; });
   document.getElementById('qe-client').addEventListener('input',  e => qe.client = e.target.value);
+  document.getElementById('qe-client-contact').addEventListener('input', e => qe.client_contact = e.target.value);
+  document.getElementById('qe-client-address').addEventListener('input', e => qe.client_address = e.target.value);
+  document.getElementById('qe-client-postcode').addEventListener('input', e => qe.client_postcode = e.target.value);
+  document.getElementById('qe-client-email').addEventListener('input', e => qe.client_email = e.target.value);
+  document.getElementById('qe-client-phone').addEventListener('input', e => qe.client_phone = e.target.value);
   document.getElementById('qe-date').addEventListener('change',   e => qe.quote_date = e.target.value);
   document.getElementById('qe-status').addEventListener('change', e => qe.status = e.target.value);
   document.getElementById('qe-notes').addEventListener('input',   e => qe.notes = e.target.value);
   document.getElementById('qe-margin').addEventListener('focus',  e => e.target.select());
   document.getElementById('qe-margin').addEventListener('input',  e => {
     qe.margin = parseFloat(e.target.value) || 0;
-    // Refresh placeholders on per-item margin fields that have no override
     document.querySelectorAll('.qi-margin').forEach(inp => { inp.placeholder = qe.margin; });
     updateTotals();
   });
 
-  // Image change / add wiring
+  // PDF options wiring
+  document.querySelectorAll('#qe-pdf-opts input[type=checkbox]').forEach(cb => {
+    cb.addEventListener('change', () => { qe.pdf_opts[cb.dataset.opt] = cb.checked; });
+  });
+
+  // Main image change / add wiring
   const qeFileInput = document.getElementById('qe-file-input');
   qeFileInput.addEventListener('change', e => {
     const file = e.target.files[0];
@@ -3700,6 +3779,31 @@ function renderQuoteEditorView() {
   });
   document.getElementById('qe-img-change-btn')?.addEventListener('click', () => qeFileInput.click());
   document.getElementById('qe-img-add-btn')?.addEventListener('click',    () => qeFileInput.click());
+
+  // Extra images wiring
+  const extraInput = document.getElementById('qe-extra-file-input');
+  extraInput.addEventListener('change', e => {
+    const files = [...e.target.files];
+    let loaded = 0;
+    files.forEach(f => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        qe.extra_images.push(ev.target.result);
+        loaded++;
+        if (loaded === files.length) renderQuoteEditorView();
+      };
+      reader.readAsDataURL(f);
+    });
+    extraInput.value = '';
+  });
+  document.getElementById('qe-extra-add-btn')?.addEventListener('click', () => extraInput.click());
+  document.querySelectorAll('.qe-extra-del').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      qe.extra_images.splice(parseInt(btn.dataset.idx), 1);
+      renderQuoteEditorView();
+    });
+  });
 
   renderMatTable();
   renderSvcTable();
@@ -4136,10 +4240,19 @@ async function performSave() {
       quoteId = res.id;
       qe.id = quoteId;
     }
-    // Store image locally (Pi DB may not have image_data column yet)
+    // Store images + extra fields locally (Pi DB doesn't have these columns)
     if (quoteId) {
       if (qe.image_data) localStorage.setItem('qimg_' + quoteId, qe.image_data);
       else localStorage.removeItem('qimg_' + quoteId);
+      localStorage.setItem('qextra_' + quoteId, JSON.stringify({
+        client_contact: qe.client_contact,
+        client_address: qe.client_address,
+        client_postcode: qe.client_postcode,
+        client_email: qe.client_email,
+        client_phone: qe.client_phone,
+        extra_images: qe.extra_images,
+        pdf_opts: qe.pdf_opts,
+      }));
     }
 
     const allItems = [
@@ -4187,11 +4300,12 @@ function buildQuoteNum(id, dateStr) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
-  return `O-${y}${m}${day}-${String(id).padStart(4, '0')}`;
+  return `${y}${m}${day}-${String(id).padStart(2, '0')}`;
 }
 
-async function exportQuotePdf() {
+async function exportQuotePdf(mode = 'internal') {
   try {
+  const isClient = mode === 'client';
   if (!qe.id) {
     await performSave();
     if (!qe.id) { toast('Sla de offerte eerst op', 'error'); return; }
@@ -4210,6 +4324,7 @@ async function exportQuotePdf() {
     <div>${COMPANY.email} · ${COMPANY.kvk} · ${COMPANY.btw}</div>
     <div>${COMPANY.iban} · ${COMPANY.tel}</div>`;
 
+  // ── Internal PDF: full detail ──
   const matRows = qe.materials.map(m => {
     const effectivePct = (m.margin != null && m.margin !== '') ? parseFloat(m.margin) : t.marginPct;
     const displayPrice = m.unit_price * (1 + effectivePct / 100);
@@ -4230,29 +4345,89 @@ async function exportQuotePdf() {
       <td class="r">${fmtEur(s.quantity * s.unit_price)}</td>
     </tr>`).join('');
 
+  // ── Client PDF: items listed, no individual prices ──
+  const clientItemsList = [
+    ...qe.materials.map(m => escHtml(m.name)),
+    ...qe.services.map(s => escHtml(s.name)),
+  ].map(n => `<li>${n}</li>`).join('');
+
+  const opts = qe.pdf_opts || {
+    show_title_page: true, show_project_image: true, show_extra_images: true,
+    show_exclusions: true, show_notes: true, show_validity: true, show_client_address: true,
+  };
   const accent  = '#13ABBD';
   const accentD = '#0D8B9B';
   const bgTint  = '#f0f9fb';
   const thBg    = '#e2f4f7';
 
+  const clientAddr = [qe.client_contact, qe.client_address, qe.client_postcode, qe.client_email, qe.client_phone]
+    .filter(Boolean).map(l => escHtml(l)).join('<br/>');
+
+  // Extra images page HTML
+  const extraImages = qe.extra_images || [];
+  const extraImagesPage = (opts.show_extra_images && extraImages.length > 0) ? `
+    <div class="extras-page">
+      <h3 style="margin-bottom:6mm;color:${accent}">Bijlagen — Afbeeldingen</h3>
+      <div class="extras-grid">
+        ${extraImages.map((img, i) => `<div class="extras-img"><img src="${img}" alt="Bijlage ${i+1}" /></div>`).join('')}
+      </div>
+    </div>` : '';
+
+  const headerHtml = `<div class="hf-header">
+    ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Logo" />` : ''}
+    <div class="hf-right">${quoteNum}<br/>${dateFmt}</div>
+  </div>`;
+  const footerHtml = `${COMPANY.name} &nbsp;·&nbsp; ${COMPANY.address} &nbsp;·&nbsp; ${COMPANY.email} &nbsp;·&nbsp; ${COMPANY.kvk} &nbsp;·&nbsp; ${COMPANY.btw}`;
+
   const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8">
 <style>
-  @page { size: A4; margin: 0; }
+  @page { size: A4; margin: 18mm 18mm 18mm 18mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
+  /* ── Table-based repeating header & footer ── */
+  .page-wrap { width: 100%; border-collapse: collapse; }
+  .page-wrap > thead { display: table-header-group; }
+  .page-wrap > tfoot { display: table-footer-group; }
+  .page-wrap > tbody { display: table-row-group; }
+  .page-wrap > thead td,
+  .page-wrap > tfoot td,
+  .page-wrap > tbody td { padding: 0; border: none; vertical-align: top; }
+
+  .hf-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 8px; margin-bottom: 4mm;
+    border-bottom: 1px solid #eee;
+  }
+  .hf-header img { max-height: 44px; max-width: 160px; }
+  .hf-right { font-size: 8px; color: #bbb; text-align: right; line-height: 1.4; }
+  /* ── Fixed footer (always at bottom of every page) ── */
+  .fixed-footer {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    border-top: 1px solid #eee;
+    padding-top: 6px;
+    font-size: 7.5px; color: #bbb; line-height: 1.7; text-align: center;
+  }
+
   /* ── Pagina 1: Titelblad ── */
   .title-page {
-    width: 210mm; height: 297mm;
+    width: 100%; height: 100vh;
     background: #ffffff;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     position: relative;
     break-after: page; page-break-after: always;
   }
+  .title-bottom-footer {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    text-align: center;
+    font-size: 7.5px; line-height: 1.8;
+    color: #ccc;
+    border-top: 1px solid #eee;
+    padding-top: 8px;
+  }
   .title-content {
     display: flex; flex-direction: column; align-items: center;
-    margin-top: -18mm;
   }
   .title-logo-wrap {
     display: flex; flex-direction: column; align-items: center;
@@ -4272,73 +4447,74 @@ async function exportQuotePdf() {
     display: flex; align-items: center; justify-content: center;
   }
   .title-project-img img { max-width: 100%; max-height: 72mm; object-fit: contain; border-radius: 6px; }
-  .title-footer {
-    position: absolute; bottom: 18mm; left: 20mm; right: 20mm;
-    text-align: center;
-    font-size: 8px; line-height: 1.8;
-    color: #ccc;
-    border-top: 1px solid #eee;
-    padding-top: 10px;
-  }
 
-  /* ── Pagina 2: Offerte ── */
-  .quote-page {
-    width: 210mm; min-height: 297mm;
-    background: #fff;
-    display: flex; flex-direction: column;
-    padding: 18mm 18mm 0;
-  }
-  .quote-body { flex: 1; }
-  .qp-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10mm; }
-  .qp-logo img { max-height: 48px; max-width: 160px; }
-  .qp-logo .wordmark { font-size: 16px; font-weight: 600; color: ${accent}; }
+  /* ── Offertepagina's ── */
+  .quote-page { background: #fff; }
+  .qp-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8mm; }
   .qp-meta { text-align: right; }
   .qp-meta .title { font-size: 22px; font-weight: 700; color: #1c1917; letter-spacing: .5px; }
   .qp-meta .num { font-size: 11px; color: ${accent}; font-weight: 600; margin-top: 2px; }
   .qp-meta .date { font-size: 10px; color: #999; margin-top: 2px; }
   .client-block {
     background: ${bgTint}; border-left: 3px solid ${accent};
-    padding: 8px 14px; margin-bottom: 8mm; border-radius: 0 4px 4px 0;
+    padding: 8px 14px; margin-bottom: 6mm; border-radius: 0 4px 4px 0;
+    break-inside: avoid; page-break-inside: avoid;
   }
-  .client-block .lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 3px; }
-  .client-block .val { font-size: 13px; font-weight: 600; color: #1c1917; }
-  .client-block .proj { font-size: 11px; color: #666; margin-top: 2px; }
-  h3 { font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px; color: ${accentD}; margin: 6mm 0 2mm; }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th { background: ${thBg}; padding: 6px 8px; text-align: left; font-size: 9px; color: #4a8f9a; text-transform: uppercase; letter-spacing: .4px; }
-  th.r { text-align: right; }
-  td { padding: 6px 8px; border-bottom: 1px solid #eaf5f7; color: #2a2520; }
-  td.r { text-align: right; }
+  .client-block .lbl { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 3px; }
+  .client-block .val { font-size: 15px; font-weight: 600; color: #1c1917; }
+  .client-block .proj { font-size: 11px; color: #555; margin-top: 3px; }
+  .client-block .client-addr { font-size: 9px; color: #999; line-height: 1.5; margin-top: 4px; }
+  h3 { font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px; color: ${accentD}; margin: 6mm 0 2mm; break-after: avoid; page-break-after: avoid; }
+  .content-table { width: 100%; border-collapse: collapse; font-size: 11px; break-inside: avoid; page-break-inside: avoid; }
+  .content-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .content-table th { background: ${thBg}; padding: 6px 8px; text-align: left; font-size: 9px; color: #4a8f9a; text-transform: uppercase; letter-spacing: .4px; }
+  .content-table th.r { text-align: right; }
+  .content-table td { padding: 6px 8px; border-bottom: 1px solid #eaf5f7; color: #2a2520; }
+  .content-table td.r { text-align: right; }
   .subtotals td { border: none; padding: 2px 8px; font-size: 10px; color: #888; }
   .subtotals tr.bold td { color: #1c1917; font-weight: 600; }
-  .totals-box { margin-top: 6mm; border: 1.5px solid ${accent}; border-radius: 6px; overflow: hidden; }
-  .totals-box th { background: ${accent}; color: #fff; }
-  .totals-box td { padding: 6px 12px; border-bottom: 1px solid #eaf5f7; }
+  .totals-box { margin-top: 6mm; border: 1.5px solid ${accent}; border-radius: 6px; overflow: hidden; break-inside: avoid; page-break-inside: avoid; }
+  .totals-box th { background: ${accent}; color: #fff; padding: 6px 8px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .4px; }
+  .totals-box td { padding: 6px 12px; border-bottom: 1px solid #eaf5f7; color: #2a2520; }
+  .totals-box td.r { text-align: right; }
   .totals-box .row-final td { font-size: 13px; font-weight: 700; background: ${bgTint}; border-bottom: none; }
   .totals-box .row-btw td { color: #888; font-size: 10px; }
-  .excl-block { margin-top: 6mm; }
-  .excl-block .lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
+  .excl-block { margin-top: 6mm; padding: 8px 14px; background: ${bgTint}; border-left: 3px solid ${accent}; border-radius: 0 4px 4px 0; break-inside: avoid; page-break-inside: avoid; }
+  .excl-block .lbl { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
   .excl-pdf-list { margin: 0; padding: 0 0 0 5mm; font-size: 10px; color: #666; line-height: 1.8; }
   .excl-pdf-list li { padding-left: 2px; }
-  .notes-block { margin-top: 6mm; padding: 8px 12px; background: ${bgTint}; border-radius: 4px; font-size: 10px; color: #666; line-height: 1.6; }
-  .notes-block .lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
-  .quote-footer {
-    margin-top: 10mm;
-    padding: 5mm 0 12mm;
-    border-top: 1px solid #d8eff3;
+  .client-addr { font-size: 10px; color: #666; line-height: 1.6; margin-top: 4px; }
+  .notes-block { margin-top: 4mm; margin-bottom: 6mm; padding: 8px 14px; background: ${bgTint}; border-left: 3px solid ${accent}; border-radius: 0 4px 4px 0; font-size: 10px; color: #666; line-height: 1.6; break-inside: avoid; page-break-inside: avoid; }
+  .notes-block .lbl { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
+
+  /* ── Extra images page ── */
+  .extras-page {
+    background: #fff;
+    break-before: page; page-break-before: always;
   }
-  .quote-footer .validity {
-    font-size: 9px; color: #888; text-align: center; margin-bottom: 5mm; line-height: 1.6;
+  .extras-grid {
+    display: flex; flex-wrap: wrap; gap: 6mm; justify-content: center;
+  }
+  .extras-img {
+    width: 80mm; height: 60mm; overflow: hidden; border-radius: 4px; border: 1px solid #eee;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .extras-img img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .quote-end-footer {
+    margin-top: 8mm;
+    padding: 4mm 0 0;
+    border-top: 1px solid #d8eff3;
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .quote-end-footer .validity {
+    font-size: 9px; color: #888; text-align: center; line-height: 1.6;
     font-style: italic;
   }
-  .quote-footer .company {
-    font-size: 8px; color: #bbb; text-align: center; line-height: 1.9;
-  }
-  .quote-footer .company strong { color: #999; font-weight: 600; }
 </style>
 </head><body>
 
-<!-- ── Pagina 1: Titelblad ── -->
+${opts.show_title_page ? `
+<!-- ── Pagina 1: Titelblad (geen header/footer) ── -->
 <div class="title-page">
   <div class="title-content">
     <div class="title-logo-wrap">
@@ -4354,23 +4530,23 @@ async function exportQuotePdf() {
       <div class="cname">${escHtml(qe.client || '—')}</div>
       <div class="pname">${escHtml(qe.name)}</div>
     </div>
-    ${qe.image_data ? `<div class="title-project-img"><img src="${qe.image_data}" alt="Projectafbeelding" /></div>` : ''}
-  </div>
-  <div class="title-footer">
-    ${COMPANY.name} · ${COMPANY.address}<br>
-    ${COMPANY.email} · ${COMPANY.kvk} · ${COMPANY.btw}<br>
-    ${COMPANY.iban} · ${COMPANY.tel}
+    ${(opts.show_project_image && qe.image_data) ? `<div class="title-project-img"><img src="${qe.image_data}" alt="Projectafbeelding" /></div>` : ''}
   </div>
 </div>
+` : ''}
 
-<!-- ── Pagina 2: Offerte ── -->
+<!-- ── Fixed footer op elke pagina ── -->
+<div class="fixed-footer">${footerHtml}</div>
+
+<!-- ── Offerte content met herhalende header ── -->
+<table class="page-wrap"><thead><tr><td>${headerHtml}</td></tr></thead>
+<tbody><tr><td>
+
+<!-- ── Offertepagina ── -->
 <div class="quote-page">
   <div class="quote-body">
     <div class="qp-header">
-      <div class="qp-logo">
-        ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Logo" />` : `<div class="wordmark">Vonk &amp; Vorm</div>`}
-      </div>
-      <div class="qp-meta">
+      <div class="qp-meta" style="width:100%">
         <div class="title">OFFERTE</div>
         <div class="num">${quoteNum}</div>
         <div class="date">${dateFmt}</div>
@@ -4381,11 +4557,28 @@ async function exportQuotePdf() {
       <div class="lbl">Klant &amp; Project</div>
       <div class="val">${escHtml(qe.client || '—')}</div>
       <div class="proj">${escHtml(qe.name)}</div>
+      ${(opts.show_client_address && clientAddr) ? `<div class="client-addr">${clientAddr}</div>` : ''}
     </div>
 
+    ${(opts.show_notes && qe.notes) ? `<div class="notes-block"><div class="lbl">Toelichting</div>${escHtml(qe.notes).replace(/\n/g, '<br/>')}</div>` : ''}
+
+    ${isClient ? `
+    <!-- Client PDF: single total price only -->
+    <div class="totals-box" style="margin-top:8mm">
+      <table class="content-table">
+        <thead><tr><th colspan="2">Prijsoverzicht</th></tr></thead>
+        <tbody>
+          <tr><td>Subtotaal excl. BTW</td><td class="r">${fmtEur(t.subtotal)}</td></tr>
+          <tr class="row-btw"><td>BTW (21%)</td><td class="r">+ ${fmtEur(t.btw)}</td></tr>
+          <tr class="row-final"><td>TOTAAL incl. BTW</td><td class="r">${fmtEur(t.grandTotal)}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    ` : `
+    <!-- Internal PDF: full detail -->
     ${qe.materials.length > 0 ? `
     <h3>Materialen</h3>
-    <table>
+    <table class="content-table">
       <thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Stukprijs</th><th class="r" style="width:17%">Totaal</th></tr></thead>
       <tbody>${matRows}</tbody>
     </table>
@@ -4393,13 +4586,13 @@ async function exportQuotePdf() {
 
     ${qe.services.length > 0 ? `
     <h3>Diensten</h3>
-    <table>
+    <table class="content-table">
       <thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Uren</th><th class="r" style="width:17%">Tarief/u</th><th class="r" style="width:17%">Totaal</th></tr></thead>
       <tbody>${svcRows}</tbody>
     </table>` : ''}
 
     <div class="totals-box">
-      <table>
+      <table class="content-table">
         <thead><tr><th colspan="2">Totaaloverzicht</th></tr></thead>
         <tbody>
           ${qe.materials.length > 0 ? `<tr><td>Totaal materialen</td><td class="r">${fmtEur(t.matTotal)}</td></tr>` : ''}
@@ -4410,34 +4603,33 @@ async function exportQuotePdf() {
         </tbody>
       </table>
     </div>
+    `}
 
-    ${qe.exclusions.length > 0 ? `
+    ${(opts.show_exclusions && qe.exclusions.length > 0) ? `
     <div class="excl-block">
       <div class="lbl">Exclusief</div>
       <ul class="excl-pdf-list">
         ${qe.exclusions.map(ex => `<li>${escHtml(ex)}</li>`).join('')}
       </ul>
     </div>` : ''}
-
-    ${qe.notes ? `<div class="notes-block"><div class="lbl">Toelichting</div>${escHtml(qe.notes)}</div>` : ''}
   </div>
 
-  <div class="quote-footer">
+  ${opts.show_validity ? `
+  <div class="quote-end-footer">
     <div class="validity">
       Deze offerte is 30 dagen geldig na dagtekening. &nbsp;·&nbsp; Levertijd in overleg.
     </div>
-    <div class="company">
-      <strong>${COMPANY.name}</strong><br>
-      ${COMPANY.address}<br>
-      ${COMPANY.email} &nbsp;·&nbsp; ${COMPANY.kvk} &nbsp;·&nbsp; ${COMPANY.btw}<br>
-      ${COMPANY.iban} &nbsp;·&nbsp; ${COMPANY.tel}
-    </div>
-  </div>
+  </div>` : ''}
 </div>
 
+${extraImagesPage}
+
+</td></tr></tbody></table>
 </body></html>`;
 
-  await api.exportPdf(html, `${quoteNum}-${(qe.name || 'offerte').replace(/[^a-z0-9]/gi, '-')}.pdf`);
+  const suffix = isClient ? '' : '_intern';
+  const clientName = (qe.client || '').replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  await api.exportPdf(html, `${quoteNum}_${clientName || 'offerte'}${suffix}.pdf`);
   } catch (err) {
     toast('PDF exporteren mislukt: ' + (err.message || err), 'error', 4000);
     console.error('exportQuotePdf error:', err);
