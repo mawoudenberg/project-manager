@@ -1,9 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <title>Project Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant:ital,wght@0,400..700;1,400..600&family=Instrument+Sans:wght@400..600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -20,46 +23,46 @@
 
     <!-- Step 0: Welcome -->
     <div class="wizard-step active" id="step-0">
-      <h2 style="text-align:center">Welcome to Project Manager</h2>
-      <p class="wizard-subtitle">Shared task management for your team. Let's get you set up.</p>
+      <h2 style="text-align:center">Welkom bij Project Manager</h2>
+      <p class="wizard-subtitle">Gedeeld taakbeheer voor jouw team. Laten we je instellen.</p>
       <div class="form-group">
-        <label>Your name</label>
-        <input type="text" id="wiz-name" placeholder="e.g. Maurits" autocomplete="off" />
+        <label>Jouw naam</label>
+        <input type="text" id="wiz-name" placeholder="bijv. Maurits" autocomplete="off" />
       </div>
       <div class="modal-actions">
-        <button class="btn btn-primary" id="wiz-next-0">Next →</button>
+        <button class="btn btn-primary" id="wiz-next-0">Volgende →</button>
       </div>
     </div>
 
     <!-- Step 1: Database location -->
     <div class="wizard-step" id="step-1">
-      <h2>Choose database location</h2>
+      <h2>Kies databaselocatie</h2>
       <p style="color:var(--text2);font-size:13px;margin-bottom:18px">
-        Point to a shared folder everyone has access to — for example your Google Drive folder.
-        The app will create <strong>project-manager.db</strong> there.
+        Wijs naar een gedeelde map waar iedereen toegang toe heeft — bijvoorbeeld je Google Drive map.
+        De app maakt daar <strong>project-manager.db</strong> aan.
       </p>
       <div class="form-group">
-        <label>Shared folder</label>
+        <label>Gedeelde map</label>
         <div style="display:flex;gap:8px">
-          <div class="path-display" id="wiz-path-display" style="flex:1">No folder selected</div>
-          <button class="btn btn-secondary" id="wiz-pick-folder">Browse…</button>
+          <div class="path-display" id="wiz-path-display" style="flex:1">Geen map geselecteerd</div>
+          <button class="btn btn-secondary" id="wiz-pick-folder">Bladeren…</button>
         </div>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-ghost" id="wiz-back-1">← Back</button>
-        <button class="btn btn-primary" id="wiz-next-1">Next →</button>
+        <button class="btn btn-ghost" id="wiz-back-1">← Terug</button>
+        <button class="btn btn-primary" id="wiz-next-1">Volgende →</button>
       </div>
     </div>
 
     <!-- Step 2: Done -->
     <div class="wizard-step" id="step-2">
-      <h2 style="text-align:center">You're all set! 🎉</h2>
+      <h2 style="text-align:center">Klaar om te starten! 🎉</h2>
       <p style="color:var(--text2);font-size:13px;text-align:center;margin-bottom:18px">
-        Share the same folder path with your team. Each person runs this app and selects the same shared folder.
+        Deel hetzelfde mappad met je team. Iedereen start de app en selecteert dezelfde gedeelde map.
       </p>
       <div class="path-display" id="wiz-final-path" style="margin-bottom:20px"></div>
       <div class="modal-actions" style="justify-content:center">
-        <button class="btn btn-primary" id="wiz-finish">Start using Project Manager</button>
+        <button class="btn btn-primary" id="wiz-finish">Project Manager starten</button>
       </div>
     </div>
   </div>
@@ -68,22 +71,22 @@
 <!-- ─── Task Modal ─────────────────────────────────────────────────────────── -->
 <div class="modal-overlay hidden" id="task-modal">
   <div class="modal">
-    <h2 id="task-modal-title">Add Task</h2>
+    <h2 id="task-modal-title">Taak toevoegen</h2>
     <div class="form-group">
-      <label>Title *</label>
-      <input type="text" id="task-title" placeholder="Task title" />
+      <label>Titel *</label>
+      <input type="text" id="task-title" placeholder="Taaknaam" />
     </div>
     <div class="form-group">
-      <label>Description</label>
-      <textarea id="task-desc" placeholder="Optional details…"></textarea>
+      <label>Omschrijving</label>
+      <textarea id="task-desc" placeholder="Optionele details…"></textarea>
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label>Date</label>
+        <label>Datum</label>
         <input type="date" id="task-date" />
       </div>
       <div class="form-group">
-        <label>End date <span style="color:var(--text2);font-weight:400;font-size:11px">(optioneel, voor Gantt)</span></label>
+        <label>Einddatum <span style="color:var(--text2);font-weight:400;font-size:11px">(optioneel, voor Gantt)</span></label>
         <input type="date" id="task-end-date" />
       </div>
     </div>
@@ -100,7 +103,7 @@
       </div>
     </div>
     <div class="form-group">
-      <label>Assigned to</label>
+      <label>Toegewezen aan</label>
       <div id="assignee-picker"></div>
     </div>
     <div class="form-group">
@@ -113,28 +116,28 @@
       <div class="form-group">
         <label>Status</label>
         <select id="task-status">
-          <option value="pending">Pending</option>
-          <option value="in_progress">In Progress</option>
-          <option value="done">Done</option>
+          <option value="pending">Openstaand</option>
+          <option value="in_progress">In uitvoering</option>
+          <option value="done">Afgerond</option>
         </select>
       </div>
       <div class="form-group">
-        <label>Priority</label>
+        <label>Prioriteit</label>
         <select id="task-priority">
-          <option value="low">Low</option>
-          <option value="medium" selected>Medium</option>
-          <option value="high">High</option>
+          <option value="low">Laag</option>
+          <option value="medium" selected>Gemiddeld</option>
+          <option value="high">Hoog</option>
         </select>
       </div>
     </div>
     <div class="form-group">
-      <label>Color</label>
+      <label>Kleur</label>
       <div class="color-swatches" id="task-color-swatches"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="task-cancel">Cancel</button>
-      <button class="btn btn-danger hidden" id="task-delete">Delete</button>
-      <button class="btn btn-primary" id="task-save">Save</button>
+      <button class="btn btn-ghost" id="task-cancel">Annuleer</button>
+      <button class="btn btn-danger hidden" id="task-delete">Verwijder</button>
+      <button class="btn btn-primary" id="task-save">Opslaan</button>
     </div>
   </div>
 </div>
@@ -142,19 +145,19 @@
 <!-- ─── Todo List Modal ────────────────────────────────────────────────────── -->
 <div class="modal-overlay hidden" id="list-modal">
   <div class="modal">
-    <h2 id="list-modal-title">New List</h2>
+    <h2 id="list-modal-title">Nieuwe lijst</h2>
     <div class="form-group">
-      <label>List name *</label>
-      <input type="text" id="list-name" placeholder="e.g. Sprint 1" />
+      <label>Lijstnaam *</label>
+      <input type="text" id="list-name" placeholder="bijv. Sprint 1" />
     </div>
     <div class="form-group">
-      <label>Description</label>
-      <input type="text" id="list-desc" placeholder="Optional" />
+      <label>Omschrijving</label>
+      <input type="text" id="list-desc" placeholder="Optioneel" />
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="list-cancel">Cancel</button>
-      <button class="btn btn-danger hidden" id="list-delete">Delete List</button>
-      <button class="btn btn-primary" id="list-save">Save</button>
+      <button class="btn btn-ghost" id="list-cancel">Annuleer</button>
+      <button class="btn btn-danger hidden" id="list-delete">Lijst verwijderen</button>
+      <button class="btn btn-primary" id="list-save">Opslaan</button>
     </div>
   </div>
 </div>
@@ -184,60 +187,34 @@
 <!-- ─── Settings Modal ────────────────────────────────────────────────────── -->
 <div class="modal-overlay hidden" id="settings-modal">
   <div class="modal wide">
-    <h2>Settings</h2>
+    <h2>Instellingen</h2>
     <div class="settings-section">
-      <h3>Your profile</h3>
+      <h3>Jouw profiel</h3>
       <div class="form-group">
-        <label>Your name</label>
-        <input type="text" id="cfg-name" placeholder="Name" />
+        <label>Jouw naam</label>
+        <input type="text" id="cfg-name" placeholder="Naam" />
       </div>
     </div>
     <div class="settings-section">
-      <h3>Theme</h3>
+      <h3>Thema</h3>
       <div class="radio-group">
         <label class="radio-card" id="radio-light">
           <input type="radio" name="theme" value="light" />
           <div>
-            <div style="font-weight:600">☀️ Light</div>
-            <div style="font-size:11px;color:var(--text2)">Warm cream palette</div>
+            <div style="font-weight:600">☀️ Licht</div>
+            <div style="font-size:11px;color:var(--text2)">Warm crèmekleurig palet</div>
           </div>
         </label>
         <label class="radio-card" id="radio-dark">
           <input type="radio" name="theme" value="dark" />
           <div>
-            <div style="font-weight:600">🌙 Dark</div>
-            <div style="font-size:11px;color:var(--text2)">Dark charcoal palette</div>
+            <div style="font-weight:600">🌙 Donker</div>
+            <div style="font-size:11px;color:var(--text2)">Donker antraciet palet</div>
           </div>
         </label>
       </div>
     </div>
     <div class="settings-section">
-      <h3>Database mode</h3>
-      <div class="radio-group">
-        <label class="radio-card selected" id="radio-file">
-          <input type="radio" name="mode" value="file" checked />
-          <div>
-            <div style="font-weight:600">📁 File (Google Drive)</div>
-            <div style="font-size:11px;color:var(--text2)">SQLite on shared folder</div>
-          </div>
-        </label>
-        <label class="radio-card" id="radio-api">
-          <input type="radio" name="mode" value="api" />
-          <div>
-            <div style="font-weight:600">🍓 API (Raspberry Pi)</div>
-            <div style="font-size:11px;color:var(--text2)">REST server mode</div>
-          </div>
-        </label>
-      </div>
-    </div>
-    <div class="settings-section" id="cfg-file-section">
-      <h3>Shared folder</h3>
-      <div style="display:flex;gap:8px">
-        <div class="path-display" id="cfg-path-display" style="flex:1">Not set</div>
-        <button class="btn btn-secondary" id="cfg-pick-folder">Browse…</button>
-      </div>
-    </div>
-    <div class="settings-section hidden" id="cfg-api-section">
       <h3>Raspberry Pi URL</h3>
       <div class="form-group">
         <input type="text" id="cfg-api-url" placeholder="http://raspberrypi.local:5000" />
@@ -245,9 +222,10 @@
     </div>
 
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="settings-cancel">Cancel</button>
-      <button class="btn btn-primary" id="settings-save">Save settings</button>
+      <button class="btn btn-ghost" id="settings-cancel">Annuleer</button>
+      <button class="btn btn-primary" id="settings-save">Instellingen opslaan</button>
     </div>
+    <button type="button" class="btn btn-ghost" id="open-catalog-btn" style="width:100%;margin-top:8px">Offerte-instellingen →</button>
   </div>
 </div>
 
@@ -278,7 +256,7 @@
         <label>Status</label>
         <select id="proj-status">
           <option value="active">Actief</option>
-          <option value="on_hold">On hold</option>
+          <option value="on_hold">In de wacht</option>
           <option value="done">Afgerond</option>
         </select>
       </div>
@@ -345,40 +323,51 @@
   <!-- Sidebar -->
   <nav id="sidebar">
     <div id="sidebar-header">
-      <h1>Project Manager</h1>
+      <div id="sidebar-brand">
+        <img src="../assets/logo.png" id="sidebar-logo" alt="Studio Vonk &amp; Vorm" />
+      </div>
       <div id="sidebar-user"></div>
+      <button id="sidebar-close-btn" class="sidebar-close-btn" aria-label="Sluiten">✕</button>
     </div>
     <div id="nav">
-      <button class="nav-btn active" data-view="calendar">
-        <span class="icon">📅</span><span>Kalender</span>
-      </button>
       <button class="nav-btn" data-view="mytasks">
-        <span class="icon">👤</span><span>Mijn Taken</span>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="10" cy="6.5" r="3.5" stroke-width="1.5"/><path d="M2.5 18.5c0-4.142 3.358-7.5 7.5-7.5s7.5 3.358 7.5 7.5" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>Mijn Taken</span>
       </button>
-      <div class="nav-divider"></div>
-      <button class="nav-btn" data-view="todo">
-        <span class="icon">✅</span><span>Todo Lists</span>
-      </button>
-      <button class="nav-btn" data-view="quotes">
-        <span class="icon">💶</span><span>Offertes</span>
-      </button>
-      <button class="nav-btn" data-view="projects">
-        <span class="icon">📁</span><span>Projecten</span>
+      <button class="nav-btn active" data-view="calendar">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2.5" y="4" width="15" height="13.5" rx="1.5" stroke-width="1.5"/><path d="M2.5 8.5h15" stroke-width="1.5"/><path d="M6.5 2v3.5M13.5 2v3.5" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="10" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="13" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="7" cy="15" r=".9" fill="currentColor" stroke="none"/><circle cx="10" cy="15" r=".9" fill="currentColor" stroke="none"/></svg>
+        <span>Kalender</span>
       </button>
       <button class="nav-btn" data-view="gantt">
-        <span class="icon">📊</span><span>Gantt</span>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2.5 5.5H11" stroke-width="2.5" stroke-linecap="round"/><path d="M5.5 10H17.5" stroke-width="2.5" stroke-linecap="round"/><path d="M2.5 14.5H10" stroke-width="2.5" stroke-linecap="round"/></svg>
+        <span>Gantt</span>
+      </button>
+      <button class="nav-btn" data-view="projects">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 8a2 2 0 012-2h3.5l1.5 1.5H17a1.5 1.5 0 011.5 1.5v6A1.5 1.5 0 0117 16.5H4A2 2 0 012 14.5V8z" stroke-width="1.5"/></svg>
+        <span>Projecten</span>
+      </button>
+      <button class="nav-btn" data-view="quotes">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 2.5h7.5L17.5 7.5V17a.5.5 0 01-.5.5H5a.5.5 0 01-.5-.5V3a.5.5 0 01.5-.5z" stroke-width="1.5" stroke-linejoin="round"/><path d="M12.5 2.5V7.5H17.5" stroke-width="1.5" stroke-linejoin="round"/><path d="M7.5 11h5M7.5 13.5h3" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>Offertes</span>
+      </button>
+      <button class="nav-btn" data-view="todo">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7.5 5.5H17M7.5 10H17M7.5 14.5H13.5" stroke-width="1.5" stroke-linecap="round"/><path d="M3 4.5l1.2 1.2L6.5 3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 9l1.2 1.2L6.5 7.5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 13.5l1.2 1.2L6.5 12" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Takenlijsten</span>
       </button>
       <button class="nav-btn" id="team-btn">
-        <span class="icon">👥</span><span>Team</span>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="7.5" cy="7" r="3" stroke-width="1.5"/><path d="M1.5 17.5c0-3.314 2.686-6 6-6s6 2.686 6 6" stroke-width="1.5" stroke-linecap="round"/><circle cx="14.5" cy="6.5" r="2.5" stroke-width="1.5"/><path d="M17.5 16.5c0-2.761-1.343-5-3-5" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>Team</span>
       </button>
     </div>
     <div id="sidebar-footer">
       <div id="sync-status-pill" class="hidden"></div>
       <button class="nav-btn" id="refresh-btn">
-        <span class="icon">🔄</span><span>Refresh</span>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M16.5 10a6.5 6.5 0 11-1.9-4.6" stroke-width="1.5" stroke-linecap="round"/><path d="M13.5 5l1.5 3.5-3.5.5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Refresh</span>
       </button>
       <button class="nav-btn" id="settings-btn">
-        <span class="icon">⚙️</span><span>Settings</span>
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="10" cy="10" r="2.5" stroke-width="1.5"/><path d="M17.4 12.1l-1.2.7a6 6 0 01-.6 1.5l.2 1.4-1.7 1-1-1a6 6 0 01-1.6.4l-.7 1.2h-2l-.7-1.2a6 6 0 01-1.6-.4l-1 1-1.7-1 .2-1.4a6 6 0 01-.6-1.5l-1.2-.7V8l1.2-.7a6 6 0 01.6-1.5L4.6 4.4l1.7-1 1 1a6 6 0 011.6-.4L9.6 2.8h2l.7 1.2a6 6 0 011.6.4l1-1 1.7 1-.2 1.4a6 6 0 01.6 1.5l1.2.7v2.1z" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        <span>Instellingen</span>
       </button>
     </div>
   </nav>
@@ -386,16 +375,128 @@
   <!-- Main area -->
   <div id="main">
     <div id="toolbar">
-      <h2 id="toolbar-title">Monthly View</h2>
+      <button id="hamburger-btn" class="hamburger-btn" aria-label="Menu">☰</button>
+      <h2 id="toolbar-title">Maandoverzicht</h2>
       <div id="toolbar-controls"></div>
     </div>
     <div id="content"></div>
   </div>
 </div>
 
+<!-- ─── Save Checklist ───────────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="checklist-overlay">
+  <div class="modal checklist-modal" id="checklist-modal">
+    <h2>Controleer voor opslaan</h2>
+    <p class="checklist-subtitle">Bevestig de onderstaande punten voordat de offerte wordt opgeslagen.</p>
+    <div id="checklist-items" class="checklist-items"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="checklist-cancel">Annuleren</button>
+      <button class="btn btn-primary" id="checklist-confirm" disabled>Opslaan</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Quote Wizard ──────────────────────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="quote-wizard-overlay">
+  <div class="modal wide" id="quote-wizard">
+    <div class="wizard-steps-indicator">
+      <div class="step-dot done" id="qw-dot-0"></div>
+      <div class="step-dot" id="qw-dot-1"></div>
+      <div class="step-dot" id="qw-dot-2"></div>
+    </div>
+
+    <!-- Stap 1: Klantgegevens -->
+    <div class="wizard-step active" id="qw-step-0">
+      <h2>Nieuwe offerte</h2>
+      <p class="wizard-subtitle">Vul de basisgegevens in voor de offerte.</p>
+      <div class="form-group">
+        <label>Klant *</label>
+        <input type="text" id="qw-client" placeholder="Klantnaam" autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label>Projectnaam *</label>
+        <input type="text" id="qw-name" placeholder="Naam van het project" autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label>Omschrijving</label>
+        <textarea id="qw-desc" placeholder="Korte beschrijving van het project…" rows="3" style="width:100%;resize:vertical"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="qw-cancel">Annuleer</button>
+        <button class="btn btn-primary" id="qw-next-0">Volgende →</button>
+      </div>
+    </div>
+
+    <!-- Stap 2: Afbeelding -->
+    <div class="wizard-step" id="qw-step-1">
+      <h2>Projectafbeelding</h2>
+      <p class="wizard-subtitle">Voeg een referentieafbeelding toe — optioneel.</p>
+      <div class="qw-drop-zone" id="qw-drop-zone">
+        <div class="qw-drop-icon">🖼️</div>
+        <div class="qw-drop-text">Sleep een afbeelding hierheen</div>
+        <div class="qw-drop-sub">of klik om te bladeren (JPG, PNG, WebP)</div>
+        <input type="file" id="qw-file-input" accept="image/*" style="display:none" />
+      </div>
+      <div id="qw-img-preview" class="qw-img-preview hidden">
+        <img id="qw-preview-img" src="" alt="Preview" />
+        <button class="qw-img-remove" id="qw-img-remove">✕ Verwijder</button>
+      </div>
+      <div class="qw-ai-hint">✨ AI-gegenereerde afbeeldingen — binnenkort beschikbaar</div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="qw-back-1">← Terug</button>
+        <button class="btn btn-primary" id="qw-next-1">Volgende →</button>
+      </div>
+    </div>
+
+    <!-- Stap 3: Diensten & Materialen -->
+    <div class="wizard-step" id="qw-step-2">
+      <h2>Diensten, Materialen &amp; Exclusief</h2>
+      <p class="wizard-subtitle">Selecteer wat van toepassing is. Je kunt later nog aanpassen.</p>
+      <div class="qw-selection-grid">
+        <div class="qw-selection-col">
+          <div class="qw-col-title">Materialen</div>
+          <div id="qw-mat-checks"></div>
+        </div>
+        <div class="qw-selection-col">
+          <div class="qw-col-title">Diensten</div>
+          <div id="qw-svc-checks"></div>
+        </div>
+        <div class="qw-selection-col">
+          <div class="qw-col-title">Exclusief</div>
+          <div id="qw-excl-checks"></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="qw-back-2">← Terug</button>
+        <button class="btn btn-primary" id="qw-finish">Concept maken →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Catalog management overlay -->
+<div id="catalog-overlay" class="modal-overlay hidden">
+  <div class="modal catalog-modal">
+    <div class="catalog-header">
+      <h2 id="catalog-title">Offerte-instellingen</h2>
+      <button class="modal-close" id="catalog-close">✕</button>
+    </div>
+    <div class="catalog-tabs">
+      <button class="catalog-tab active" data-tab="mat">Materialen</button>
+      <button class="catalog-tab" data-tab="svc">Diensten</button>
+      <button class="catalog-tab" data-tab="excl">Exclusief</button>
+      <button class="catalog-tab" data-tab="check">Checklist</button>
+    </div>
+    <div class="catalog-body" id="catalog-body">
+      <!-- rendered by JS -->
+    </div>
+  </div>
+</div>
+
 <!-- Toast notification -->
 <div id="toast"></div>
 
+<script src="api-browser.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
