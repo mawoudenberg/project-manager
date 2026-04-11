@@ -149,6 +149,13 @@ def init_db():
     qcols = [r[1] for r in db.execute("PRAGMA table_info(quotes)").fetchall()]
     if 'image_data' not in qcols:
         db.execute("ALTER TABLE quotes ADD COLUMN image_data TEXT DEFAULT ''")
+    if 'extras_json' not in qcols:
+        db.execute("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''")
+    qicols = [r[1] for r in db.execute("PRAGMA table_info(quote_items)").fetchall()]
+    if 'is_outsourced' not in qicols:
+        db.execute("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0")
+    if 'margin' not in qicols:
+        db.execute("ALTER TABLE quote_items ADD COLUMN margin REAL DEFAULT NULL")
 
 
 def order_for(table):
