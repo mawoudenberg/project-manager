@@ -140,6 +140,22 @@ function migrateSchema() {
     db.exec("ALTER TABLE todo_items ADD COLUMN sort_order INTEGER DEFAULT 0");
     db.exec("UPDATE todo_items SET sort_order = id");
   }
+
+  const quoteCols = db.pragma('table_info(quotes)').map(c => c.name);
+  if (!quoteCols.includes('image_data')) {
+    db.exec("ALTER TABLE quotes ADD COLUMN image_data TEXT DEFAULT ''");
+  }
+  if (!quoteCols.includes('extras_json')) {
+    db.exec("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''");
+  }
+
+  const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
+  if (!qiCols.includes('is_outsourced')) {
+    db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0");
+  }
+  if (!qiCols.includes('margin')) {
+    db.exec("ALTER TABLE quote_items ADD COLUMN margin REAL DEFAULT NULL");
+  }
 }
 
 // ─── Generic query dispatcher ─────────────────────────────────────────────────

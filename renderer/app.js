@@ -2496,8 +2496,35 @@ async function addTodoItem(listId, text) {
 
 async function toggleTodoItem(listId, itemId, completed) {
   await remoteQuery({ action: 'update', table: 'todo_items', data: { completed: completed ? 1 : 0 }, where: { id: itemId } });
-  await loadTodoLists();
-  renderTodo();
+  // Update local state in place — no full re-render so scroll position is kept
+  const items = state.todoItems[listId] || [];
+  const item = items.find(i => String(i.id) === String(itemId));
+  if (item) item.completed = completed ? 1 : 0;
+
+  // Update only the affected row + the card's progress bar
+  const row = document.querySelector(`.todo-item-row[data-item-id="${itemId}"]`);
+  if (row) {
+    const text = row.querySelector('.todo-item-text');
+    if (text) text.classList.toggle('done', !!completed);
+  }
+  const card = document.querySelector(`.todo-card[data-list-id="${listId}"]`);
+  if (card) {
+    const done = items.filter(i => i.completed).length;
+    const pct = items.length ? Math.round((done / items.length) * 100) : 0;
+    const bar = card.querySelector('.todo-progress-bar');
+    if (bar) bar.style.width = pct + '%';
+    const counter = card.querySelector('.todo-card-header > div:last-child');
+    if (counter && counter.textContent.includes('afgerond')) {
+      counter.textContent = `${done}/${items.length} afgerond`;
+    }
+  }
+
+  // If "Verberg afgerond" is on, fade & remove just this row
+  if (state.todoHideDone && completed && row) {
+    row.style.transition = 'opacity .25s';
+    row.style.opacity = '0';
+    setTimeout(() => row.remove(), 250);
+  }
 }
 
 async function deleteTodoItem(listId, itemId) {
@@ -3330,7 +3357,13 @@ async function savePresets() {
 let qe = null;
 
 function freshQE(quote) {
-  const stored = quote?.id ? JSON.parse(localStorage.getItem('qextra_' + quote.id) || '{}') : {};
+  // Prefer DB-stored extras_json (synced across devices); fall back to localStorage for legacy quotes
+  let stored = {};
+  if (quote?.extras_json) {
+    try { stored = JSON.parse(quote.extras_json) || {}; } catch (_) { stored = {}; }
+  } else if (quote?.id) {
+    try { stored = JSON.parse(localStorage.getItem('qextra_' + quote.id) || '{}'); } catch (_) { stored = {}; }
+  }
   return {
     id:         quote?.id         ?? null,
     name:       quote?.name       ?? '',
@@ -3342,6 +3375,7 @@ function freshQE(quote) {
     client_phone: stored.client_phone ?? '',
     quote_date: quote?.quote_date ?? toDateStr(new Date()),
     margin:     quote?.margin     ?? 20,
+    outsource_margin: stored.outsource_margin ?? 15,
     status:     quote?.status     ?? 'draft',
     notes:      quote?.notes      ?? '',
     image_data:     quote?.image_data || (quote?.id ? localStorage.getItem('qimg_' + quote.id) : '') || '',
@@ -3702,6 +3736,9 @@ function renderQuoteEditorView() {
     <div class="qe-section">
       <div class="qe-section-header">
         <span class="qe-section-title">Diensten</span>
+        <div class="qe-margin-ctrl" title="Marge die wordt toegepast op uitbesteed werk">
+          Marge uitbesteed <input type="number" id="qe-out-margin" value="${qe.outsource_margin}" min="0" max="200" step="1" />%
+        </div>
       </div>
       <div class="preset-wrap" id="svc-preset-wrap">
         <button class="qe-add-btn" id="svc-add-btn" type="button">＋ Dienst toevoegen</button>
@@ -3714,15 +3751,16 @@ function renderQuoteEditorView() {
       <table class="qi-table">
         <thead><tr>
           <th style="width:3%"></th>
-          <th style="width:41%">Dienst</th>
-          <th style="width:14%">Uren</th>
-          <th class="num" style="width:18%">Tarief/uur</th>
-          <th class="num" style="width:20%">Totaal</th>
+          <th style="width:36%">Dienst</th>
+          <th style="width:9%" title="Vink aan als deze dienst wordt uitbesteed">Uitb.</th>
+          <th style="width:13%">Uren</th>
+          <th class="num" style="width:17%">Tarief/uur</th>
+          <th class="num" style="width:18%">Totaal</th>
           <th style="width:4%"></th>
         </tr></thead>
         <tbody id="svc-tbody"></tbody>
       </table>
-      <div style="height:4px"></div>
+      <div class="qe-mat-subtotals" id="svc-subtotals"></div>
     </div>
 
     <!-- Exclusions -->
@@ -3762,6 +3800,15 @@ function renderQuoteEditorView() {
     document.querySelectorAll('.qi-margin').forEach(inp => { inp.placeholder = qe.margin; });
     updateTotals();
   });
+  const outMarginEl = document.getElementById('qe-out-margin');
+  if (outMarginEl) {
+    outMarginEl.addEventListener('focus', e => e.target.select());
+    outMarginEl.addEventListener('input', e => {
+      qe.outsource_margin = parseFloat(e.target.value) || 0;
+      updateSvcSubtotals();
+      updateTotals();
+    });
+  }
 
   // PDF options wiring
   document.querySelectorAll('#qe-pdf-opts input[type=checkbox]').forEach(cb => {
@@ -3839,17 +3886,19 @@ function renderSvcTable() {
   if (!tbody) return;
 
   tbody.innerHTML = qe.services.map((s, i) => `
-    <tr draggable="true" data-idx="${i}">
+    <tr draggable="true" data-idx="${i}" class="${s.is_outsourced ? 'svc-row-outsourced' : ''}">
       <td class="drag-handle" title="Versleep">⠿</td>
       <td><input class="qi-input" data-t="svc" data-i="${i}" data-f="name"       value="${escHtml(s.name)}"      placeholder="Dienst" /></td>
+      <td style="text-align:center"><input type="checkbox" class="qi-check" data-t="svc" data-i="${i}" data-f="is_outsourced" ${s.is_outsourced ? 'checked' : ''} title="Uitbesteed werk" /></td>
       <td><input class="qi-input num" data-t="svc" data-i="${i}" data-f="quantity"  value="${s.quantity}" type="number" min="0" step="0.5" /></td>
       <td class="num"><input class="qi-input num" data-t="svc" data-i="${i}" data-f="unit_price" value="${s.unit_price}" type="number" min="0" step="any" /></td>
       <td class="num" id="svc-row-total-${i}">${fmtEur(s.quantity * s.unit_price)}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="6" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="7" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('svc');
   wireDragDrop('svc');
+  updateSvcSubtotals();
 }
 
 function wireTableInputs(type) {
@@ -3874,6 +3923,22 @@ function wireTableInputs(type) {
       const rowTotal = document.getElementById(`${type}-row-total-${i}`);
       if (rowTotal) rowTotal.textContent = fmtEur(arr[i].quantity * arr[i].unit_price);
       if (type === 'mat') updateMatSubtotals();
+      if (type === 'svc') updateSvcSubtotals();
+      updateTotals();
+    });
+  });
+
+  tbody.querySelectorAll('.qi-check').forEach(chk => {
+    chk.addEventListener('change', () => {
+      const i = parseInt(chk.dataset.i);
+      const field = chk.dataset.f;
+      const arr = type === 'mat' ? qe.materials : qe.services;
+      if (!arr[i]) return;
+      arr[i][field] = chk.checked ? 1 : 0;
+      // Toggle the outsourced styling on the row
+      const row = chk.closest('tr');
+      if (row) row.classList.toggle('svc-row-outsourced', !!chk.checked);
+      if (type === 'svc') updateSvcSubtotals();
       updateTotals();
     });
   });
@@ -4094,22 +4159,43 @@ function wireExclusions() {
 
 // ─── Calculations ─────────────────────────────────────────────────────────────
 
-function calcQuoteTotals(items, globalMargin) {
+function calcQuoteTotals(items, globalMargin, outsourceMargin) {
   const matItems = items.filter(i => i.type === 'material');
   const svcItems = items.filter(i => i.type === 'service');
   const globalMarginPct = parseFloat(globalMargin) || 20;
+  const outsourceMarginPct = parseFloat(outsourceMargin) || 0;
 
+  // Materials: cost-passthrough + margin
   const matEx = matItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
   const matTotal = matItems.reduce((s, i) => {
     const pct = (i.margin != null && i.margin !== '') ? parseFloat(i.margin) : globalMarginPct;
     return s + (i.quantity * i.unit_price * (1 + pct / 100));
   }, 0);
   const matMargin = matTotal - matEx;
-  const svcTotal = svcItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
+
+  // Services: split into self vs outsourced
+  const svcSelfItems = svcItems.filter(i => !i.is_outsourced);
+  const svcOutItems  = svcItems.filter(i =>  i.is_outsourced);
+  const svcSelfTotal = svcSelfItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
+  const svcOutCost   = svcOutItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
+  const svcOutTotal  = svcOutCost * (1 + outsourceMarginPct / 100);
+  const svcOutMargin = svcOutTotal - svcOutCost;
+  const svcTotal     = svcSelfTotal + svcOutTotal;
+
   const subtotal = matTotal + svcTotal;
   const btw = subtotal * 0.21;
   const grandTotal = subtotal + btw;
-  return { matEx, matMargin, matTotal, svcTotal, subtotal, btw, grandTotal, marginPct: globalMarginPct };
+
+  // Profit = own labour revenue + margins on materials and outsourced work
+  const profit = svcSelfTotal + matMargin + svcOutMargin;
+
+  return {
+    matEx, matMargin, matTotal,
+    svcSelfTotal, svcOutCost, svcOutMargin, svcOutTotal, svcTotal,
+    subtotal, btw, grandTotal,
+    marginPct: globalMarginPct, outsourceMarginPct,
+    profit,
+  };
 }
 
 function calcQETotals() {
@@ -4117,7 +4203,7 @@ function calcQETotals() {
     ...qe.materials.map(i => ({ ...i, type: 'material' })),
     ...qe.services.map(i => ({ ...i, type: 'service' })),
   ];
-  return calcQuoteTotals(allItems, qe.margin);
+  return calcQuoteTotals(allItems, qe.margin, qe.outsource_margin);
 }
 
 function margeLabel(marginPct) {
@@ -4136,21 +4222,43 @@ function updateMatSubtotals() {
     <div class="row bold"><span>Totaal materialen</span><span>${fmtEur(t.matTotal)}</span></div>`;
 }
 
+function updateSvcSubtotals() {
+  const el = document.getElementById('svc-subtotals');
+  if (!el || !qe) return;
+  const t = calcQETotals();
+  const hasOutsourced = t.svcOutCost > 0;
+  el.innerHTML = `
+    <div class="row"><span>Eigen diensten</span><span>${fmtEur(t.svcSelfTotal)}</span></div>
+    ${hasOutsourced ? `
+      <div class="row"><span>Uitbesteed (kostprijs)</span><span>${fmtEur(t.svcOutCost)}</span></div>
+      <div class="row"><span>Marge uitbesteed (${t.outsourceMarginPct}%)</span><span>+ ${fmtEur(t.svcOutMargin)}</span></div>
+    ` : ''}
+    <div class="row bold"><span>Totaal diensten</span><span>${fmtEur(t.svcTotal)}</span></div>`;
+}
+
 function updateTotals() {
   updateMatSubtotals();
+  updateSvcSubtotals();
   const el = document.getElementById('qe-totals-panel');
   if (!el || !qe) return;
   const t = calcQETotals();
+  const hasOutsourced = t.svcOutCost > 0;
   el.innerHTML = `
     <div class="qt-row"><span class="qt-label">Materialen (excl. marge)</span><span class="qt-val">${fmtEur(t.matEx)}</span></div>
     <div class="qt-row"><span class="qt-label">${margeLabel(t.marginPct)}</span><span class="qt-val">+ ${fmtEur(t.matMargin)}</span></div>
     <div class="qt-row"><span class="qt-label">Totaal materialen</span><span class="qt-val">${fmtEur(t.matTotal)}</span></div>
-    <div class="qt-row"><span class="qt-label">Totaal diensten</span><span class="qt-val">${fmtEur(t.svcTotal)}</span></div>
+    <div class="qt-row"><span class="qt-label">Eigen diensten</span><span class="qt-val">${fmtEur(t.svcSelfTotal)}</span></div>
+    ${hasOutsourced ? `
+      <div class="qt-row"><span class="qt-label">Uitbesteed (kostprijs)</span><span class="qt-val">${fmtEur(t.svcOutCost)}</span></div>
+      <div class="qt-row"><span class="qt-label">Marge uitbesteed (${t.outsourceMarginPct}%)</span><span class="qt-val">+ ${fmtEur(t.svcOutMargin)}</span></div>
+    ` : ''}
     <div class="qt-divider"></div>
     <div class="qt-row subtotal"><span class="qt-label">Subtotaal excl. BTW</span><span class="qt-val">${fmtEur(t.subtotal)}</span></div>
     <div class="qt-row"><span class="qt-label">BTW (21%)</span><span class="qt-val">+ ${fmtEur(t.btw)}</span></div>
     <div class="qt-divider"></div>
-    <div class="qt-row final"><span class="qt-label">TOTAAL incl. BTW</span><span class="qt-val">${fmtEur(t.grandTotal)}</span></div>`;
+    <div class="qt-row final"><span class="qt-label">TOTAAL incl. BTW</span><span class="qt-val">${fmtEur(t.grandTotal)}</span></div>
+    <div class="qt-divider"></div>
+    <div class="qt-row profit"><span class="qt-label">Eigen verdiensten</span><span class="qt-val">${fmtEur(t.profit)}</span></div>`;
 }
 
 // ─── Save / Delete Quote ──────────────────────────────────────────────────────
@@ -4224,10 +4332,22 @@ function updateChecklistBadge() {
 }
 
 async function performSave() {
+  const extrasJson = JSON.stringify({
+    client_contact: qe.client_contact,
+    client_address: qe.client_address,
+    client_postcode: qe.client_postcode,
+    client_email: qe.client_email,
+    client_phone: qe.client_phone,
+    extra_images: qe.extra_images,
+    pdf_opts: qe.pdf_opts,
+    outsource_margin: qe.outsource_margin,
+  });
   const quoteData = {
     name: qe.name.trim(), client: qe.client.trim(), quote_date: qe.quote_date,
     margin: qe.margin, status: qe.status, notes: qe.notes.trim(),
     created_by: state.config?.name || '',
+    image_data: qe.image_data || '',
+    extras_json: extrasJson,
   };
 
   try {
@@ -4240,25 +4360,16 @@ async function performSave() {
       quoteId = res.id;
       qe.id = quoteId;
     }
-    // Store images + extra fields locally (Pi DB doesn't have these columns)
+    // Cleanup legacy localStorage entries (now stored in DB)
     if (quoteId) {
-      if (qe.image_data) localStorage.setItem('qimg_' + quoteId, qe.image_data);
-      else localStorage.removeItem('qimg_' + quoteId);
-      localStorage.setItem('qextra_' + quoteId, JSON.stringify({
-        client_contact: qe.client_contact,
-        client_address: qe.client_address,
-        client_postcode: qe.client_postcode,
-        client_email: qe.client_email,
-        client_phone: qe.client_phone,
-        extra_images: qe.extra_images,
-        pdf_opts: qe.pdf_opts,
-      }));
+      localStorage.removeItem('qimg_' + quoteId);
+      localStorage.removeItem('qextra_' + quoteId);
     }
 
     const allItems = [
-      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i })),
-      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i })),
-      ...qe.exclusions.map((ex, i) => ({ quote_id: quoteId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i })),
+      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0 })),
+      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0 })),
+      ...qe.exclusions.map((ex, i) => ({ quote_id: quoteId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0 })),
     ];
     for (const item of allItems) {
       await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
