@@ -1809,7 +1809,11 @@ tr:hover .qi-del { opacity: 1; }
 /* ─── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 1000px) {
   #sidebar { width: 60px; }
-  #sidebar-brand, #sidebar-user, .nav-btn span:not(:first-child) { display: none; }
+  #sidebar-user, .nav-btn span:not(:first-child) { display: none; }
+  #sidebar-header { padding: 12px 6px; }
+  #sidebar-brand { justify-content: center; margin: 0; }
+  #sidebar-logo { width: 44px; padding: 0; }
+  html[data-theme="dark"] #sidebar-logo { width: 42px; padding: 2px 3px; }
   .nav-btn { justify-content: center; padding: 10px; }
   .nav-btn .icon { font-size: 20px; }
   .nav-icon { width: 22px; height: 22px; }
