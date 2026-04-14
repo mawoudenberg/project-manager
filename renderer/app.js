@@ -135,6 +135,10 @@ async function init() {
     await loadPresets();
     showApp();
     await loadAll();
+    // Restore saved calendar preferences
+    const calPrefs = loadCalPrefs();
+    if (calPrefs.view && CAL_VIEWS.has(calPrefs.view)) state.view = calPrefs.view;
+    if (calPrefs.filter) Object.assign(state.calFilter, calPrefs.filter);
     renderView();
     refreshTeamDatalist();
     startApiPolling();
@@ -252,7 +256,20 @@ function renderView() {
   (views[state.view] || renderMonthly)();
 }
 
-const CAL_VIEWS = new Set(['monthly', 'weekly', 'daily', 'yearly']);
+const CAL_VIEWS = new Set(['monthly', 'weekly', 'daily', 'yearly', 'gantt']);
+
+const CAL_PREFS_KEY = 'calPrefs';
+function saveCalPrefs() {
+  if (CAL_VIEWS.has(state.view)) {
+    localStorage.setItem(CAL_PREFS_KEY, JSON.stringify({
+      view: state.view,
+      filter: state.calFilter,
+    }));
+  }
+}
+function loadCalPrefs() {
+  try { return JSON.parse(localStorage.getItem(CAL_PREFS_KEY)) || {}; } catch (_) { return {}; }
+}
 
 function setView(view) {
   state.view = view;
@@ -267,6 +284,7 @@ function setView(view) {
   titleEl.textContent = titles[view] ?? '';
   if (view !== 'monthly') document.getElementById('content').className = '';
   if (!CAL_VIEWS.has(view)) document.getElementById('cal-filter-bar')?.remove();
+  saveCalPrefs();
   renderView();
 }
 
@@ -276,6 +294,7 @@ function calViewToggleHTML(active) {
     <button class="gmt-btn${active==='daily'?' active':''}" id="cvt-day">Dag</button>
     <button class="gmt-btn${active==='weekly'?' active':''}" id="cvt-week">Week</button>
     <button class="gmt-btn${active==='monthly'?' active':''}" id="cvt-month">Maand</button>
+    <button class="gmt-btn${active==='gantt'?' active':''}" id="cvt-gantt">Gantt</button>
   </div>`;
 }
 function renderCalFilterBar() {
@@ -320,6 +339,7 @@ function renderCalFilterBar() {
     btn.addEventListener('click', () => {
       const [key, val] = btn.dataset.cf.split('-');
       state.calFilter[key] = val;
+      saveCalPrefs();
       renderView();
     });
   });
@@ -328,6 +348,7 @@ function wireCalViewToggle() {
   document.getElementById('cvt-day')?.addEventListener('click',   () => { state.cursor = new Date(state.today); setView('daily'); });
   document.getElementById('cvt-week')?.addEventListener('click',  () => { state.cursor = new Date(state.today); setView('weekly'); });
   document.getElementById('cvt-month')?.addEventListener('click', () => { state.cursor = new Date(state.today); setView('monthly'); });
+  document.getElementById('cvt-gantt')?.addEventListener('click', () => { setView('gantt'); });
 }
 
 /* ─── Monthly View ─────────────────────────────────────────────────────────── */
@@ -1132,19 +1153,22 @@ function ganttToolbarNav(label, prevFn, nextFn) {
       <button class="btn-icon" id="gnt-prev">‹</button>
       <span>${label}</span>
       <button class="btn-icon" id="gnt-next">›</button>
+      ${calViewToggleHTML('gantt')}
       <div class="gantt-mode-toggle">
-        <button class="gmt-btn${state.ganttMode==='week'?' active':''}" id="gmt-week">Week</button>
-        <button class="gmt-btn${state.ganttMode==='day'?' active':''}" id="gmt-day">Dag</button>
+        <button class="gmt-btn${state.ganttMode==='week'?' active':''}" id="gmt-week">Weken</button>
+        <button class="gmt-btn${state.ganttMode==='day'?' active':''}" id="gmt-day">Dagen</button>
       </div>
       <button class="btn btn-sm${state.ganttHideInactive?' btn-primary':' btn-ghost'}" id="gnt-filter-btn">
         ${state.ganttHideInactive ? 'Toon alles' : 'Alleen actief'}
       </button>
     </div>`;
+  wireCalViewToggle();
   document.getElementById('gnt-prev').onclick = prevFn;
   document.getElementById('gnt-next').onclick = nextFn;
   document.getElementById('gmt-week').onclick = () => { state.ganttMode = 'week'; renderGantt(); };
   document.getElementById('gmt-day').onclick  = () => { state.ganttMode = 'day';  renderGantt(); };
   document.getElementById('gnt-filter-btn').onclick = () => { state.ganttHideInactive = !state.ganttHideInactive; renderGantt(); };
+  renderCalFilterBar();
 }
 
 /* ─── Gantt Week View (Projects, multi-week overview) ──────────────────────── */
@@ -1248,6 +1272,13 @@ function renderGanttWeek() {
     // Stage rows (only when expanded) — grouped by name
     const stageRows = isExpanded ? _ganttGroupedStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd, totalDays) : '';
 
+    const addStageRow = isExpanded ? `<div class="gnt-row gnt-add-stage-row" data-proj-id="${p.id}" style="cursor:pointer">
+      <div class="gnt-lbl gnt-stage-lbl" style="border-left:3px solid transparent;opacity:.5">
+        <div class="gnt-lbl-text"><span class="gnt-stage-name">+ Fase</span></div>
+      </div>
+      <div class="gnt-timeline">${bgCells}</div>
+    </div>` : '';
+
     return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}" style="border-left:4px solid ${p.color||'#4f8ef7'}">
       <div class="gnt-lbl">
         <button class="gnt-toggle${isExpanded?' expanded':''}" data-proj-id="${p.id}"
@@ -1269,7 +1300,7 @@ function renderGanttWeek() {
           <div class="gnt-bar-hr"></div>
         </div>
       </div>
-    </div>${stageRows}`;
+    </div>${stageRows}${addStageRow}`;
   }).join('');
 
   content.innerHTML = `
@@ -1308,6 +1339,12 @@ function renderGanttWeek() {
       if (el.classList.contains('gnt-bar')) e.stopPropagation();
       const proj = state.projects.find(p => p.id == (el.dataset.projId || el.closest('[data-proj-id]')?.dataset.projId));
       if (proj) openProjectModal(proj);
+    });
+  });
+
+  content.querySelectorAll('.gnt-add-stage-row').forEach(row => {
+    row.addEventListener('click', () => {
+      openStageModal(null, Number(row.dataset.projId));
     });
   });
 
@@ -1358,7 +1395,6 @@ function _ganttGroupedStageRows(projStages, p, bgCells, todayLine, rangeStart, r
         <div class="gnt-bar-hr"></div>
       </div>`;
     }).join('');
-    const countBadge = stages.length > 1 ? ` <span class="gnt-stage-count">×${stages.length}</span>` : '';
     return `<div class="gnt-row gnt-stage-row"
       data-stage-id="${stages[0].id}"
       data-proj-id="${p.id}"
@@ -1366,7 +1402,7 @@ function _ganttGroupedStageRows(projStages, p, bgCells, todayLine, rangeStart, r
       <div class="gnt-lbl gnt-stage-lbl" style="border-left:3px solid ${color}">
         <div class="gnt-stage-dot" style="background:${color}"></div>
         <div class="gnt-lbl-text">
-          <span class="gnt-stage-name">${escHtml(name)}${countBadge}</span>
+          <span class="gnt-stage-name">${escHtml(name)}</span>
         </div>
       </div>
       <div class="gnt-timeline">${bgCells}${todayLine}${bars}</div>
@@ -1438,15 +1474,31 @@ async function _onGanttDragEnd() {
     if (d.startDate !== d.endDate || d.endDate) {
       ganttJustDragged = true;
       setTimeout(() => { ganttJustDragged = false; }, 300);
-      const existing = state.stages.filter(s => s.project_id == d.projId);
-      await remoteQuery({ action: 'insert', table: 'project_stages', data: {
-        project_id: d.projId,
-        name:       d.stageName,
-        color:      d.stageColor,
-        sort_order: existing.length,
-        start_date: d.startDate,
-        end_date:   d.endDate || d.startDate,
-      }});
+      // Find existing stage with same name that has no dates yet, or update the referenced stage
+      const refStage = state.stages.find(s => s.id == d.stageId);
+      const sameNameEmpty = state.stages.find(s =>
+        s.project_id == d.projId && s.name === d.stageName && (!s.start_date || !s.end_date)
+      );
+      const target = sameNameEmpty || refStage;
+      if (target) {
+        // Update existing stage dates
+        await remoteQuery({ action: 'update', table: 'project_stages', data: {
+          start_date: d.startDate,
+          end_date:   d.endDate || d.startDate,
+        }, where: { id: target.id } });
+      } else {
+        // No empty slot — create a new time slot for this stage name
+        const existing = state.stages.filter(s => s.project_id == d.projId);
+        await remoteQuery({ action: 'insert', table: 'project_stages', data: {
+          project_id: d.projId,
+          name:       d.stageName,
+          color:      d.stageColor,
+          sort_order: existing.length,
+          start_date: d.startDate,
+          end_date:   d.endDate || d.startDate,
+          notes:      '',
+        }});
+      }
       await loadStages();
       renderGantt();
       toast(`'${d.stageName}' toegevoegd`);
@@ -1529,8 +1581,8 @@ function wireGanttInteractions(rangeStart, totalDays) {
         ghost.style.cssText = `left:${(startDayOffset/totalDays*100).toFixed(2)}%;width:${(1/totalDays*100).toFixed(2)}%;background:${color}`;
         timeline.appendChild(ghost);
         ganttDraw = { rect, startDayOffset, startDate, endDate: startDate, ghostEl: ghost,
-          stageName: refStage?.name || '', stageColor: color, projId: Number(stageRow.dataset.projId),
-          rangeStart, totalDays };
+          stageName: refStage?.name || '', stageColor: color, stageId: refStage?.id || null,
+          projId: Number(stageRow.dataset.projId), rangeStart, totalDays };
         document.body.style.userSelect = 'none';
       }
       return;
@@ -1875,21 +1927,46 @@ function renderProjectDetail(proj) {
   if (projStages.length === 0) {
     html += `<div class="proj-stages-empty">Nog geen fases. Klik een fase hierboven om toe te voegen.</div>`;
   } else {
-    const instanceIndex = {};
-    html += projStages.map(s => {
+    // Deduplicate stages by name — show each name once, merge tasks from all instances
+    const seenNames = new Set();
+    const deduped = projStages.filter(s => {
+      if (seenNames.has(s.name)) return false;
+      seenNames.add(s.name);
+      return true;
+    });
+    html += deduped.map(s => {
       const c = s.color || proj.color || '#4f8ef7';
-      instanceIndex[s.name] = (instanceIndex[s.name] || 0) + 1;
-      const label = nameCounts[s.name] > 1
-        ? `${escHtml(s.name)} <span class="proj-stage-index">#${instanceIndex[s.name]}</span>`
-        : escHtml(s.name);
-      return `<div class="proj-stage-row" data-stage-id="${s.id}" style="border-left:3px solid ${c};cursor:pointer">
-        <div class="proj-stage-color" style="background:${c}"></div>
-        <div class="proj-stage-info">
-          <div class="proj-stage-name">${label}</div>
-          <div class="proj-stage-dates">${(s.start_date && s.end_date) ? `${s.start_date} → ${s.end_date}` : '<span style="opacity:.5">Nog geen datums — klik om in te stellen</span>'}</div>
+      const label = escHtml(s.name);
+      // Collect all stage IDs with this name for task matching
+      const allIds = projStages.filter(ps => ps.name === s.name).map(ps => ps.id);
+      const stageTasks = state.tasks.filter(t => allIds.includes(t.stage_id));
+      // Merge date range from all instances
+      const allDates = projStages.filter(ps => ps.name === s.name && ps.start_date && ps.end_date);
+      const mergedStart = allDates.length ? allDates.reduce((min, ps) => ps.start_date < min ? ps.start_date : min, allDates[0].start_date) : '';
+      const mergedEnd = allDates.length ? allDates.reduce((max, ps) => ps.end_date > max ? ps.end_date : max, allDates[0].end_date) : '';
+      const openCount = stageTasks.filter(t => t.status !== 'done').length;
+      const taskBadge = stageTasks.length > 0 ? ` <span class="stage-task-badge">${openCount}/${stageTasks.length}</span>` : '';
+      const taskListHtml = stageTasks.length > 0 ? stageTasks.map(t =>
+        `<div class="stage-inline-task ${t.status === 'done' ? 'done' : ''}" data-task-id="${t.id}">
+          <input type="checkbox" class="stage-inline-cb" data-id="${t.id}" ${t.status === 'done' ? 'checked' : ''} />
+          <span class="stage-inline-title">${escHtml(t.title)}</span>
+          ${t.date ? `<span class="stage-inline-date">${t.date}</span>` : ''}
+        </div>`
+      ).join('') : '<div class="stage-inline-empty">Geen taken</div>';
+      return `<div class="proj-stage-block" data-stage-id="${s.id}">
+        <div class="proj-stage-row" data-stage-id="${s.id}" style="border-left:3px solid ${c};cursor:pointer">
+          <div class="proj-stage-color" style="background:${c}"></div>
+          <div class="proj-stage-info">
+            <div class="proj-stage-name">${label}${taskBadge}</div>
+            <div class="proj-stage-dates">${(mergedStart && mergedEnd) ? `${mergedStart} → ${mergedEnd}` : '<span style="opacity:.5">Geen datums</span>'}</div>
+          </div>
+          <span class="stage-expand-arrow" data-stage-id="${s.id}">▸</span>
+          <button class="btn btn-sm btn-ghost dup-stage-btn" data-stage-id="${s.id}" title="Dupliceer fase">⊕</button>
+          <button class="btn btn-sm btn-ghost del-stage-btn" data-stage-name="${escHtml(s.name)}" data-proj-id="${proj.id}" title="Verwijder fase">🗑</button>
         </div>
-        <button class="btn btn-sm btn-ghost dup-stage-btn" data-stage-id="${s.id}" title="Dupliceer fase">⊕</button>
-        <button class="btn btn-sm btn-ghost del-stage-btn" data-stage-id="${s.id}" title="Verwijder fase">🗑</button>
+        <div class="stage-tasks-drawer hidden" data-stage-id="${s.id}">
+          ${taskListHtml}
+        </div>
       </div>`;
     }).join('');
   }
@@ -1931,20 +2008,58 @@ function renderProjectDetail(proj) {
       toast(`'${btn.dataset.name}' toegevoegd`);
     };
   });
+  // Stage row click → toggle task drawer
   content.querySelectorAll('.proj-stage-row').forEach(row => {
     row.onclick = e => {
       if (e.target.closest('.dup-stage-btn')) return;
       if (e.target.closest('.del-stage-btn')) return;
+      const sid = row.dataset.stageId;
+      const drawer = content.querySelector(`.stage-tasks-drawer[data-stage-id="${sid}"]`);
+      const arrow = row.querySelector('.stage-expand-arrow');
+      if (drawer) {
+        const open = drawer.classList.toggle('hidden');
+        if (arrow) arrow.textContent = open ? '▸' : '▾';
+      }
+    };
+    // Double-click → edit stage
+    row.ondblclick = e => {
+      if (e.target.closest('.dup-stage-btn') || e.target.closest('.del-stage-btn')) return;
       const stage = state.stages.find(s => s.id == row.dataset.stageId);
       if (stage) openStageModal(stage, proj.id);
     };
+  });
+
+  // Inline task checkboxes
+  content.querySelectorAll('.stage-inline-cb').forEach(cb => {
+    cb.onchange = async () => {
+      const task = state.tasks.find(t => t.id == cb.dataset.id);
+      if (!task) return;
+      await saveTask({ ...task, status: cb.checked ? 'done' : 'pending' });
+      await loadTasks();
+      renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
+    };
+  });
+
+  // Inline task click → open task modal
+  content.querySelectorAll('.stage-inline-task').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.closest('.stage-inline-cb')) return;
+      const task = state.tasks.find(t => t.id == row.dataset.taskId);
+      if (task) openTaskModal(task);
+    });
   });
 
   content.querySelectorAll('.del-stage-btn').forEach(btn => {
     btn.onclick = async e => {
       e.stopPropagation();
       if (!confirm('Fase verwijderen?')) return;
-      await remoteQuery({ action: 'delete', table: 'project_stages', where: { id: Number(btn.dataset.stageId) } });
+      // Delete all stage instances with this name for this project
+      const name = btn.dataset.stageName;
+      const projId = Number(btn.dataset.projId);
+      const toDelete = state.stages.filter(s => s.project_id == projId && s.name === name);
+      for (const s of toDelete) {
+        await remoteQuery({ action: 'delete', table: 'project_stages', where: { id: s.id } });
+      }
       await loadStages();
       renderProjectDetail(state.projects.find(p => p.id === proj.id) || proj);
       toast('Fase verwijderd');
@@ -2001,7 +2116,13 @@ function openProjectModal(proj) {
   document.getElementById('proj-end').value    = proj?.end_date    || '';
   document.getElementById('proj-status').value = proj?.status      || 'active';
   document.getElementById('proj-delete').classList.toggle('hidden', !isEdit);
-  buildProjColorSwatches(proj?.color || COLORS[0]);
+  // Auto-pick an unused color for new projects
+  let defaultColor = COLORS[0];
+  if (!isEdit) {
+    const usedColors = new Set(state.projects.map(p => p.color));
+    defaultColor = COLORS.find(c => !usedColors.has(c)) || COLORS[state.projects.length % COLORS.length];
+  }
+  buildProjColorSwatches(proj?.color || defaultColor);
   document.getElementById('project-modal').classList.remove('hidden');
   document.getElementById('proj-name').focus();
 }
@@ -2103,28 +2224,33 @@ function openStageModal(stage, projectId, suggestedDate = null) {
 function renderStageTasks(stageId) {
   const list = document.getElementById('stage-task-list');
   if (!list) return;
-  const tasks = stageId ? state.tasks.filter(t => t.stage_id == stageId) : [];
+  // Find all stage IDs with the same name (deduplication support)
+  const refStage = state.stages.find(s => s.id == stageId);
+  const allIds = refStage
+    ? state.stages.filter(s => s.project_id == refStage.project_id && s.name === refStage.name).map(s => Number(s.id))
+    : [Number(stageId)];
+  const tasks = stageId ? state.tasks.filter(t => allIds.includes(Number(t.stage_id))) : [];
   if (tasks.length === 0) {
     list.innerHTML = `<p class="stage-task-empty">Geen taken — voeg er een toe hieronder.</p>`;
     return;
   }
   list.innerHTML = tasks.map(t => `
-    <div class="stage-task-item" data-id="${t.id}">
-      <input type="checkbox" class="stage-task-check" ${t.status === 'done' ? 'checked' : ''} />
-      <span class="stage-task-title ${t.status === 'done' ? 'done' : ''}">${escHtml(t.title)}</span>
-      ${t.assigned_to ? `<span class="stage-task-assignee">${escHtml(t.assigned_to)}</span>` : ''}
-      <button class="stage-task-delete" data-id="${t.id}">×</button>
+    <div class="stm-task-item" data-id="${t.id}">
+      <input type="checkbox" class="stm-task-cb" ${t.status === 'done' ? 'checked' : ''} />
+      <span class="stm-task-title ${t.status === 'done' ? 'done' : ''}">${escHtml(t.title)}</span>
+      ${t.assigned_to ? `<span class="stm-task-assignee">${escHtml(t.assigned_to)}</span>` : ''}
+      <button class="stm-task-del" data-id="${t.id}">×</button>
     </div>
   `).join('');
-  list.querySelectorAll('.stage-task-check').forEach(cb => {
+  list.querySelectorAll('.stm-task-cb').forEach(cb => {
     cb.onchange = async () => {
-      const id = Number(cb.closest('.stage-task-item').dataset.id);
+      const id = Number(cb.closest('.stm-task-item').dataset.id);
       await remoteQuery({ action: 'update', table: 'tasks', data: { status: cb.checked ? 'done' : 'pending' }, where: { id } });
       await loadTasks();
       renderStageTasks(stageId);
     };
   });
-  list.querySelectorAll('.stage-task-delete').forEach(btn => {
+  list.querySelectorAll('.stm-task-del').forEach(btn => {
     btn.onclick = async () => {
       if (!confirm('Taak verwijderen?')) return;
       await remoteQuery({ action: 'delete', table: 'tasks', where: { id: Number(btn.dataset.id) } });
@@ -2203,19 +2329,24 @@ function wireStageModal() {
       color:      selectedSwatch?.dataset.color || COLORS[0],
       notes:      document.getElementById('stage-notes').value.trim(),
     };
-    if (state.editingStage?.id) {
-      await remoteQuery({ action: 'update', table: 'project_stages', data, where: { id: state.editingStage.id } });
-    } else {
-      const projectId = state.editingStage._projectId;
-      const existing  = state.stages.filter(s => s.project_id == projectId);
-      await remoteQuery({ action: 'insert', table: 'project_stages',
-        data: { ...data, project_id: projectId, sort_order: existing.length } });
+    try {
+      if (state.editingStage?.id) {
+        await remoteQuery({ action: 'update', table: 'project_stages', data, where: { id: state.editingStage.id } });
+      } else {
+        const projectId = state.editingStage._projectId;
+        const existing  = state.stages.filter(s => s.project_id == projectId);
+        await remoteQuery({ action: 'insert', table: 'project_stages',
+          data: { ...data, project_id: projectId, sort_order: existing.length } });
+      }
+      await loadStages();
+      closeStageModal();
+      if (state.activeProject) renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
+      if (state.view === 'gantt') renderGantt();
+      toast('Fase opgeslagen');
+    } catch (err) {
+      console.error('Stage save error:', err);
+      toast('Fout bij opslaan fase: ' + err.message);
     }
-    await loadStages();
-    closeStageModal();
-    if (state.activeProject) renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
-    if (state.view === 'gantt') renderGantt();
-    toast('Fase opgeslagen');
   };
 
   document.getElementById('stage-delete').onclick = async () => {
@@ -2619,7 +2750,6 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
   document.getElementById('task-time-group').classList.toggle('hidden', allDay);
   openAssigneePicker(task?.assigned_to ?? state.config.name ?? '');
   document.getElementById('task-status').value = task?.status || 'pending';
-  document.getElementById('task-priority').value = task?.priority || 'medium';
   document.getElementById('task-delete').classList.toggle('hidden', !isEdit);
 
   // Color swatch selection
@@ -2635,6 +2765,59 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
     state.projects.map(p =>
       `<option value="${p.id}" ${preselProject == p.id ? 'selected' : ''}>${escHtml(p.name)}</option>`
     ).join('');
+
+  // Populate stage dropdown based on selected project (deduplicated by name)
+  function populateStageDropdown(projectId, selectedStageId) {
+    const stageSel = document.getElementById('task-stage');
+    const projStages = projectId ? state.stages.filter(s => s.project_id == projectId) : [];
+    // Deduplicate: keep first occurrence per name
+    const seen = new Set();
+    const unique = projStages.filter(s => {
+      if (seen.has(s.name)) return false;
+      seen.add(s.name);
+      return true;
+    });
+    // If selected stage isn't in unique list (it's a duplicate), find by name
+    if (selectedStageId) {
+      const selStage = projStages.find(s => s.id == selectedStageId);
+      if (selStage) {
+        const match = unique.find(s => s.name === selStage.name);
+        if (match) selectedStageId = match.id;
+      }
+    }
+    stageSel.innerHTML = '<option value="">— Geen fase —</option>' +
+      unique.map(s =>
+        `<option value="${s.id}" ${selectedStageId == s.id ? 'selected' : ''}>${escHtml(s.name)}</option>`
+      ).join('') +
+      (projectId ? '<option value="__new__">+ Nieuwe fase…</option>' : '');
+  }
+  populateStageDropdown(preselProject, task?.stage_id ?? null);
+  projSel.addEventListener('change', () => populateStageDropdown(projSel.value, null));
+
+  // Handle "Nieuwe fase" selection
+  document.getElementById('task-stage').addEventListener('change', async function() {
+    if (this.value !== '__new__') return;
+    const projectId = projSel.value;
+    if (!projectId) { this.value = ''; return; }
+    const name = prompt('Naam van de nieuwe fase:');
+    if (!name?.trim()) { this.value = ''; return; }
+    const taskDate = document.getElementById('task-date').value || toDateStr(state.today);
+    const proj = state.projects.find(p => p.id == projectId);
+    const existing = state.stages.filter(s => s.project_id == projectId);
+    const color = DEFAULT_STAGES.find(ds => ds.name.toLowerCase() === name.trim().toLowerCase())?.color || proj?.color || COLORS[0];
+    const result = await remoteQuery({ action: 'insert', table: 'project_stages', data: {
+      project_id: parseInt(projectId),
+      name: name.trim(),
+      start_date: taskDate,
+      end_date: taskDate,
+      color,
+      sort_order: existing.length,
+      notes: '',
+    }});
+    await loadStages();
+    const newId = result?.id || state.stages.filter(s => s.project_id == projectId).slice(-1)[0]?.id;
+    populateStageDropdown(projectId, newId);
+  });
 
   document.getElementById('task-modal').classList.remove('hidden');
   document.getElementById('task-title').focus();
@@ -2677,8 +2860,9 @@ function wireTaskModal() {
       task_time:   document.getElementById('task-all-day').checked ? '' : (document.getElementById('task-time').value || ''),
       assigned_to: pickerAssignees.join(', '),
       project_id:  projVal ? parseInt(projVal) : null,
+      stage_id:    document.getElementById('task-stage').value ? parseInt(document.getElementById('task-stage').value) : null,
       status:      document.getElementById('task-status').value,
-      priority:    document.getElementById('task-priority').value,
+      priority:    'medium',
       color,
       created_by:  state.config.name || '',
       ...(state.editingTask ? { id: state.editingTask.id, created_at: state.editingTask.created_at } : {}),
@@ -3119,7 +3303,12 @@ function wireNav() {
   document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.cursor = new Date(state.today);
-      const view = btn.dataset.view === 'calendar' ? 'monthly' : btn.dataset.view;
+      let view = btn.dataset.view;
+      if (view === 'calendar') {
+        const prefs = loadCalPrefs();
+        view = prefs.view || 'monthly';
+        if (prefs.filter) Object.assign(state.calFilter, prefs.filter);
+      }
       setView(view);
     });
   });
