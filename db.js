@@ -152,6 +152,11 @@ function migrateSchema() {
     db.exec("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''");
   }
 
+  const stageCols = db.pragma('table_info(project_stages)').map(c => c.name);
+  if (!stageCols.includes('notes')) {
+    db.exec("ALTER TABLE project_stages ADD COLUMN notes TEXT DEFAULT ''");
+  }
+
   const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
   if (!qiCols.includes('is_outsourced')) {
     db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0");
