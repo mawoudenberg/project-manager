@@ -14,8 +14,8 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 ALLOWED_TABLES = {
     'tasks', 'todo_lists', 'todo_items', 'team_members',
-    'projects', 'project_stages', 'quotes', 'quote_items',
-    'presets',
+    'projects', 'project_stages', 'stage_slots',
+    'quotes', 'quote_items', 'presets',
 }
 
 # ── Static file serving ─────────────────────────────────────────────────────────
@@ -54,8 +54,8 @@ def get_db():
 
 
 def init_db():
-    with get_db() as db:
-        db.executescript("""
+    db = get_db()
+    db.executescript("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 title       TEXT NOT NULL,
@@ -141,6 +141,14 @@ def init_db():
                 price       REAL DEFAULT 0,
                 sort_order  INTEGER DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS stage_slots (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage_id    INTEGER NOT NULL REFERENCES project_stages(id) ON DELETE CASCADE,
+                start_date  TEXT DEFAULT '',
+                end_date    TEXT DEFAULT '',
+                sort_order  INTEGER DEFAULT 0,
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
         """)
     # Migrate: add sort_order to todo_lists if missing
     cols = [r[1] for r in db.execute("PRAGMA table_info(todo_lists)").fetchall()]
@@ -163,6 +171,41 @@ def init_db():
     if 'margin' not in qicols:
         db.execute("ALTER TABLE quote_items ADD COLUMN margin REAL DEFAULT NULL")
 
+    # One-time migration: consolidate duplicate stages by (project_id, name)
+    # and move their date ranges into stage_slots.
+    slot_count  = db.execute("SELECT COUNT(*) FROM stage_slots").fetchone()[0]
+    stage_count = db.execute("SELECT COUNT(*) FROM project_stages").fetchone()[0]
+    if slot_count == 0 and stage_count > 0:
+        groups = db.execute("""
+            SELECT project_id, name,
+                   GROUP_CONCAT(id) AS ids,
+                   MIN(id) AS keep_id
+              FROM project_stages
+             GROUP BY project_id, name
+        """).fetchall()
+        for g in groups:
+            ids = [int(x) for x in g['ids'].split(',')]
+            keep_id = g['keep_id']
+            ph = ','.join('?' for _ in ids)
+            stages = db.execute(
+                f"SELECT id, start_date, end_date FROM project_stages WHERE id IN ({ph}) ORDER BY id ASC",
+                ids
+            ).fetchall()
+            for i, s in enumerate(stages):
+                if s['start_date'] and s['end_date']:
+                    db.execute(
+                        "INSERT INTO stage_slots (stage_id, start_date, end_date, sort_order) VALUES (?, ?, ?, ?)",
+                        (keep_id, s['start_date'], s['end_date'], i)
+                    )
+            others = [x for x in ids if x != keep_id]
+            if others:
+                oph = ','.join('?' for _ in others)
+                db.execute(f"UPDATE tasks SET stage_id = ? WHERE stage_id IN ({oph})", [keep_id] + others)
+                db.execute(f"DELETE FROM project_stages WHERE id IN ({oph})", others)
+
+    db.commit()
+    db.close()
+
 
 def order_for(table):
     return {
@@ -172,6 +215,7 @@ def order_for(table):
         'team_members':   'ORDER BY name ASC',
         'projects':       'ORDER BY created_at DESC',
         'project_stages': 'ORDER BY sort_order ASC, id ASC',
+        'stage_slots':    'ORDER BY start_date ASC, id ASC',
         'quotes':         'ORDER BY created_at DESC',
         'quote_items':    'ORDER BY sort_order ASC, id ASC',
         'presets':        'ORDER BY sort_order ASC, id ASC',
