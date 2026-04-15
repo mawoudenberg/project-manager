@@ -98,6 +98,15 @@ function createSchema() {
       created_at  TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS stage_slots (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      stage_id    INTEGER NOT NULL REFERENCES project_stages(id) ON DELETE CASCADE,
+      start_date  TEXT DEFAULT '',
+      end_date    TEXT DEFAULT '',
+      sort_order  INTEGER DEFAULT 0,
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS quotes (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       name        TEXT NOT NULL,
@@ -163,6 +172,44 @@ function migrateSchema() {
   }
   if (!qiCols.includes('margin')) {
     db.exec("ALTER TABLE quote_items ADD COLUMN margin REAL DEFAULT NULL");
+  }
+
+  // One-time migration: consolidate duplicate stages by (project_id, name) and
+  // move their date ranges into the new stage_slots table.
+  const slotCount  = db.prepare("SELECT COUNT(*) AS c FROM stage_slots").get().c;
+  const stageCount = db.prepare("SELECT COUNT(*) AS c FROM project_stages").get().c;
+  if (slotCount === 0 && stageCount > 0) {
+    const groups = db.prepare(`
+      SELECT project_id, name,
+             GROUP_CONCAT(id) AS ids,
+             MIN(id) AS keep_id
+        FROM project_stages
+       GROUP BY project_id, name
+    `).all();
+    const tx = db.transaction(() => {
+      for (const g of groups) {
+        const ids = g.ids.split(',').map(Number);
+        const keepId = g.keep_id;
+        const ph = ids.map(() => '?').join(',');
+        const stages = db.prepare(
+          `SELECT id, start_date, end_date FROM project_stages WHERE id IN (${ph}) ORDER BY id ASC`
+        ).all(...ids);
+        stages.forEach((s, i) => {
+          if (s.start_date && s.end_date) {
+            db.prepare(
+              "INSERT INTO stage_slots (stage_id, start_date, end_date, sort_order) VALUES (?, ?, ?, ?)"
+            ).run(keepId, s.start_date, s.end_date, i);
+          }
+        });
+        const others = ids.filter(id => id !== keepId);
+        if (others.length > 0) {
+          const ophP = others.map(() => '?').join(',');
+          db.prepare(`UPDATE tasks SET stage_id = ? WHERE stage_id IN (${ophP})`).run(keepId, ...others);
+          db.prepare(`DELETE FROM project_stages WHERE id IN (${ophP})`).run(...others);
+        }
+      }
+    });
+    tx();
   }
 }
 
@@ -234,7 +281,7 @@ function deleteRow(table, where) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages']);
+const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages', 'stage_slots']);
 
 function validateTable(table) {
   if (!ALLOWED_TABLES.has(table)) throw new Error(`Table not allowed: ${table}`);
@@ -249,6 +296,7 @@ function orderFor(table) {
   if (table === 'quotes')          return ' ORDER BY created_at DESC';
   if (table === 'quote_items')     return ' ORDER BY sort_order ASC, id ASC';
   if (table === 'project_stages')  return ' ORDER BY sort_order ASC, id ASC';
+  if (table === 'stage_slots')     return ' ORDER BY start_date ASC, id ASC';
   return '';
 }
 

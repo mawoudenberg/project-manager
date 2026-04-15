@@ -280,16 +280,6 @@
       <label>Naam *</label>
       <input type="text" id="stage-name" placeholder="Fasenaam" />
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Startdatum</label>
-        <input type="date" id="stage-start" />
-      </div>
-      <div class="form-group">
-        <label>Einddatum</label>
-        <input type="date" id="stage-end" />
-      </div>
-    </div>
     <div class="form-group">
       <label>Kleur</label>
       <div class="color-swatches" id="stage-color-swatches"></div>
@@ -297,6 +287,16 @@
     <div class="form-group">
       <label>Notities</label>
       <textarea id="stage-notes" rows="3" placeholder="Opmerkingen voor deze fase…" style="width:100%;resize:vertical"></textarea>
+    </div>
+    <div class="form-group hidden" id="stage-slots-section">
+      <label>Tijdsloten</label>
+      <div id="stage-slot-list" class="stage-slot-list"></div>
+      <div class="stage-slot-add-row">
+        <input type="date" id="stage-slot-start" />
+        <span style="padding:0 4px;color:var(--text2)">→</span>
+        <input type="date" id="stage-slot-end" />
+        <button class="btn btn-secondary btn-sm" id="stage-slot-add-btn">+ Tijdslot</button>
+      </div>
     </div>
     <div class="form-group hidden" id="stage-tasks-section">
       <label>Taken in deze fase</label>
