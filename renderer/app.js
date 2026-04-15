@@ -2794,20 +2794,28 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
   populateStageDropdown(preselProject, task?.stage_id ?? null);
   projSel.addEventListener('change', () => populateStageDropdown(projSel.value, null));
 
-  // Handle "Nieuwe fase" selection
-  document.getElementById('task-stage').addEventListener('change', async function() {
-    if (this.value !== '__new__') return;
+  // Handle "Nieuwe fase" selection with inline input
+  const stageSel = document.getElementById('task-stage');
+  const stageNewInput = document.getElementById('task-stage-new');
+  stageNewInput.classList.add('hidden');
+  stageNewInput.value = '';
+
+  async function createNewStageFromInput() {
+    const name = stageNewInput.value.trim();
     const projectId = projSel.value;
-    if (!projectId) { this.value = ''; return; }
-    const name = prompt('Naam van de nieuwe fase:');
-    if (!name?.trim()) { this.value = ''; return; }
+    if (!name || !projectId) {
+      stageNewInput.classList.add('hidden');
+      stageNewInput.value = '';
+      if (stageSel.value === '__new__') stageSel.value = '';
+      return;
+    }
     const taskDate = document.getElementById('task-date').value || toDateStr(state.today);
     const proj = state.projects.find(p => p.id == projectId);
     const existing = state.stages.filter(s => s.project_id == projectId);
-    const color = DEFAULT_STAGES.find(ds => ds.name.toLowerCase() === name.trim().toLowerCase())?.color || proj?.color || COLORS[0];
+    const color = DEFAULT_STAGES.find(ds => ds.name.toLowerCase() === name.toLowerCase())?.color || proj?.color || COLORS[0];
     const result = await remoteQuery({ action: 'insert', table: 'project_stages', data: {
       project_id: parseInt(projectId),
-      name: name.trim(),
+      name,
       start_date: taskDate,
       end_date: taskDate,
       color,
@@ -2817,6 +2825,38 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
     await loadStages();
     const newId = result?.id || state.stages.filter(s => s.project_id == projectId).slice(-1)[0]?.id;
     populateStageDropdown(projectId, newId);
+    stageNewInput.classList.add('hidden');
+    stageNewInput.value = '';
+  }
+
+  stageSel.addEventListener('change', function() {
+    if (this.value !== '__new__') {
+      stageNewInput.classList.add('hidden');
+      stageNewInput.value = '';
+      return;
+    }
+    const projectId = projSel.value;
+    if (!projectId) { this.value = ''; return; }
+    stageNewInput.classList.remove('hidden');
+    stageNewInput.value = '';
+    stageNewInput.focus();
+  });
+
+  stageNewInput.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      await createNewStageFromInput();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      stageNewInput.classList.add('hidden');
+      stageNewInput.value = '';
+      stageSel.value = '';
+    }
+  });
+  stageNewInput.addEventListener('blur', async () => {
+    if (!stageNewInput.classList.contains('hidden') && stageNewInput.value.trim()) {
+      await createNewStageFromInput();
+    }
   });
 
   document.getElementById('task-modal').classList.remove('hidden');
@@ -2826,6 +2866,10 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
 function closeTaskModal() {
   document.getElementById('task-modal').classList.add('hidden');
   state.editingTask = null;
+  // Re-render so any stages created inline from the task modal show up
+  if (state.activeProject) {
+    renderProjectDetail(state.projects.find(p => p.id === state.activeProject.id) || state.activeProject);
+  }
 }
 
 async function saveTask(taskData) {
