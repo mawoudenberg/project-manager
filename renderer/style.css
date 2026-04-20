@@ -687,7 +687,7 @@ html[data-theme="dark"] #sidebar-logo {
 .modal h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
 .form-group { margin-bottom: 14px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.form-group input,
+.form-group input:not([type=checkbox]):not([type=radio]),
 .form-group textarea,
 .form-group select { width: 100%; }
 .form-group textarea { resize: vertical; min-height: 70px; }
@@ -1123,7 +1123,9 @@ html[data-theme="dark"] #sidebar-logo {
   font-size: 13px;
   padding: 8px 10px;
   resize: vertical;
-  min-height: 50px;
+  min-height: 90px;
+  height: 120px;
+  max-height: 600px;
   margin-bottom: 18px;
 }
 .qe-notes:focus { outline: none; border-color: var(--accent); }
