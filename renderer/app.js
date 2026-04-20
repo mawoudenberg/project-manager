@@ -306,6 +306,15 @@ function loadCalPrefs() {
 }
 
 function setView(view) {
+  // Warn before leaving the quote editor with unsaved changes
+  if (state.view === 'quote-editor' && qe && _qeDirty && view !== 'quote-editor') {
+    const save = confirm('Je hebt niet-opgeslagen wijzigingen in de offerte.\nOpslaan voor je weggaat?');
+    if (save) {
+      saveQuote().then(() => { qe = null; setView(view); });
+      return;
+    }
+  }
+  if (state.view === 'quote-editor') { qe = null; _qeDirty = false; }
   state.view = view;
   state.activeProject = null;
   document.querySelectorAll('.nav-btn[data-view]').forEach(b => {
@@ -3617,6 +3626,8 @@ async function savePresets() {
 
 // qe = quoteEditor live state (in-memory while editing)
 let qe = null;
+let _qeDirty = false;
+function markQEDirty() { _qeDirty = true; }
 
 function freshQE(quote) {
   // Prefer DB-stored extras_json (synced across devices); fall back to localStorage for legacy quotes
@@ -3853,6 +3864,7 @@ function qwLoadImage(file) {
 
 async function openQuoteEditor(quote) {
   qe = freshQE(quote);
+  _qeDirty = false;
 
   // Load existing items if editing
   if (qe.id) {
@@ -3880,7 +3892,7 @@ function renderQuoteEditorView() {
     </div>`;
 
   document.getElementById('toolbar-title').textContent = qe.name || 'Nieuwe offerte';
-  document.getElementById('qe-back').onclick = () => { qe = null; setView('quotes'); };
+  document.getElementById('qe-back').onclick = () => setView('quotes');
   document.getElementById('qe-save-btn').onclick = saveQuote;
   document.getElementById('qe-pdf-btn').onclick = () => {
     document.getElementById('pdf-dropdown-menu').classList.toggle('hidden');
@@ -4046,21 +4058,22 @@ function renderQuoteEditorView() {
   wirePresetMenus();
 
   // Wire live-field changes (header fields)
-  document.getElementById('qe-name').addEventListener('input',   e => { qe.name = e.target.value; document.getElementById('toolbar-title').textContent = qe.name || 'Nieuwe offerte'; });
-  document.getElementById('qe-client').addEventListener('input',  e => qe.client = e.target.value);
-  document.getElementById('qe-client-contact').addEventListener('input', e => qe.client_contact = e.target.value);
-  document.getElementById('qe-client-address').addEventListener('input', e => qe.client_address = e.target.value);
-  document.getElementById('qe-client-postcode').addEventListener('input', e => qe.client_postcode = e.target.value);
-  document.getElementById('qe-client-email').addEventListener('input', e => qe.client_email = e.target.value);
-  document.getElementById('qe-client-phone').addEventListener('input', e => qe.client_phone = e.target.value);
-  document.getElementById('qe-date').addEventListener('change',   e => qe.quote_date = e.target.value);
-  document.getElementById('qe-status').addEventListener('change', e => qe.status = e.target.value);
-  document.getElementById('qe-notes').addEventListener('input',   e => qe.notes = e.target.value);
+  document.getElementById('qe-name').addEventListener('input',   e => { qe.name = e.target.value; document.getElementById('toolbar-title').textContent = qe.name || 'Nieuwe offerte'; markQEDirty(); });
+  document.getElementById('qe-client').addEventListener('input',  e => { qe.client = e.target.value; markQEDirty(); });
+  document.getElementById('qe-client-contact').addEventListener('input', e => { qe.client_contact = e.target.value; markQEDirty(); });
+  document.getElementById('qe-client-address').addEventListener('input', e => { qe.client_address = e.target.value; markQEDirty(); });
+  document.getElementById('qe-client-postcode').addEventListener('input', e => { qe.client_postcode = e.target.value; markQEDirty(); });
+  document.getElementById('qe-client-email').addEventListener('input', e => { qe.client_email = e.target.value; markQEDirty(); });
+  document.getElementById('qe-client-phone').addEventListener('input', e => { qe.client_phone = e.target.value; markQEDirty(); });
+  document.getElementById('qe-date').addEventListener('change',   e => { qe.quote_date = e.target.value; markQEDirty(); });
+  document.getElementById('qe-status').addEventListener('change', e => { qe.status = e.target.value; markQEDirty(); });
+  document.getElementById('qe-notes').addEventListener('input',   e => { qe.notes = e.target.value; markQEDirty(); });
   document.getElementById('qe-margin').addEventListener('focus',  e => e.target.select());
   document.getElementById('qe-margin').addEventListener('input',  e => {
     qe.margin = parseFloat(e.target.value) || 0;
     document.querySelectorAll('.qi-margin').forEach(inp => { inp.placeholder = qe.margin; });
     updateTotals();
+    markQEDirty();
   });
   const outMarginEl = document.getElementById('qe-out-margin');
   if (outMarginEl) {
@@ -4069,6 +4082,7 @@ function renderQuoteEditorView() {
       qe.outsource_margin = parseFloat(e.target.value) || 0;
       updateSvcSubtotals();
       updateTotals();
+      markQEDirty();
     });
   }
 
@@ -4187,6 +4201,7 @@ function wireTableInputs(type) {
       if (type === 'mat') updateMatSubtotals();
       if (type === 'svc') updateSvcSubtotals();
       updateTotals();
+      markQEDirty();
     });
   });
 
@@ -4202,6 +4217,7 @@ function wireTableInputs(type) {
       if (row) row.classList.toggle('svc-row-outsourced', !!chk.checked);
       if (type === 'svc') updateSvcSubtotals();
       updateTotals();
+      markQEDirty();
     });
   });
 
@@ -4211,6 +4227,7 @@ function wireTableInputs(type) {
       if (type === 'mat') { qe.materials.splice(i, 1); renderMatTable(); }
       else                { qe.services.splice(i, 1);  renderSvcTable(); }
       updateTotals();
+      markQEDirty();
     };
   });
 }
@@ -4593,7 +4610,10 @@ function updateChecklistBadge() {
   }
 }
 
+let _savingQuote = false;
 async function performSave() {
+  if (_savingQuote) return;
+  _savingQuote = true;
   const extrasJson = JSON.stringify({
     client_contact: qe.client_contact,
     client_address: qe.client_address,
@@ -4640,10 +4660,13 @@ async function performSave() {
     const delBtn = document.getElementById('qe-delete-btn');
     if (delBtn) delBtn.style.display = '';
 
+    _qeDirty = false;
     toast('Offerte opgeslagen');
   } catch (err) {
     toast('Opslaan mislukt: ' + (err.message || err), 'error', 4000);
     console.error('saveQuote error:', err);
+  } finally {
+    _savingQuote = false;
   }
 }
 
