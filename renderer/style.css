@@ -701,6 +701,11 @@ html[data-theme="dark"] #sidebar-logo {
 #task-modal .form-row { gap: 8px; }
 #task-modal .form-group textarea { min-height: 48px; }
 #task-modal .modal-actions { margin-top: 12px; }
+.task-project-toggle {
+  display: block; font-size: 10.5px; margin-top: 4px;
+  color: var(--accent); text-decoration: none; cursor: pointer;
+}
+.task-project-toggle:hover { text-decoration: underline; }
 .path-display {
   font-size: 12px; color: var(--text2); background: var(--bg3);
   border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;

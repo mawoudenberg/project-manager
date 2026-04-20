@@ -2814,13 +2814,39 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
     sw.classList.toggle('selected', sw.dataset.color === selectedColor);
   });
 
-  // Populate project dropdown
+  // Populate project dropdown — active projects only by default
   const projSel = document.getElementById('task-project');
   const preselProject = task?.project_id ?? defaultProjectId ?? null;
-  projSel.innerHTML = '<option value="">— Geen project —</option>' +
-    state.projects.map(p =>
-      `<option value="${p.id}" ${preselProject == p.id ? 'selected' : ''}>${escHtml(p.name)}</option>`
-    ).join('');
+
+  // If the preselected project is inactive, start with all visible so it shows
+  const preselObj = preselProject ? state.projects.find(p => p.id == preselProject) : null;
+  let showAllProjects = !!(preselObj && preselObj.status !== 'active');
+
+  const hasInactive = state.projects.some(p => p.status !== 'active');
+  const projToggle = document.getElementById('task-project-toggle');
+
+  function populateProjectDropdown() {
+    const visible = showAllProjects
+      ? state.projects
+      : state.projects.filter(p => p.status === 'active');
+    projSel.innerHTML = '<option value="">— Geen project —</option>' +
+      visible.map(p =>
+        `<option value="${p.id}" ${preselProject == p.id ? 'selected' : ''}>${escHtml(p.name)}</option>`
+      ).join('');
+    if (hasInactive) {
+      projToggle.textContent = showAllProjects ? '▾ verberg oude projecten' : '▸ toon oude projecten';
+      projToggle.classList.remove('hidden');
+    } else {
+      projToggle.classList.add('hidden');
+    }
+  }
+
+  populateProjectDropdown();
+  projToggle.onclick = (e) => {
+    e.preventDefault();
+    showAllProjects = !showAllProjects;
+    populateProjectDropdown();
+  };
 
   // Populate stage dropdown based on selected project
   function populateStageDropdown(projectId, selectedStageId) {
@@ -4662,6 +4688,27 @@ async function performSave() {
 
     _qeDirty = false;
     toast('Offerte opgeslagen');
+
+    // Auto-create project when quote is set to "verzonden" (sent)
+    if (qe.status === 'sent' && qe.name) {
+      const quoteName = qe.name.trim();
+      const existing = state.projects.find(p => p.name.trim().toLowerCase() === quoteName.toLowerCase());
+      if (!existing) {
+        try {
+          await remoteQuery({ action: 'insert', table: 'projects', data: {
+            name: quoteName,
+            status: 'active',
+            color: COLORS[Math.floor(Math.random() * COLORS.length)],
+            notes: '',
+            created_by: state.config?.name || '',
+          }});
+          state.projects = await remoteQuery({ action: 'select', table: 'projects' });
+          toast(`📁 Project "${quoteName}" aangemaakt`);
+        } catch (e) {
+          console.warn('Auto-aanmaken project mislukt:', e);
+        }
+      }
+    }
   } catch (err) {
     toast('Opslaan mislukt: ' + (err.message || err), 'error', 4000);
     console.error('saveQuote error:', err);
