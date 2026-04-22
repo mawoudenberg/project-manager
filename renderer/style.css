@@ -2228,6 +2228,30 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 }
 
 /* ─── Quote Editor: client picker row ───────────────────────────────────────── */
+.qw-autocomplete-wrap { position: relative; }
+.qw-suggestions {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0; right: 0;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,.15);
+  z-index: 200;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.qw-suggestion-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text1);
+  cursor: pointer;
+}
+.qw-suggestion-item:hover, .qw-suggestion-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .qe-client-picker-row {
   display: flex;
   gap: 8px;
