@@ -2232,7 +2232,8 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-bottom: 10px;
+  padding: 10px 14px 0;
+  margin-bottom: 6px;
 }
 .qe-client-picker-row select {
   flex: 1;

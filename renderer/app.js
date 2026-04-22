@@ -4235,31 +4235,37 @@ function renderQuoteEditorView() {
 
   // Save current client fields to the clients database
   document.getElementById('qe-save-as-client').addEventListener('click', async () => {
-    const name = qe.client.trim();
-    if (!name) { toast('Voer eerst een klantnaam in', 'error'); return; }
-    const clientData = {
-      name,
-      contact:  qe.client_contact  || '',
-      address:  qe.client_address  || '',
-      postcode: qe.client_postcode || '',
-      email:    qe.client_email    || '',
-      phone:    qe.client_phone    || '',
-    };
-    const existing = state.clients.find(c => c.name.trim().toLowerCase() === name.toLowerCase());
-    if (existing) {
-      if (!confirm(`Klant "${name}" bestaat al. Gegevens bijwerken?`)) return;
-      await remoteQuery({ action: 'update', table: 'clients', data: clientData, where: { id: existing.id } });
-      toast(`Klant "${name}" bijgewerkt`);
-    } else {
-      await remoteQuery({ action: 'insert', table: 'clients', data: clientData });
-      toast(`Klant "${name}" opgeslagen`);
-    }
-    await loadClients();
-    // Refresh the select dropdown without re-rendering the whole editor
-    const sel = document.getElementById('qe-client-select');
-    if (sel) {
-      sel.innerHTML = '<option value="">— Kies bestaande klant —</option>' +
-        state.clients.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('');
+    try {
+      // Read directly from DOM so we always get the latest typed value
+      const name = (document.getElementById('qe-client')?.value || '').trim();
+      if (!name) { toast('Voer eerst een klantnaam in', 'error'); return; }
+      const clientData = {
+        name,
+        contact:  (document.getElementById('qe-client-contact')?.value  || '').trim(),
+        address:  (document.getElementById('qe-client-address')?.value  || '').trim(),
+        postcode: (document.getElementById('qe-client-postcode')?.value || '').trim(),
+        email:    (document.getElementById('qe-client-email')?.value    || '').trim(),
+        phone:    (document.getElementById('qe-client-phone')?.value    || '').trim(),
+      };
+      const existing = state.clients.find(c => c.name.trim().toLowerCase() === name.toLowerCase());
+      if (existing) {
+        if (!confirm(`Klant "${name}" bestaat al. Gegevens bijwerken?`)) return;
+        await remoteQuery({ action: 'update', table: 'clients', data: clientData, where: { id: existing.id } });
+        toast(`Klant "${name}" bijgewerkt`);
+      } else {
+        await remoteQuery({ action: 'insert', table: 'clients', data: clientData });
+        toast(`Klant "${name}" opgeslagen`);
+      }
+      await loadClients();
+      // Refresh the select dropdown without re-rendering the whole editor
+      const sel = document.getElementById('qe-client-select');
+      if (sel) {
+        sel.innerHTML = '<option value="">— Kies bestaande klant —</option>' +
+          state.clients.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('');
+      }
+    } catch (err) {
+      toast('Fout bij opslaan klant: ' + (err.message || err), 'error', 4000);
+      console.error('save-as-client error:', err);
     }
   });
   document.getElementById('qe-date').addEventListener('change',   e => { qe.quote_date = e.target.value; markQEDirty(); });
