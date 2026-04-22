@@ -15,7 +15,7 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALLOWED_TABLES = {
     'tasks', 'todo_lists', 'todo_items', 'team_members',
     'projects', 'project_stages', 'stage_slots',
-    'quotes', 'quote_items', 'presets',
+    'quotes', 'quote_items', 'presets', 'clients',
 }
 
 # ── Static file serving ─────────────────────────────────────────────────────────

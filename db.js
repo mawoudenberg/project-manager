@@ -129,6 +129,18 @@ function createSchema() {
       unit_price  REAL DEFAULT 0,
       sort_order  INTEGER DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS clients (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL DEFAULT '',
+      contact     TEXT DEFAULT '',
+      address     TEXT DEFAULT '',
+      postcode    TEXT DEFAULT '',
+      email       TEXT DEFAULT '',
+      phone       TEXT DEFAULT '',
+      notes       TEXT DEFAULT '',
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
   `);
 }
 
@@ -281,7 +293,7 @@ function deleteRow(table, where) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages', 'stage_slots']);
+const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages', 'stage_slots', 'clients']);
 
 function validateTable(table) {
   if (!ALLOWED_TABLES.has(table)) throw new Error(`Table not allowed: ${table}`);
@@ -296,6 +308,7 @@ function orderFor(table) {
   if (table === 'quotes')          return ' ORDER BY created_at DESC';
   if (table === 'quote_items')     return ' ORDER BY sort_order ASC, id ASC';
   if (table === 'project_stages')  return ' ORDER BY sort_order ASC, id ASC';
+  if (table === 'clients')         return ' ORDER BY name ASC';
   if (table === 'stage_slots')     return ' ORDER BY start_date ASC, id ASC';
   return '';
 }

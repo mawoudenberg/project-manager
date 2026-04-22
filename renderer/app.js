@@ -41,6 +41,8 @@ let state = {
   editingList: null,
   editingProject: null,
   editingStage: null,
+  editingClient: null,
+  clients: [],
   activeProject: null,
   expandedProjects: new Set(),
   ganttMode: 'week',   // 'week' | 'day'
@@ -98,6 +100,7 @@ async function init() {
   buildColorSwatches();
   wireWizard();
   wireTaskModal();
+  wireKlantModal();
   wireListModal();
   wireStageModal();
   wireSettings();
@@ -182,12 +185,13 @@ function startApiPolling() {
         .some(id => !document.getElementById(id)?.classList.contains('hidden'));
       if (modalOpen || calDragInProgress) return;
 
-      const [tasks, projects, stages, stageSlots, todoLists] = await Promise.all([
+      const [tasks, projects, stages, stageSlots, todoLists, clients] = await Promise.all([
         remoteQuery({ action: 'select', table: 'tasks' }),
         remoteQuery({ action: 'select', table: 'projects' }),
         remoteQuery({ action: 'select', table: 'project_stages' }),
         remoteQuery({ action: 'select', table: 'stage_slots' }),
         remoteQuery({ action: 'select', table: 'todo_lists' }),
+        remoteQuery({ action: 'select', table: 'clients' }),
       ]);
 
       if (!Array.isArray(tasks) || !Array.isArray(projects)) return; // bad response
@@ -197,7 +201,8 @@ function startApiPolling() {
         JSON.stringify(projects)   !== JSON.stringify(state.projects)  ||
         JSON.stringify(stages)     !== JSON.stringify(state.stages)    ||
         JSON.stringify(stageSlots) !== JSON.stringify(state.stageSlots) ||
-        JSON.stringify(todoLists)  !== JSON.stringify(state.todoLists);
+        JSON.stringify(todoLists)  !== JSON.stringify(state.todoLists)  ||
+        JSON.stringify(clients)    !== JSON.stringify(state.clients);
 
       if (!changed) return;
 
@@ -206,6 +211,7 @@ function startApiPolling() {
       state.stages     = stages;
       state.stageSlots = stageSlots;
       state.todoLists  = todoLists;
+      state.clients    = clients;
       for (const list of state.todoLists) {
         state.todoItems[list.id] = await remoteQuery({
           action: 'select', table: 'todo_items', where: { list_id: list.id },
@@ -220,7 +226,11 @@ function startApiPolling() {
 
 /* ─── Data Loading ─────────────────────────────────────────────────────────── */
 async function loadAll() {
-  await Promise.all([loadTasks(), loadTodoLists(), loadProjects(), loadStages()]);
+  await Promise.all([loadTasks(), loadTodoLists(), loadProjects(), loadStages(), loadClients()]);
+}
+
+async function loadClients() {
+  state.clients = await remoteQuery({ action: 'select', table: 'clients' });
 }
 
 async function loadProjects() {
@@ -286,6 +296,7 @@ function renderView() {
     quotes:   renderQuoteList,
     gantt:    renderGantt,
     projects: renderProjectsView,
+    klanten:  renderKlanten,
   };
   (views[state.view] || renderMonthly)();
 }
@@ -321,7 +332,7 @@ function setView(view) {
     const isActive = b.dataset.view === view || (b.dataset.view === 'calendar' && CAL_VIEWS.has(view));
     b.classList.toggle('active', isActive);
   });
-  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten' };
+  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten', klanten:'Klanten' };
   const titleEl = document.getElementById('toolbar-title');
   titleEl.className = '';
   titleEl.textContent = titles[view] ?? '';
@@ -3648,6 +3659,107 @@ async function savePresets() {
   }
 }
 
+// ─── Klanten View ─────────────────────────────────────────────────────────────
+
+function renderKlanten() {
+  document.getElementById('toolbar-title').textContent = 'Klanten';
+  document.getElementById('toolbar-controls').innerHTML =
+    `<button class="btn btn-primary btn-sm" id="klant-add-btn">+ Nieuwe klant</button>`;
+  document.getElementById('klant-add-btn').onclick = () => openKlantModal(null);
+
+  const content = document.getElementById('content');
+  if (!state.clients.length) {
+    content.innerHTML = `
+      <div class="empty-state">
+        <p>Nog geen klanten.</p>
+        <p>Voeg een klant toe via de knop hierboven, of sla klantgegevens op vanuit een offerte.</p>
+      </div>`;
+    return;
+  }
+
+  content.innerHTML = `<div class="klanten-grid">${state.clients.map(c => `
+    <div class="klant-card" data-id="${c.id}">
+      <div class="klant-card-header">
+        <div class="klant-name">${escHtml(c.name)}</div>
+      </div>
+      ${c.contact  ? `<div class="klant-row"><span class="klant-icon">👤</span>${escHtml(c.contact)}</div>` : ''}
+      ${c.address  ? `<div class="klant-row"><span class="klant-icon">📍</span>${escHtml(c.address)}${c.postcode ? ', ' + escHtml(c.postcode) : ''}</div>` : ''}
+      ${c.email    ? `<div class="klant-row"><span class="klant-icon">✉</span><a href="mailto:${escHtml(c.email)}" onclick="event.stopPropagation()">${escHtml(c.email)}</a></div>` : ''}
+      ${c.phone    ? `<div class="klant-row"><span class="klant-icon">📞</span>${escHtml(c.phone)}</div>` : ''}
+      ${c.notes    ? `<div class="klant-notes">${escHtml(c.notes)}</div>` : ''}
+      <div class="klant-quote-count">${state.clients && (() => {
+        const n = 0; return ''; // quotes not linked by FK, skip count for now
+      })()}</div>
+    </div>`).join('')}</div>`;
+
+  content.querySelectorAll('.klant-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const client = state.clients.find(c => c.id === parseInt(card.dataset.id));
+      if (client) openKlantModal(client);
+    });
+  });
+}
+
+let _editingClient = null;
+
+function openKlantModal(client) {
+  _editingClient = client || null;
+  document.getElementById('klant-modal-title').textContent = client ? 'Klant bewerken' : 'Klant toevoegen';
+  document.getElementById('klant-name').value    = client?.name    || '';
+  document.getElementById('klant-contact').value = client?.contact || '';
+  document.getElementById('klant-address').value = client?.address || '';
+  document.getElementById('klant-postcode').value= client?.postcode|| '';
+  document.getElementById('klant-email').value   = client?.email   || '';
+  document.getElementById('klant-phone').value   = client?.phone   || '';
+  document.getElementById('klant-notes').value   = client?.notes   || '';
+  document.getElementById('klant-delete').classList.toggle('hidden', !client);
+  document.getElementById('klant-modal').classList.remove('hidden');
+  document.getElementById('klant-name').focus();
+}
+
+function closeKlantModal() {
+  document.getElementById('klant-modal').classList.add('hidden');
+  _editingClient = null;
+}
+
+function wireKlantModal() {
+  document.getElementById('klant-cancel').onclick = closeKlantModal;
+
+  document.getElementById('klant-save').onclick = async () => {
+    const name = document.getElementById('klant-name').value.trim();
+    if (!name) { shake(document.getElementById('klant-name')); return; }
+    const data = {
+      name,
+      contact:  document.getElementById('klant-contact').value.trim(),
+      address:  document.getElementById('klant-address').value.trim(),
+      postcode: document.getElementById('klant-postcode').value.trim(),
+      email:    document.getElementById('klant-email').value.trim(),
+      phone:    document.getElementById('klant-phone').value.trim(),
+      notes:    document.getElementById('klant-notes').value.trim(),
+    };
+    if (_editingClient) {
+      await remoteQuery({ action: 'update', table: 'clients', data, where: { id: _editingClient.id } });
+      toast('Klant bijgewerkt');
+    } else {
+      await remoteQuery({ action: 'insert', table: 'clients', data });
+      toast('Klant toegevoegd');
+    }
+    await loadClients();
+    closeKlantModal();
+    if (state.view === 'klanten') renderKlanten();
+  };
+
+  document.getElementById('klant-delete').onclick = async () => {
+    if (!_editingClient) return;
+    if (!confirm(`Klant "${_editingClient.name}" verwijderen?`)) return;
+    await remoteQuery({ action: 'delete', table: 'clients', where: { id: _editingClient.id } });
+    toast('Klant verwijderd');
+    await loadClients();
+    closeKlantModal();
+    if (state.view === 'klanten') renderKlanten();
+  };
+}
+
 // ─── Quote State ──────────────────────────────────────────────────────────────
 
 // qe = quoteEditor live state (in-memory while editing)
@@ -3947,6 +4059,13 @@ function renderQuoteEditorView() {
     <!-- Client details (collapsible) -->
     <details class="qe-details" open>
       <summary class="qe-details-title">Klantgegevens</summary>
+      <div class="qe-client-picker-row">
+        <select id="qe-client-select" class="qi-input">
+          <option value="">— Kies bestaande klant —</option>
+          ${state.clients.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('')}
+        </select>
+        <button class="btn btn-ghost btn-sm" id="qe-save-as-client" title="Huidige gegevens opslaan als klant">Opslaan als klant</button>
+      </div>
       <div class="qe-client-grid">
         <input class="qi-input" id="qe-client" value="${escHtml(qe.client)}" placeholder="Bedrijf / klantnaam" />
         <input class="qi-input" id="qe-client-contact" value="${escHtml(qe.client_contact)}" placeholder="Contactpersoon" />
@@ -4091,6 +4210,58 @@ function renderQuoteEditorView() {
   document.getElementById('qe-client-postcode').addEventListener('input', e => { qe.client_postcode = e.target.value; markQEDirty(); });
   document.getElementById('qe-client-email').addEventListener('input', e => { qe.client_email = e.target.value; markQEDirty(); });
   document.getElementById('qe-client-phone').addEventListener('input', e => { qe.client_phone = e.target.value; markQEDirty(); });
+
+  // Client picker — selecting an existing client fills the fields
+  document.getElementById('qe-client-select').addEventListener('change', e => {
+    const id = parseInt(e.target.value);
+    if (!id) return;
+    const c = state.clients.find(cl => cl.id === id);
+    if (!c) return;
+    qe.client          = c.name;
+    qe.client_contact  = c.contact  || '';
+    qe.client_address  = c.address  || '';
+    qe.client_postcode = c.postcode || '';
+    qe.client_email    = c.email    || '';
+    qe.client_phone    = c.phone    || '';
+    document.getElementById('qe-client').value          = qe.client;
+    document.getElementById('qe-client-contact').value  = qe.client_contact;
+    document.getElementById('qe-client-address').value  = qe.client_address;
+    document.getElementById('qe-client-postcode').value = qe.client_postcode;
+    document.getElementById('qe-client-email').value    = qe.client_email;
+    document.getElementById('qe-client-phone').value    = qe.client_phone;
+    markQEDirty();
+    e.target.value = ''; // reset dropdown
+  });
+
+  // Save current client fields to the clients database
+  document.getElementById('qe-save-as-client').addEventListener('click', async () => {
+    const name = qe.client.trim();
+    if (!name) { toast('Voer eerst een klantnaam in', 'error'); return; }
+    const clientData = {
+      name,
+      contact:  qe.client_contact  || '',
+      address:  qe.client_address  || '',
+      postcode: qe.client_postcode || '',
+      email:    qe.client_email    || '',
+      phone:    qe.client_phone    || '',
+    };
+    const existing = state.clients.find(c => c.name.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      if (!confirm(`Klant "${name}" bestaat al. Gegevens bijwerken?`)) return;
+      await remoteQuery({ action: 'update', table: 'clients', data: clientData, where: { id: existing.id } });
+      toast(`Klant "${name}" bijgewerkt`);
+    } else {
+      await remoteQuery({ action: 'insert', table: 'clients', data: clientData });
+      toast(`Klant "${name}" opgeslagen`);
+    }
+    await loadClients();
+    // Refresh the select dropdown without re-rendering the whole editor
+    const sel = document.getElementById('qe-client-select');
+    if (sel) {
+      sel.innerHTML = '<option value="">— Kies bestaande klant —</option>' +
+        state.clients.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('');
+    }
+  });
   document.getElementById('qe-date').addEventListener('change',   e => { qe.quote_date = e.target.value; markQEDirty(); });
   document.getElementById('qe-status').addEventListener('change', e => { qe.status = e.target.value; markQEDirty(); });
   document.getElementById('qe-notes').addEventListener('input',   e => { qe.notes = e.target.value; markQEDirty(); });
@@ -4660,6 +4831,7 @@ async function performSave() {
 
   try {
     let quoteId = qe.id;
+    const isNewQuote = !quoteId;
     if (quoteId) {
       await remoteQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
       await remoteQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
@@ -4689,11 +4861,11 @@ async function performSave() {
     _qeDirty = false;
     toast('Offerte opgeslagen');
 
-    // Auto-create project when quote is set to "verzonden" (sent)
-    if (qe.status === 'sent' && qe.name) {
+    // On first save of a new quote, ask if a project should be created
+    if (isNewQuote && qe.name) {
       const quoteName = qe.name.trim();
       const existing = state.projects.find(p => p.name.trim().toLowerCase() === quoteName.toLowerCase());
-      if (!existing) {
+      if (!existing && confirm(`Project aanmaken voor "${quoteName}"?`)) {
         try {
           await remoteQuery({ action: 'insert', table: 'projects', data: {
             name: quoteName,
@@ -4705,7 +4877,7 @@ async function performSave() {
           state.projects = await remoteQuery({ action: 'select', table: 'projects' });
           toast(`📁 Project "${quoteName}" aangemaakt`);
         } catch (e) {
-          console.warn('Auto-aanmaken project mislukt:', e);
+          console.warn('Project aanmaken mislukt:', e);
         }
       }
     }
