@@ -75,6 +75,12 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // Cmd+Shift+I / F12 → DevTools for debugging
+  const { globalShortcut } = require('electron');
+  globalShortcut.register('CommandOrControl+Shift+I', () => {
+    if (mainWindow) mainWindow.webContents.toggleDevTools();
+  });
+
   // Auto-open DB if config exists
   const config = loadConfig();
   if (config && config.mode === 'file' && config.filePath) {
