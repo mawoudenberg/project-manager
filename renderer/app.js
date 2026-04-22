@@ -4064,7 +4064,7 @@ function renderQuoteEditorView() {
           <option value="">— Kies bestaande klant —</option>
           ${state.clients.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('')}
         </select>
-        <button class="btn btn-ghost btn-sm" id="qe-save-as-client" title="Huidige gegevens opslaan als klant">Opslaan als klant</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="qe-save-as-client" title="Huidige gegevens opslaan als klant">Opslaan als klant</button>
       </div>
       <div class="qe-client-grid">
         <input class="qi-input" id="qe-client" value="${escHtml(qe.client)}" placeholder="Bedrijf / klantnaam" />
@@ -4234,7 +4234,8 @@ function renderQuoteEditorView() {
   });
 
   // Save current client fields to the clients database
-  document.getElementById('qe-save-as-client').addEventListener('click', async () => {
+  const saveAsClientBtn = document.getElementById('qe-save-as-client');
+  if (saveAsClientBtn) saveAsClientBtn.onclick = async () => {
     try {
       // Read directly from DOM so we always get the latest typed value
       const name = (document.getElementById('qe-client')?.value || '').trim();
@@ -4267,7 +4268,7 @@ function renderQuoteEditorView() {
       toast('Fout bij opslaan klant: ' + (err.message || err), 'error', 4000);
       console.error('save-as-client error:', err);
     }
-  });
+  };
   document.getElementById('qe-date').addEventListener('change',   e => { qe.quote_date = e.target.value; markQEDirty(); });
   document.getElementById('qe-status').addEventListener('change', e => { qe.status = e.target.value; markQEDirty(); });
   document.getElementById('qe-notes').addEventListener('input',   e => { qe.notes = e.target.value; markQEDirty(); });
