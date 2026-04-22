@@ -411,10 +411,8 @@
       <p class="wizard-subtitle">Vul de basisgegevens in voor de offerte.</p>
       <div class="form-group">
         <label>Klant *</label>
-        <select id="qw-client-select">
-          <option value="">— Kies bestaande klant —</option>
-        </select>
-        <input type="text" id="qw-client" placeholder="Of typ een nieuwe klantnaam" autocomplete="off" style="margin-top:6px" />
+        <input type="text" id="qw-client" placeholder="Klantnaam" autocomplete="off" list="qw-client-list" />
+        <datalist id="qw-client-list"></datalist>
       </div>
       <div class="form-group">
         <label>Projectnaam *</label>

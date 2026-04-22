@@ -3882,11 +3882,11 @@ function openQuoteWizard() {
   document.getElementById('qw-client').value = '';
   document.getElementById('qw-name').value = '';
 
-  // Populate client dropdown with current clients list
-  const sel = document.getElementById('qw-client-select');
-  sel.innerHTML = '<option value="">— Kies bestaande klant —</option>' +
-    state.clients.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('');
-  sel.value = '';
+  // Populate datalist with saved clients for autocomplete
+  const datalist = document.getElementById('qw-client-list');
+  if (datalist) {
+    datalist.innerHTML = state.clients.map(c => `<option value="${escHtml(c.name)}"></option>`).join('');
+  }
   document.getElementById('qw-desc').value = '';
   document.getElementById('qw-img-preview').classList.add('hidden');
   document.getElementById('qw-drop-zone').classList.remove('hidden');
@@ -3934,22 +3934,11 @@ function wireQuoteWizard() {
   document.getElementById('qw-cancel').onclick = () =>
     document.getElementById('quote-wizard-overlay').classList.add('hidden');
 
-  // Client picker: selecting fills the text field and stores full details
-  document.getElementById('qw-client-select').addEventListener('change', e => {
-    const id = parseInt(e.target.value);
-    if (!id) { qwSelectedClient = null; return; }
-    const c = state.clients.find(cl => cl.id === id);
-    if (!c) return;
-    qwSelectedClient = c;
-    document.getElementById('qw-client').value = c.name;
-  });
-
-  // Typing in the text field deselects the stored client if name no longer matches
+  // When a known client name is typed/selected, store its full record
   document.getElementById('qw-client').addEventListener('input', e => {
-    if (qwSelectedClient && e.target.value.trim() !== qwSelectedClient.name) {
-      qwSelectedClient = null;
-      document.getElementById('qw-client-select').value = '';
-    }
+    const typed = e.target.value.trim();
+    const match = state.clients.find(c => c.name.trim().toLowerCase() === typed.toLowerCase());
+    qwSelectedClient = match || null;
   });
 
   document.getElementById('qw-next-0').onclick = () => {
