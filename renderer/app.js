@@ -3874,11 +3874,19 @@ async function renderQuoteList() {
 // ─── Quote Wizard ─────────────────────────────────────────────────────────────
 
 let qwImageData = '';
+let qwSelectedClient = null;
 
 function openQuoteWizard() {
   qwImageData = '';
+  qwSelectedClient = null;
   document.getElementById('qw-client').value = '';
   document.getElementById('qw-name').value = '';
+
+  // Populate client dropdown with current clients list
+  const sel = document.getElementById('qw-client-select');
+  sel.innerHTML = '<option value="">— Kies bestaande klant —</option>' +
+    state.clients.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('');
+  sel.value = '';
   document.getElementById('qw-desc').value = '';
   document.getElementById('qw-img-preview').classList.add('hidden');
   document.getElementById('qw-drop-zone').classList.remove('hidden');
@@ -3925,6 +3933,24 @@ function wireQuoteWizard() {
 
   document.getElementById('qw-cancel').onclick = () =>
     document.getElementById('quote-wizard-overlay').classList.add('hidden');
+
+  // Client picker: selecting fills the text field and stores full details
+  document.getElementById('qw-client-select').addEventListener('change', e => {
+    const id = parseInt(e.target.value);
+    if (!id) { qwSelectedClient = null; return; }
+    const c = state.clients.find(cl => cl.id === id);
+    if (!c) return;
+    qwSelectedClient = c;
+    document.getElementById('qw-client').value = c.name;
+  });
+
+  // Typing in the text field deselects the stored client if name no longer matches
+  document.getElementById('qw-client').addEventListener('input', e => {
+    if (qwSelectedClient && e.target.value.trim() !== qwSelectedClient.name) {
+      qwSelectedClient = null;
+      document.getElementById('qw-client-select').value = '';
+    }
+  });
 
   document.getElementById('qw-next-0').onclick = () => {
     const client = document.getElementById('qw-client').value.trim();
@@ -3983,6 +4009,14 @@ function wireQuoteWizard() {
     qe.materials  = selectedMaterials;
     qe.services   = selectedServices;
     qe.exclusions = selectedExclusions;
+    // If a saved client was selected, pre-fill all contact details
+    if (qwSelectedClient) {
+      qe.client_contact  = qwSelectedClient.contact  || '';
+      qe.client_address  = qwSelectedClient.address  || '';
+      qe.client_postcode = qwSelectedClient.postcode || '';
+      qe.client_email    = qwSelectedClient.email    || '';
+      qe.client_phone    = qwSelectedClient.phone    || '';
+    }
     renderQuoteEditorView();
   };
 }
