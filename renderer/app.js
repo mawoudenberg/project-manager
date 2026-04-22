@@ -3882,11 +3882,9 @@ function openQuoteWizard() {
   document.getElementById('qw-client').value = '';
   document.getElementById('qw-name').value = '';
 
-  // Populate datalist with saved clients for autocomplete
-  const datalist = document.getElementById('qw-client-list');
-  if (datalist) {
-    datalist.innerHTML = state.clients.map(c => `<option value="${escHtml(c.name)}"></option>`).join('');
-  }
+  // Reset custom autocomplete
+  const sugg = document.getElementById('qw-client-suggestions');
+  if (sugg) sugg.classList.add('hidden');
   document.getElementById('qw-desc').value = '';
   document.getElementById('qw-img-preview').classList.add('hidden');
   document.getElementById('qw-drop-zone').classList.remove('hidden');
@@ -3934,11 +3932,47 @@ function wireQuoteWizard() {
   document.getElementById('qw-cancel').onclick = () =>
     document.getElementById('quote-wizard-overlay').classList.add('hidden');
 
-  // When a known client name is typed/selected, store its full record
-  document.getElementById('qw-client').addEventListener('input', e => {
+  // Custom autocomplete for client field
+  const qwClientInput = document.getElementById('qw-client');
+  const qwSugg = document.getElementById('qw-client-suggestions');
+
+  function showClientSuggestions(query) {
+    const q = query.trim().toLowerCase();
+    const matches = q
+      ? state.clients.filter(c => c.name.toLowerCase().includes(q))
+      : state.clients;
+    if (!matches.length) { qwSugg.classList.add('hidden'); return; }
+    qwSugg.innerHTML = matches.map(c =>
+      `<div class="qw-suggestion-item" data-id="${c.id}">${escHtml(c.name)}</div>`
+    ).join('');
+    qwSugg.classList.remove('hidden');
+    qwSugg.querySelectorAll('.qw-suggestion-item').forEach(item => {
+      item.addEventListener('mousedown', e => {
+        e.preventDefault(); // prevent blur firing first
+        const c = state.clients.find(cl => cl.id === parseInt(item.dataset.id));
+        if (!c) return;
+        qwSelectedClient = c;
+        qwClientInput.value = c.name;
+        qwSugg.classList.add('hidden');
+      });
+    });
+  }
+
+  qwClientInput.addEventListener('focus', () => {
+    if (state.clients.length) showClientSuggestions(qwClientInput.value);
+  });
+  qwClientInput.addEventListener('input', e => {
     const typed = e.target.value.trim();
-    const match = state.clients.find(c => c.name.trim().toLowerCase() === typed.toLowerCase());
-    qwSelectedClient = match || null;
+    const exact = state.clients.find(c => c.name.trim().toLowerCase() === typed.toLowerCase());
+    qwSelectedClient = exact || null;
+    showClientSuggestions(typed);
+  });
+  qwClientInput.addEventListener('blur', () => {
+    // Small delay so mousedown on suggestion fires first
+    setTimeout(() => qwSugg.classList.add('hidden'), 150);
+  });
+  qwClientInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') qwSugg.classList.add('hidden');
   });
 
   document.getElementById('qw-next-0').onclick = () => {
