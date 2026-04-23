@@ -4927,23 +4927,23 @@ async function performSave() {
     _qeDirty = false;
     toast('Offerte opgeslagen');
 
-    // On first save of a new quote, ask if a project should be created
-    if (isNewQuote && qe.name) {
+    // When status is "verzonden", offer to create a matching project
+    if (qe.status === 'sent' && qe.name) {
       const quoteName = qe.name.trim();
       const existing = state.projects.find(p => p.name.trim().toLowerCase() === quoteName.toLowerCase());
       if (!existing && confirm(`Project aanmaken voor "${quoteName}"?`)) {
         try {
-          await remoteQuery({ action: 'insert', table: 'projects', data: {
+          const res = await remoteQuery({ action: 'insert', table: 'projects', data: {
             name: quoteName,
             status: 'active',
             color: COLORS[Math.floor(Math.random() * COLORS.length)],
             notes: '',
-            created_by: state.config?.name || '',
           }});
           state.projects = await remoteQuery({ action: 'select', table: 'projects' });
           toast(`📁 Project "${quoteName}" aangemaakt`);
         } catch (e) {
-          console.warn('Project aanmaken mislukt:', e);
+          toast('Project aanmaken mislukt: ' + (e.message || e), 'error', 4000);
+          console.error('Project aanmaken mislukt:', e);
         }
       }
     }
