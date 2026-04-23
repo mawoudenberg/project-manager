@@ -4704,8 +4704,9 @@ function wireExclusions() {
 function calcQuoteTotals(items, globalMargin, outsourceMargin) {
   const matItems = items.filter(i => i.type === 'material');
   const svcItems = items.filter(i => i.type === 'service');
-  const globalMarginPct = parseFloat(globalMargin) || 20;
-  const outsourceMarginPct = parseFloat(outsourceMargin) || 0;
+  // Use explicit null checks so 0% margin isn't overridden by the default
+  const globalMarginPct    = (globalMargin    != null && globalMargin    !== '') ? parseFloat(globalMargin)    : 20;
+  const outsourceMarginPct = (outsourceMargin != null && outsourceMargin !== '') ? parseFloat(outsourceMargin) : 0;
 
   // Materials: cost-passthrough + margin
   const matEx = matItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
