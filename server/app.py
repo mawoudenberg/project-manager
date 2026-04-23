@@ -313,6 +313,33 @@ def health():
     return jsonify({'ok': True, 'db': DB_PATH})
 
 
+PROJECTEN_DIR  = '/mnt/projects/Vonk & Vorm Data/Studio Vonk & Vorm/Projecten'
+VOORBEELD_MAP  = '/mnt/projects/Vonk & Vorm Data/Studio Vonk & Vorm/Projecten/Voorbeeld map'
+
+@app.route('/api/create-project-folder', methods=['POST'])
+def create_project_folder():
+    import shutil, os, re
+    try:
+        body = request.get_json(force=True) or {}
+        name = (body.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'name is required'}), 400
+        # Sanitise: remove characters illegal on most filesystems
+        safe_name = re.sub(r'[\\/:*?"<>|]', '', name).strip()
+        if not safe_name:
+            return jsonify({'error': 'invalid project name'}), 400
+        dest = os.path.join(PROJECTEN_DIR, safe_name)
+        if os.path.exists(dest):
+            return jsonify({'ok': True, 'created': False, 'path': dest, 'msg': 'folder already exists'})
+        if not os.path.isdir(VOORBEELD_MAP):
+            return jsonify({'error': 'Voorbeeld map not found', 'path': VOORBEELD_MAP}), 500
+        shutil.copytree(VOORBEELD_MAP, dest)
+        return jsonify({'ok': True, 'created': True, 'path': dest})
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--db',   default='/mnt/nas/shared/project-manager.db')

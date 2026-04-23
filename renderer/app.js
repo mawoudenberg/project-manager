@@ -172,6 +172,25 @@ async function remoteQuery(params) {
   return Array.isArray(r.data) ? r.data : (r.data ?? r);
 }
 
+/* ─── Project folder creation (API mode only) ──────────────────────────────── */
+async function createProjectFolder(name) {
+  if (state.config?.mode !== 'api') return; // local mode: no server filesystem
+  try {
+    const r = await api.apiFetch({
+      method: 'POST',
+      url:    `${state.config.apiUrl}/api/create-project-folder`,
+      body:   { name },
+    });
+    if (r.status >= 400) {
+      console.warn('Project map aanmaken mislukt:', r.data?.error || r.status);
+    } else if (r.data?.created) {
+      toast(`📂 Map "${name}" aangemaakt op server`);
+    }
+  } catch (e) {
+    console.warn('create-project-folder error:', e);
+  }
+}
+
 /* ─── API polling (API mode only) ─────────────────────────────────────────── */
 let _pollingStarted = false;
 function startApiPolling() {
@@ -2174,6 +2193,7 @@ function wireProjectModal() {
       await remoteQuery({ action: 'update', table: 'projects', data, where: { id: state.editingProject.id } });
     } else {
       await remoteQuery({ action: 'insert', table: 'projects', data });
+      createProjectFolder(data.name); // fire-and-forget
     }
     await Promise.all([loadProjects(), loadStages()]);
     closeProjectModal();
@@ -4934,13 +4954,14 @@ async function performSave() {
       const existing = state.projects.find(p => p.name.trim().toLowerCase() === quoteName.toLowerCase());
       if (!existing && confirm(`Project aanmaken voor "${quoteName}"?`)) {
         try {
-          const res = await remoteQuery({ action: 'insert', table: 'projects', data: {
+          await remoteQuery({ action: 'insert', table: 'projects', data: {
             name: quoteName,
             status: 'active',
             color: COLORS[Math.floor(Math.random() * COLORS.length)],
-            notes: '',
+            description: '',
           }});
           state.projects = await remoteQuery({ action: 'select', table: 'projects' });
+          createProjectFolder(quoteName); // fire-and-forget
           toast(`📁 Project "${quoteName}" aangemaakt`);
         } catch (e) {
           toast('Project aanmaken mislukt: ' + (e.message || e), 'error', 4000);
