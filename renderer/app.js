@@ -3828,7 +3828,9 @@ async function renderQuoteList() {
   // Calculate total for each quote (load items)
   const rows = await Promise.all(quotes.map(async q => {
     const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: q.id } });
-    const t = calcQuoteTotals(items, q.margin);
+    let outsourceMargin = 0;
+    try { outsourceMargin = JSON.parse(q.extras_json || '{}')?.outsource_margin || 0; } catch (_) {}
+    const t = calcQuoteTotals(items, q.margin, outsourceMargin);
     return { q, total: t.grandTotal };
   }));
 
