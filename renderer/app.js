@@ -5342,7 +5342,7 @@ ${opts.show_title_page ? `
   ${opts.show_validity ? `
   <div class="quote-end-footer">
     <div class="validity">
-      Deze offerte is 30 dagen geldig na dagtekening. &nbsp;·&nbsp; Levertijd in overleg.
+      Deze offerte is 30 dagen geldig na dagtekening. &nbsp;·&nbsp; Levertijd in overleg. &nbsp;·&nbsp; Wij hanteren een aanbetaling van 50% bij opdrachtverstrekking.
     </div>
   </div>` : ''}
 </div>
