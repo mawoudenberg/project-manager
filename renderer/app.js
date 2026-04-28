@@ -173,6 +173,43 @@ async function remoteQuery(params) {
 }
 
 /* ─── Project folder creation (API mode only) ──────────────────────────────── */
+function pickProjectColor() {
+  const used = new Set(
+    state.projects.filter(p => p.status === 'active').map(p => p.color?.toLowerCase())
+  );
+  // Prefer a color not yet used by any active project
+  const unused = COLORS.filter(c => !used.has(c.toLowerCase()));
+  if (unused.length) return unused[0];
+  // All colors taken — pick the least-used one
+  const counts = Object.fromEntries(COLORS.map(c => [c, 0]));
+  state.projects.filter(p => p.status === 'active').forEach(p => {
+    if (p.color && counts[p.color] !== undefined) counts[p.color]++;
+  });
+  return COLORS.reduce((a, b) => counts[a] <= counts[b] ? a : b);
+}
+
+async function createProjectFromQuote(quoteName, askFirst = true) {
+  const name = (quoteName || '').trim();
+  if (!name) return;
+  const existing = state.projects.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+  if (existing) { toast(`Project "${name}" bestaat al`); return; }
+  if (askFirst && !confirm(`Project aanmaken voor "${name}"?`)) return;
+  try {
+    await remoteQuery({ action: 'insert', table: 'projects', data: {
+      name,
+      status: 'active',
+      color: pickProjectColor(),
+      description: '',
+    }});
+    state.projects = await remoteQuery({ action: 'select', table: 'projects' });
+    createProjectFolder(name); // fire-and-forget
+    toast(`📁 Project "${name}" aangemaakt`);
+  } catch (e) {
+    toast('Project aanmaken mislukt: ' + (e.message || e), 'error', 4000);
+    console.error('Project aanmaken mislukt:', e);
+  }
+}
+
 async function createProjectFolder(name) {
   if (state.config?.mode !== 'api') return; // local mode: no server filesystem
   try {
@@ -2156,8 +2193,7 @@ function openProjectModal(proj) {
   // Auto-pick an unused color for new projects
   let defaultColor = COLORS[0];
   if (!isEdit) {
-    const usedColors = new Set(state.projects.map(p => p.color));
-    defaultColor = COLORS.find(c => !usedColors.has(c)) || COLORS[state.projects.length % COLORS.length];
+    defaultColor = pickProjectColor();
   }
   buildProjColorSwatches(proj?.color || defaultColor);
   document.getElementById('project-modal').classList.remove('hidden');
@@ -4099,6 +4135,7 @@ function renderQuoteEditorView() {
   ctrl.innerHTML = `
     <button class="btn btn-ghost btn-sm" id="qe-back">← Offertes</button>
     <button class="btn btn-secondary btn-sm" id="qe-delete-btn" ${!qe.id ? 'style="display:none"' : ''}>Verwijder</button>
+    <button class="btn btn-secondary btn-sm" id="qe-project-btn" title="Maak project aan voor deze offerte">📁 Project</button>
     <button class="btn btn-primary btn-sm" id="qe-save-btn">Opslaan</button>
     <div class="pdf-dropdown" id="pdf-dropdown">
       <button class="btn btn-secondary btn-sm" id="qe-pdf-btn">📄 PDF ▾</button>
@@ -4111,6 +4148,7 @@ function renderQuoteEditorView() {
   document.getElementById('toolbar-title').textContent = qe.name || 'Nieuwe offerte';
   document.getElementById('qe-back').onclick = () => setView('quotes');
   document.getElementById('qe-save-btn').onclick = saveQuote;
+  document.getElementById('qe-project-btn').onclick = () => createProjectFromQuote(qe.name);
   document.getElementById('qe-pdf-btn').onclick = () => {
     document.getElementById('pdf-dropdown-menu').classList.toggle('hidden');
   };
@@ -4948,26 +4986,10 @@ async function performSave() {
     _qeDirty = false;
     toast('Offerte opgeslagen');
 
-    // When status is "verzonden", offer to create a matching project
-    if (qe.status === 'sent' && qe.name) {
-      const quoteName = qe.name.trim();
-      const existing = state.projects.find(p => p.name.trim().toLowerCase() === quoteName.toLowerCase());
-      if (!existing && confirm(`Project aanmaken voor "${quoteName}"?`)) {
-        try {
-          await remoteQuery({ action: 'insert', table: 'projects', data: {
-            name: quoteName,
-            status: 'active',
-            color: COLORS[Math.floor(Math.random() * COLORS.length)],
-            description: '',
-          }});
-          state.projects = await remoteQuery({ action: 'select', table: 'projects' });
-          createProjectFolder(quoteName); // fire-and-forget
-          toast(`📁 Project "${quoteName}" aangemaakt`);
-        } catch (e) {
-          toast('Project aanmaken mislukt: ' + (e.message || e), 'error', 4000);
-          console.error('Project aanmaken mislukt:', e);
-        }
-      }
+    // When status is "verzonden" or "geaccepteerd", offer to create a matching project
+    if ((qe.status === 'sent' || qe.status === 'accepted') && qe.name) {
+      const existing = state.projects.find(p => p.name.trim().toLowerCase() === qe.name.trim().toLowerCase());
+      if (!existing) createProjectFromQuote(qe.name, /*silent=*/false);
     }
   } catch (err) {
     toast('Opslaan mislukt: ' + (err.message || err), 'error', 4000);
