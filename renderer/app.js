@@ -4,6 +4,7 @@
 const COLORS = [
   '#4f8ef7','#7c5cbf','#3ecf74','#f76060','#f7c948',
   '#f79040','#40c8f7','#f740c0','#80f740','#a0522d',
+  '#00bfa5','#ff5252',
 ];
 
 const DEFAULT_STAGES = [
@@ -173,19 +174,17 @@ async function remoteQuery(params) {
 }
 
 /* ─── Project folder creation (API mode only) ──────────────────────────────── */
-function pickProjectColor() {
-  const used = new Set(
-    state.projects.filter(p => p.status === 'active').map(p => p.color?.toLowerCase())
-  );
-  // Prefer a color not yet used by any active project
+// Pick the first unused color from a list of items; falls back to least-used.
+function pickNextColor(items = []) {
+  const used = new Set(items.map(i => (i.color || '').toLowerCase()).filter(Boolean));
   const unused = COLORS.filter(c => !used.has(c.toLowerCase()));
   if (unused.length) return unused[0];
-  // All colors taken — pick the least-used one
   const counts = Object.fromEntries(COLORS.map(c => [c, 0]));
-  state.projects.filter(p => p.status === 'active').forEach(p => {
-    if (p.color && counts[p.color] !== undefined) counts[p.color]++;
-  });
+  items.forEach(i => { if (i.color && counts[i.color] !== undefined) counts[i.color]++; });
   return COLORS.reduce((a, b) => counts[a] <= counts[b] ? a : b);
+}
+function pickProjectColor() {
+  return pickNextColor(state.projects.filter(p => p.status === 'active'));
 }
 
 async function createProjectFromQuote(quoteName, askFirst = true) {
@@ -786,7 +785,7 @@ function stagesActiveOnDate(dateStr) {
 function calCell(dayNum, dateStr, otherMonth, todayStr) {
   const dayTasks = state.tasks.filter(t => t.date === dateStr && calTaskVisible(t));
   const isToday = dateStr === todayStr;
-  const dow = new Date(dateStr).getDay(); // 0=Sun,6=Sat
+  const dow = new Date(dateStr + 'T00:00:00').getDay(); // 0=Sun,6=Sat
   const isWeekend = dow === 0 || dow === 6;
   const holiday = !otherMonth ? getDutchHolidays(parseInt(dateStr.slice(0,4)))[dateStr] : null;
   const classes = ['cal-cell', otherMonth && 'other-month', isToday && 'today', isWeekend && 'weekend', holiday && 'holiday']
@@ -826,7 +825,7 @@ function renderMyTasks() {
 
   function fmtDateHeader(dateStr) {
     if (!dateStr) return 'Geen datum';
-    const d = new Date(dateStr);
+    const d = new Date(dateStr + 'T00:00:00');
     const dow = NL_DAYS[d.getDay()];
     const base = `${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
     if (dateStr === todayStr) return `Vandaag · ${dow} ${d.getDate()} ${NL_MONTHS[d.getMonth()]}`;
@@ -2277,7 +2276,7 @@ function openStageModal(stage, projectId, suggestedDate = null) {
   document.getElementById('stage-name').value  = stage?.name  || '';
   document.getElementById('stage-notes').value = stage?.notes || '';
   document.getElementById('stage-delete').classList.toggle('hidden', !isEdit);
-  buildStageColorSwatches(stage?.color || COLORS[0]);
+  buildStageColorSwatches(stage?.color || pickNextColor(state.stages));
 
   // Slot-add inputs prefill
   document.getElementById('stage-slot-start').value = suggestedDate || '';
@@ -2875,8 +2874,8 @@ function openTaskModal(task, defaultDate, defaultProjectId) {
   document.getElementById('task-status').value = task?.status || 'pending';
   document.getElementById('task-delete').classList.toggle('hidden', !isEdit);
 
-  // Color swatch selection
-  const selectedColor = task?.color || COLORS[0];
+  // Color swatch selection — cycle through unused colors for new tasks
+  const selectedColor = task?.color || pickNextColor(state.tasks);
   document.querySelectorAll('.color-swatch').forEach(sw => {
     sw.classList.toggle('selected', sw.dataset.color === selectedColor);
   });
