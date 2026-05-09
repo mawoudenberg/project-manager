@@ -156,9 +156,6 @@ function migrateSchema() {
   if (!cols.includes('task_time'))  db.exec("ALTER TABLE tasks ADD COLUMN task_time   TEXT    DEFAULT ''");
   if (!cols.includes('stage_id'))   db.exec("ALTER TABLE tasks ADD COLUMN stage_id    INTEGER DEFAULT NULL");
 
-  const quoteCols = db.pragma('table_info(quotes)').map(c => c.name);
-  if (!quoteCols.includes('image_data')) db.exec("ALTER TABLE quotes ADD COLUMN image_data TEXT DEFAULT ''");
-
   const itemCols = db.pragma('table_info(todo_items)').map(c => c.name);
   if (!itemCols.includes('sort_order')) {
     db.exec("ALTER TABLE todo_items ADD COLUMN sort_order INTEGER DEFAULT 0");
@@ -166,12 +163,8 @@ function migrateSchema() {
   }
 
   const quoteCols = db.pragma('table_info(quotes)').map(c => c.name);
-  if (!quoteCols.includes('image_data')) {
-    db.exec("ALTER TABLE quotes ADD COLUMN image_data TEXT DEFAULT ''");
-  }
-  if (!quoteCols.includes('extras_json')) {
-    db.exec("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''");
-  }
+  if (!quoteCols.includes('image_data'))  db.exec("ALTER TABLE quotes ADD COLUMN image_data  TEXT DEFAULT ''");
+  if (!quoteCols.includes('extras_json')) db.exec("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''");
 
   const stageCols = db.pragma('table_info(project_stages)').map(c => c.name);
   if (!stageCols.includes('notes')) {
@@ -179,12 +172,9 @@ function migrateSchema() {
   }
 
   const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
-  if (!qiCols.includes('is_outsourced')) {
-    db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0");
-  }
-  if (!qiCols.includes('margin')) {
-    db.exec("ALTER TABLE quote_items ADD COLUMN margin REAL DEFAULT NULL");
-  }
+  if (!qiCols.includes('is_outsourced')) db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0");
+  if (!qiCols.includes('margin'))        db.exec("ALTER TABLE quote_items ADD COLUMN margin        REAL    DEFAULT NULL");
+  if (!qiCols.includes('enabled'))       db.exec("ALTER TABLE quote_items ADD COLUMN enabled       INTEGER DEFAULT 1");
 
   // One-time migration: consolidate duplicate stages by (project_id, name) and
   // move their date ranges into the new stage_slots table.

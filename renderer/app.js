@@ -48,6 +48,7 @@ let state = {
   expandedProjects: new Set(),
   ganttMode: 'week',   // 'week' | 'day'
   ganttHideInactive: true,
+  ganttHideWeekends: false,
   projectsHideInactive: true,
   myTasksHideInactive: true,
   todoHideDone: false,
@@ -60,6 +61,8 @@ let calDragInProgress = false; // suppress poll re-render during calendar drag
 let calDraggingTaskId = null;  // shared across monthly pages for drag-and-drop
 let ganttWheelController = null; // AbortController for gantt wheel listener cleanup
 let ganttDraw = null;            // active draw-new-bar drag state
+let ganttWorkdays  = null;          // working-day Date[] when hide-weekends is active
+let ganttDayOffFn  = null;          // index-of-date fn for hide-weekends mode
 
 function _dayOffset(fromStr, toStr) {
   return Math.round((new Date(toStr) - new Date(fromStr)) / 86400000);
@@ -371,14 +374,37 @@ function loadCalPrefs() {
   try { return JSON.parse(localStorage.getItem(CAL_PREFS_KEY)) || {}; } catch (_) { return {}; }
 }
 
+function _confirmUnsavedQE(cb) {
+  const overlay = document.createElement('div');
+  overlay.className = 'qe-unsaved-overlay';
+  overlay.innerHTML = `
+    <div class="qe-unsaved-box">
+      <p class="qe-unsaved-msg">Je hebt niet-opgeslagen wijzigingen in de offerte.</p>
+      <div class="qe-unsaved-btns">
+        <button class="btn btn-primary btn-sm" id="qeuc-save">Opslaan</button>
+        <button class="btn btn-ghost  btn-sm" id="qeuc-discard">Niet opslaan</button>
+        <button class="btn btn-ghost  btn-sm" id="qeuc-cancel">Annuleren</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#qeuc-save').onclick    = () => { overlay.remove(); cb('save'); };
+  overlay.querySelector('#qeuc-discard').onclick = () => { overlay.remove(); cb('discard'); };
+  overlay.querySelector('#qeuc-cancel').onclick  = () => { overlay.remove(); cb('cancel'); };
+}
+
 function setView(view) {
   // Warn before leaving the quote editor with unsaved changes
   if (state.view === 'quote-editor' && qe && _qeDirty && view !== 'quote-editor') {
-    const save = confirm('Je hebt niet-opgeslagen wijzigingen in de offerte.\nOpslaan voor je weggaat?');
-    if (save) {
-      saveQuote().then(() => { qe = null; setView(view); });
-      return;
-    }
+    _confirmUnsavedQE(result => {
+      if (result === 'save') {
+        saveQuote().then(() => { qe = null; _qeDirty = false; setView(view); });
+      } else if (result === 'discard') {
+        _qeDirty = false;
+        setView(view);
+      }
+      // 'cancel' → stay on page
+    });
+    return;
   }
   if (state.view === 'quote-editor') { qe = null; _qeDirty = false; }
   state.view = view;
@@ -1272,6 +1298,9 @@ function ganttToolbarNav(label, prevFn, nextFn) {
       <button class="btn btn-sm${state.ganttHideInactive?' btn-primary':' btn-ghost'}" id="gnt-filter-btn">
         ${state.ganttHideInactive ? 'Toon alles' : 'Alleen actief'}
       </button>
+      ${state.ganttMode === 'day' ? `<button class="btn btn-sm${state.ganttHideWeekends?' btn-primary':' btn-ghost'}" id="gnt-we-btn">
+        ${state.ganttHideWeekends ? 'Toon weekends' : 'Geen weekends'}
+      </button>` : ''}
     </div>`;
   wireCalViewToggle();
   document.getElementById('gnt-prev').onclick = prevFn;
@@ -1279,6 +1308,7 @@ function ganttToolbarNav(label, prevFn, nextFn) {
   document.getElementById('gmt-week').onclick = () => { state.ganttMode = 'week'; renderGantt(); };
   document.getElementById('gmt-day').onclick  = () => { state.ganttMode = 'day';  renderGantt(); };
   document.getElementById('gnt-filter-btn').onclick = () => { state.ganttHideInactive = !state.ganttHideInactive; renderGantt(); };
+  document.getElementById('gnt-we-btn')?.addEventListener('click', () => { state.ganttHideWeekends = !state.ganttHideWeekends; renderGantt(); });
   renderCalFilterBar();
 }
 
@@ -1287,6 +1317,9 @@ function renderGanttWeek() {
   const N_WEEKS  = 12;   // columns visible at once
   const NAV_STEP = 4;    // weeks to jump per prev/next click
   const content  = document.getElementById('content');
+  // Clear workday globals (only used in day-view no-weekends mode)
+  ganttWorkdays = null;
+  ganttDayOffFn = null;
 
   // Anchor = Monday of cursor's week
   const d   = new Date(state.cursor);
@@ -1385,7 +1418,7 @@ function renderGanttWeek() {
       <div class="gnt-timeline">${bgCells}</div>
     </div>` : '';
 
-    return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}" style="border-left:4px solid ${p.color||'#4f8ef7'}">
+    return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}" style="border-left-color:${p.color||'#4f8ef7'};box-shadow:inset 3px 0 0 ${p.color||'#4f8ef7'}">
       <div class="gnt-lbl">
         <button class="gnt-toggle${isExpanded?' expanded':''}" data-proj-id="${p.id}"
                 title="${isExpanded?'Inklappen':'Uitklappen'}">${isExpanded?'▼':'▶'}</button>
@@ -1458,7 +1491,8 @@ function renderGanttWeek() {
 }
 
 /* ─── Gantt Interactions (scroll + drag-to-move/resize) ─────────────────── */
-function _ganttStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd, totalDays) {
+function _ganttStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd, totalDays, dayOffFn) {
+  dayOffFn = dayOffFn || (d => _dayOffset(rangeStart, d));
   // Pre-compute task counts per stage
   const tasksByStage = {};
   state.tasks.forEach(t => {
@@ -1486,8 +1520,8 @@ function _ganttStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd
       if (!hasBar) return '';
       const sCs = slot.start_date < rangeStart ? rangeStart : slot.start_date;
       const sCe = slot.end_date   > rangeEnd   ? rangeEnd   : slot.end_date;
-      const sLeft  = (_dayOffset(rangeStart, sCs) / totalDays * 100).toFixed(2);
-      const sWidth = ((_dayOffset(rangeStart, sCe) - _dayOffset(rangeStart, sCs) + 1) / totalDays * 100).toFixed(2);
+      const sLeft  = (dayOffFn(sCs) / totalDays * 100).toFixed(2);
+      const sWidth = ((dayOffFn(sCe) - dayOffFn(sCs) + 1) / totalDays * 100).toFixed(2);
       const titleParts = [escHtml(s.name)];
       if (s.notes) titleParts.push(escHtml(s.notes));
       if (taskCount > 0) titleParts.push(`${openCount}/${taskCount} taken`);
@@ -1517,11 +1551,15 @@ function _ganttStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd
   }).join('');
 }
 
-function _ganttDateFromClick(e, rangeStart, totalDays) {
+function _ganttDateFromClick(e, rangeStart, totalDays, daysArray) {
   const timeline = e.target.closest('.gnt-timeline');
   if (!timeline) return null;
   const rect = timeline.getBoundingClientRect();
   const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  if (daysArray) {
+    const idx = Math.max(0, Math.min(daysArray.length - 1, Math.floor(pct * daysArray.length)));
+    return toDateStr(daysArray[idx]);
+  }
   const d = new Date(rangeStart + 'T00:00:00');
   d.setDate(d.getDate() + Math.floor(pct * totalDays));
   return toDateStr(d);
@@ -1538,7 +1576,9 @@ function _onGanttDragMove(e) {
     const { rect, startDayOffset, ghostEl, totalDays, rangeStart } = ganttDraw;
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const endDayOffset = Math.max(startDayOffset, Math.floor(pct * totalDays));
-    ganttDraw.endDate = _ganttAddDays(rangeStart, endDayOffset);
+    ganttDraw.endDate = ganttWorkdays
+      ? toDateStr(ganttWorkdays[Math.min(ganttWorkdays.length - 1, endDayOffset)])
+      : _ganttAddDays(rangeStart, endDayOffset);
     ghostEl.style.left  = (startDayOffset / totalDays * 100).toFixed(2) + '%';
     ghostEl.style.width = ((endDayOffset - startDayOffset + 1) / totalDays * 100).toFixed(2) + '%';
     return;
@@ -1550,22 +1590,41 @@ function _onGanttDragMove(e) {
   if (rawDelta === ganttDrag.lastDelta) return;
   ganttDrag.lastDelta = rawDelta;
 
+  // Workday-aware add: moves rawDelta working days, skipping weekends
+  function wdAdd(d, n) {
+    if (!ganttWorkdays || n === 0) return _ganttAddDays(d, n);
+    let idx = ganttWorkdays.findIndex(wd => toDateStr(wd) === d);
+    if (idx < 0) {
+      let best = 0, bestDist = Infinity;
+      const ts = new Date(d + 'T00:00:00').getTime();
+      ganttWorkdays.forEach((wd, i) => { const dist = Math.abs(wd.getTime() - ts); if (dist < bestDist) { bestDist = dist; best = i; } });
+      idx = best;
+    }
+    return toDateStr(ganttWorkdays[Math.max(0, Math.min(ganttWorkdays.length - 1, idx + n))]);
+  }
+
   let newStart = origStart, newEnd = origEnd;
   if (type === 'move') {
-    newStart = _ganttAddDays(origStart, rawDelta);
-    newEnd   = _ganttAddDays(origEnd,   rawDelta);
+    newStart = wdAdd(origStart, rawDelta);
+    newEnd   = wdAdd(origEnd,   rawDelta);
   } else if (type === 'resize-l') {
-    newStart = _ganttAddDays(origStart, rawDelta);
-    if (newStart >= origEnd) newStart = _ganttAddDays(origEnd, -1);
+    newStart = wdAdd(origStart, rawDelta);
+    if (newStart >= origEnd) newStart = wdAdd(origEnd, -1);
   } else if (type === 'resize-r') {
-    newEnd = _ganttAddDays(origEnd, rawDelta);
-    if (newEnd <= origStart) newEnd = _ganttAddDays(origStart, 1);
+    newEnd = wdAdd(origEnd, rawDelta);
+    if (newEnd <= origStart) newEnd = wdAdd(origStart, 1);
   }
 
   // Live-update bar position in DOM (no DB write yet)
-  const rangeStartMs = new Date(rangeStart + 'T00:00:00').getTime();
-  const startOff = Math.round((new Date(newStart + 'T00:00:00') - rangeStartMs) / 86400000);
-  const endOff   = Math.round((new Date(newEnd   + 'T00:00:00') - rangeStartMs) / 86400000);
+  let startOff, endOff;
+  if (ganttDayOffFn) {
+    startOff = ganttDayOffFn(newStart);
+    endOff   = ganttDayOffFn(newEnd);
+  } else {
+    const rangeStartMs = new Date(rangeStart + 'T00:00:00').getTime();
+    startOff = Math.round((new Date(newStart + 'T00:00:00') - rangeStartMs) / 86400000);
+    endOff   = Math.round((new Date(newEnd   + 'T00:00:00') - rangeStartMs) / 86400000);
+  }
   barEl.style.left  = (startOff / totalDays * 100).toFixed(2) + '%';
   barEl.style.width = ((endOff - startOff + 1) / totalDays * 100).toFixed(2) + '%';
   ganttDrag.pendingStart = newStart;
@@ -1663,7 +1722,9 @@ function wireGanttInteractions(rangeStart, totalDays) {
         const rect = timeline.getBoundingClientRect();
         const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
         const startDayOffset = Math.floor(pct * totalDays);
-        const startDate = _ganttAddDays(rangeStart, startDayOffset);
+        const startDate = ganttWorkdays
+          ? toDateStr(ganttWorkdays[Math.max(0, Math.min(ganttWorkdays.length - 1, startDayOffset))])
+          : _ganttAddDays(rangeStart, startDayOffset);
         const refStage  = state.stages.find(s => s.id == stageRow.dataset.stageId);
         const color = refStage?.color || '#4f8ef7';
         const ghost = document.createElement('div');
@@ -1721,19 +1782,40 @@ function renderGanttDay() {
   // Anchor = cursor date
   const anchor = new Date(state.cursor);
   anchor.setHours(0, 0, 0, 0);
+  const hideWE = state.ganttHideWeekends;
 
-  const days = Array.from({ length: N_DAYS }, (_, i) => {
-    const d = new Date(anchor);
-    d.setDate(anchor.getDate() + i);
-    return d;
-  });
+  // Generate days: 30 calendar days, or 22 working days (Mon–Fri) when hiding weekends
+  const days = [];
+  { let cur = new Date(anchor);
+    const target = hideWE ? 22 : N_DAYS;
+    while (days.length < target) {
+      const dow = cur.getDay();
+      if (!hideWE || (dow !== 0 && dow !== 6)) days.push(new Date(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+  }
 
   const rangeStart = toDateStr(days[0]);
-  const rangeEnd   = toDateStr(days[N_DAYS - 1]);
-  const totalDays  = N_DAYS;
+  const rangeEnd   = toDateStr(days[days.length - 1]);
+  const totalDays  = days.length;
+
+  // Day-offset: index of dateStr in days[], nearest match for weekend / out-of-range dates
+  function dayOff(dateStr) {
+    let best = 0, bestDist = Infinity;
+    const ts = new Date(dateStr + 'T00:00:00').getTime();
+    for (let i = 0; i < days.length; i++) {
+      const dist = Math.abs(days[i].getTime() - ts);
+      if (dist === 0) return i;
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    }
+    return best;
+  }
+  ganttDayOffFn = hideWE ? dayOff : null;
+  ganttWorkdays  = hideWE ? days  : null;
 
   const fmt = d => `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
-  const rangeLabel = `${fmt(days[0])} – ${fmt(days[N_DAYS - 1])} ${days[N_DAYS - 1].getFullYear()}`;
+  const lastDay = days[days.length - 1];
+  const rangeLabel = `${fmt(days[0])} – ${fmt(lastDay)} ${lastDay.getFullYear()}`;
 
   ganttToolbarNav(
     rangeLabel,
@@ -1744,29 +1826,32 @@ function renderGanttDay() {
   const NL_DAYS_SHORT = ['zo','ma','di','wo','do','vr','za'];
 
   // Day column headers
-  const headerCells = days.map(d => {
+  const headerCells = days.map((d, i) => {
     const ds = toDateStr(d);
     const isToday = ds === todayStr;
     const dow = d.getDay();
     const isWeekend = dow === 0 || dow === 6;
-    return `<div class="gnt-day-h${isToday?' today-h':''}${isWeekend?' weekend-h':''}">
+    const isWeekStart = hideWE && dow === 1 && i > 0; // Monday gap (skip first col)
+    return `<div class="gnt-day-h${isToday?' today-h':''}${isWeekend?' weekend-h':''}${isWeekStart?' week-start':''}">
       <span class="gnt-dh-dow">${NL_DAYS_SHORT[dow]}</span>
       <span class="gnt-dh-num">${d.getDate()}</span>
     </div>`;
   }).join('');
 
   // Background cells
-  const bgCells = days.map(d => {
+  const bgCells = days.map((d, i) => {
     const ds = toDateStr(d);
     const isToday = ds === todayStr;
     const dow = d.getDay();
     const isWeekend = dow === 0 || dow === 6;
-    return `<div class="gnt-day-cell${isWeekend?' weekend-cell':''}${isToday?' today-cell':''}"></div>`;
+    const isWeekStart = hideWE && dow === 1 && i > 0;
+    return `<div class="gnt-day-cell${isWeekend?' weekend-cell':''}${isToday?' today-cell':''}${isWeekStart?' week-start':''}"></div>`;
   }).join('');
 
   // Today line
-  const todayOffDays = _dayOffset(rangeStart, todayStr);
-  const todayLine = (todayOffDays >= 0 && todayOffDays < totalDays)
+  const todayInRange  = todayStr >= rangeStart && todayStr <= rangeEnd;
+  const todayOffDays  = todayInRange ? (hideWE ? dayOff(todayStr) : _dayOffset(rangeStart, todayStr)) : -1;
+  const todayLine = todayOffDays >= 0
     ? `<div class="gnt-today-line" style="left:${((todayOffDays + 0.5) / totalDays * 100).toFixed(2)}%"></div>`
     : '';
 
@@ -1783,8 +1868,8 @@ function renderGanttDay() {
   const rowsHtml = visibleProjects.map(p => {
     const clampStart = p.start_date < rangeStart ? rangeStart : p.start_date;
     const clampEnd   = p.end_date   > rangeEnd   ? rangeEnd   : p.end_date;
-    const startOff   = _dayOffset(rangeStart, clampStart);
-    const endOff     = _dayOffset(rangeStart, clampEnd);
+    const startOff   = hideWE ? dayOff(clampStart) : _dayOffset(rangeStart, clampStart);
+    const endOff     = hideWE ? dayOff(clampEnd)   : _dayOffset(rangeStart, clampEnd);
     const leftPct    = (startOff / totalDays * 100).toFixed(2);
     const widthPct   = ((endOff - startOff + 1) / totalDays * 100).toFixed(2);
     const done       = p.status === 'done';
@@ -1798,7 +1883,7 @@ function renderGanttDay() {
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
 
     // Stage rows (only when expanded) — one row per stage, with N bars per slot
-    const stageRows = isExpanded ? _ganttStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd, totalDays) : '';
+    const stageRows = isExpanded ? _ganttStageRows(projStages, p, bgCells, todayLine, rangeStart, rangeEnd, totalDays, hideWE ? dayOff : null) : '';
 
     const addStageRow = isExpanded ? `<div class="gnt-row gnt-add-stage-row" data-proj-id="${p.id}" style="cursor:pointer">
       <div class="gnt-lbl gnt-stage-lbl" style="border-left:3px solid transparent;opacity:.5">
@@ -1807,7 +1892,7 @@ function renderGanttDay() {
       <div class="gnt-timeline">${bgCells}</div>
     </div>` : '';
 
-    return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}" style="border-left:4px solid ${p.color||'#4f8ef7'}">
+    return `<div class="gnt-row gnt-proj-row" data-proj-id="${p.id}" style="border-left-color:${p.color||'#4f8ef7'};box-shadow:inset 3px 0 0 ${p.color||'#4f8ef7'}">
       <div class="gnt-lbl">
         <button class="gnt-toggle${isExpanded?' expanded':''}" data-proj-id="${p.id}"
                 title="${isExpanded?'Inklappen':'Uitklappen'}">${isExpanded?'▼':'▶'}</button>
@@ -1855,7 +1940,7 @@ function renderGanttDay() {
       const barEl = e.target.closest('.gnt-bar');
       const stageId = barEl ? barEl.dataset.stageId : row.dataset.stageId;
       const stage = state.stages.find(s => s.id == stageId);
-      if (stage) openStageModal(stage, Number(row.dataset.projId), _ganttDateFromClick(e, rangeStart, totalDays));
+      if (stage) openStageModal(stage, Number(row.dataset.projId), _ganttDateFromClick(e, rangeStart, totalDays, hideWE ? days : null));
     });
   });
 
@@ -3886,13 +3971,13 @@ async function renderQuoteList() {
     let outsourceMargin = 0;
     try { outsourceMargin = JSON.parse(q.extras_json || '{}')?.outsource_margin || 0; } catch (_) {}
     const t = calcQuoteTotals(items, q.margin, outsourceMargin);
-    return { q, total: t.grandTotal };
+    return { q, total: t.subtotal };
   }));
 
   let html = `<table class="quotes-table">
     <thead><tr>
       <th>Project</th><th>Klant</th><th>Datum</th>
-      <th style="text-align:right">Totaal incl. BTW</th><th>Status</th><th></th>
+      <th style="text-align:right">Totaal excl. BTW</th><th>Status</th><th></th>
     </tr></thead><tbody>`;
 
   rows.forEach(({ q, total }) => {
@@ -4386,7 +4471,16 @@ function renderQuoteEditorView() {
     }
   };
   document.getElementById('qe-date').addEventListener('change',   e => { qe.quote_date = e.target.value; markQEDirty(); });
-  document.getElementById('qe-status').addEventListener('change', e => { qe.status = e.target.value; markQEDirty(); });
+  document.getElementById('qe-status').addEventListener('change', async e => {
+    qe.status = e.target.value;
+    if (qe.id) {
+      await remoteQuery({ action: 'update', table: 'quotes', data: { status: qe.status }, where: { id: qe.id } });
+      toast('Status opgeslagen');
+      if (qe.status === 'sent' || qe.status === 'accepted') createProjectFromQuote(qe.name, true);
+    } else {
+      markQEDirty();
+    }
+  });
   document.getElementById('qe-notes').addEventListener('input',   e => { qe.notes = e.target.value; markQEDirty(); });
   document.getElementById('qe-margin').addEventListener('focus',  e => e.target.select());
   document.getElementById('qe-margin').addEventListener('input',  e => {
@@ -4462,15 +4556,16 @@ function renderMatTable() {
   if (!tbody) return;
 
   tbody.innerHTML = qe.materials.map((m, i) => `
-    <tr draggable="true" data-idx="${i}">
+    <tr draggable="true" data-idx="${i}" class="${m.enabled === 0 ? 'qi-row-disabled' : ''}">
       <td class="drag-handle" title="Versleep">⠿</td>
+      <td style="text-align:center"><input type="checkbox" class="qi-check qi-enabled" data-t="mat" data-i="${i}" data-f="enabled" ${m.enabled !== 0 ? 'checked' : ''} title="Post aan/uit" /></td>
       <td><input class="qi-input" data-t="mat" data-i="${i}" data-f="name"       value="${escHtml(m.name)}"       placeholder="Omschrijving" /></td>
       <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="quantity"  value="${m.quantity}"  type="number" min="0" step="any" /></td>
       <td><input class="qi-input num qi-margin" data-t="mat" data-i="${i}" data-f="margin" value="${m.margin ?? ''}" type="number" min="0" max="500" step="1" placeholder="${qe.margin}" title="Marge % (leeg = globaal ${qe.margin}%)" /></td>
       <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="unit_price" value="${m.unit_price}" type="number" min="0" step="any" /></td>
-      <td class="num" id="mat-row-total-${i}">${fmtEur(m.quantity * m.unit_price)}</td>
+      <td class="num" id="mat-row-total-${i}">${m.enabled !== 0 ? fmtEur(m.quantity * m.unit_price) : '—'}</td>
       <td><button class="qi-del" data-t="mat" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="7" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="8" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('mat');
   wireDragDrop('mat');
@@ -4482,15 +4577,16 @@ function renderSvcTable() {
   if (!tbody) return;
 
   tbody.innerHTML = qe.services.map((s, i) => `
-    <tr draggable="true" data-idx="${i}" class="${s.is_outsourced ? 'svc-row-outsourced' : ''}">
+    <tr draggable="true" data-idx="${i}" class="${s.is_outsourced ? 'svc-row-outsourced' : ''}${s.enabled === 0 ? ' qi-row-disabled' : ''}">
       <td class="drag-handle" title="Versleep">⠿</td>
+      <td style="text-align:center"><input type="checkbox" class="qi-check qi-enabled" data-t="svc" data-i="${i}" data-f="enabled" ${s.enabled !== 0 ? 'checked' : ''} title="Post aan/uit" /></td>
       <td><input class="qi-input" data-t="svc" data-i="${i}" data-f="name"       value="${escHtml(s.name)}"      placeholder="Dienst" /></td>
       <td style="text-align:center"><input type="checkbox" class="qi-check" data-t="svc" data-i="${i}" data-f="is_outsourced" ${s.is_outsourced ? 'checked' : ''} title="Uitbesteed werk" /></td>
       <td><input class="qi-input num" data-t="svc" data-i="${i}" data-f="quantity"  value="${s.quantity}" type="number" min="0" step="0.5" /></td>
       <td class="num"><input class="qi-input num" data-t="svc" data-i="${i}" data-f="unit_price" value="${s.unit_price}" type="number" min="0" step="any" /></td>
-      <td class="num" id="svc-row-total-${i}">${fmtEur(s.quantity * s.unit_price)}</td>
+      <td class="num" id="svc-row-total-${i}">${s.enabled !== 0 ? fmtEur(s.quantity * s.unit_price) : '—'}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="7" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="8" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('svc');
   wireDragDrop('svc');
@@ -4532,9 +4628,17 @@ function wireTableInputs(type) {
       const arr = type === 'mat' ? qe.materials : qe.services;
       if (!arr[i]) return;
       arr[i][field] = chk.checked ? 1 : 0;
-      // Toggle the outsourced styling on the row
       const row = chk.closest('tr');
-      if (row) row.classList.toggle('svc-row-outsourced', !!chk.checked);
+      if (field === 'enabled') {
+        // Toggle disabled styling and re-render just the total cell
+        if (row) row.classList.toggle('qi-row-disabled', !chk.checked);
+        const rowTotal = document.getElementById(`${type}-row-total-${i}`);
+        if (rowTotal) rowTotal.textContent = chk.checked ? fmtEur(arr[i].quantity * arr[i].unit_price) : '—';
+      } else {
+        // Toggle the outsourced styling on the row
+        if (row) row.classList.toggle('svc-row-outsourced', !!chk.checked);
+      }
+      if (type === 'mat') updateMatSubtotals();
       if (type === 'svc') updateSvcSubtotals();
       updateTotals();
       markQEDirty();
@@ -4759,8 +4863,10 @@ function wireExclusions() {
 // ─── Calculations ─────────────────────────────────────────────────────────────
 
 function calcQuoteTotals(items, globalMargin, outsourceMargin) {
-  const matItems = items.filter(i => i.type === 'material');
-  const svcItems = items.filter(i => i.type === 'service');
+  // Only include enabled items (enabled === 0 means toggled off)
+  const activeItems = items.filter(i => i.enabled !== 0);
+  const matItems = activeItems.filter(i => i.type === 'material');
+  const svcItems = activeItems.filter(i => i.type === 'service');
   // Use explicit null checks so 0% margin isn't overridden by the default
   const globalMarginPct    = (globalMargin    != null && globalMargin    !== '') ? parseFloat(globalMargin)    : 20;
   const outsourceMarginPct = (outsourceMargin != null && outsourceMargin !== '') ? parseFloat(outsourceMargin) : 0;
@@ -4853,10 +4959,9 @@ function updateTotals() {
       <div class="qt-row"><span class="qt-label">Marge uitbesteed (${t.outsourceMarginPct}%)</span><span class="qt-val">+ ${fmtEur(t.svcOutMargin)}</span></div>
     ` : ''}
     <div class="qt-divider"></div>
-    <div class="qt-row subtotal"><span class="qt-label">Subtotaal excl. BTW</span><span class="qt-val">${fmtEur(t.subtotal)}</span></div>
+    <div class="qt-row final"><span class="qt-label">TOTAAL excl. BTW</span><span class="qt-val">${fmtEur(t.subtotal)}</span></div>
     <div class="qt-row"><span class="qt-label">BTW (21%)</span><span class="qt-val">+ ${fmtEur(t.btw)}</span></div>
-    <div class="qt-divider"></div>
-    <div class="qt-row final"><span class="qt-label">TOTAAL incl. BTW</span><span class="qt-val">${fmtEur(t.grandTotal)}</span></div>
+    <div class="qt-row incl-note"><span class="qt-label">Incl. BTW</span><span class="qt-val">${fmtEur(t.grandTotal)}</span></div>
     <div class="qt-divider"></div>
     <div class="qt-row profit"><span class="qt-label">Eigen verdiensten</span><span class="qt-val">${fmtEur(t.profit)}</span></div>`;
 }
@@ -4971,9 +5076,9 @@ async function performSave() {
     }
 
     const allItems = [
-      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0 })),
-      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0 })),
-      ...qe.exclusions.map((ex, i) => ({ quote_id: quoteId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0 })),
+      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0, enabled: m.enabled !== 0 ? 1 : 0 })),
+      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0, enabled: s.enabled !== 0 ? 1 : 0 })),
+      ...qe.exclusions.map((ex, i) => ({ quote_id: quoteId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0, enabled: 1 })),
     ];
     for (const item of allItems) {
       await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
@@ -5048,8 +5153,11 @@ async function exportQuotePdf(mode = 'internal') {
     <div>${COMPANY.email} · ${COMPANY.kvk} · ${COMPANY.btw}</div>
     <div>${COMPANY.iban} · ${COMPANY.tel}</div>`;
 
-  // ── Internal PDF: full detail ──
-  const matRows = qe.materials.map(m => {
+  // ── Internal PDF: full detail (only enabled items) ──
+  const matRowsEnabled = qe.materials.filter(m => m.enabled !== 0);
+  const svcRowsEnabled = qe.services.filter(s => s.enabled !== 0);
+
+  const matRows = matRowsEnabled.map(m => {
     const effectivePct = (m.margin != null && m.margin !== '') ? parseFloat(m.margin) : t.marginPct;
     const displayPrice = m.unit_price * (1 + effectivePct / 100);
     return `
@@ -5061,7 +5169,7 @@ async function exportQuotePdf(mode = 'internal') {
     </tr>`;
   }).join('');
 
-  const svcRows = qe.services.map(s => `
+  const svcRows = svcRowsEnabled.map(s => `
     <tr>
       <td>${escHtml(s.name)}</td>
       <td class="r">${s.quantity} u</td>
@@ -5069,10 +5177,10 @@ async function exportQuotePdf(mode = 'internal') {
       <td class="r">${fmtEur(s.quantity * s.unit_price)}</td>
     </tr>`).join('');
 
-  // ── Client PDF: items listed, no individual prices ──
+  // ── Client PDF: items listed, no individual prices (only enabled items) ──
   const clientItemsList = [
-    ...qe.materials.map(m => escHtml(m.name)),
-    ...qe.services.map(s => escHtml(s.name)),
+    ...matRowsEnabled.map(m => escHtml(m.name)),
+    ...svcRowsEnabled.map(s => escHtml(s.name)),
   ].map(n => `<li>${n}</li>`).join('');
 
   const opts = qe.pdf_opts || {
@@ -5201,8 +5309,9 @@ async function exportQuotePdf(mode = 'internal') {
   .totals-box th { background: ${accent}; color: #fff; padding: 6px 8px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: .4px; }
   .totals-box td { padding: 6px 12px; border-bottom: 1px solid #eaf5f7; color: #2a2520; }
   .totals-box td.r { text-align: right; }
-  .totals-box .row-final td { font-size: 13px; font-weight: 700; background: ${bgTint}; border-bottom: none; }
+  .totals-box .row-final td { font-size: 14px; font-weight: 700; background: ${bgTint}; }
   .totals-box .row-btw td { color: #888; font-size: 10px; }
+  .totals-box .row-incl td { color: #888; font-size: 10px; border-bottom: none; }
   .excl-block { margin-top: 6mm; padding: 8px 14px; background: ${bgTint}; border-left: 3px solid ${accent}; border-radius: 0 4px 4px 0; break-inside: avoid; page-break-inside: avoid; }
   .excl-block .lbl { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
   .excl-pdf-list { margin: 0; padding: 0 0 0 5mm; font-size: 10px; color: #666; line-height: 1.8; }
@@ -5292,15 +5401,15 @@ ${opts.show_title_page ? `
       <table class="content-table">
         <thead><tr><th colspan="2">Prijsoverzicht</th></tr></thead>
         <tbody>
-          <tr><td>Subtotaal excl. BTW</td><td class="r">${fmtEur(t.subtotal)}</td></tr>
+          <tr class="row-final"><td>TOTAAL excl. BTW</td><td class="r">${fmtEur(t.subtotal)}</td></tr>
           <tr class="row-btw"><td>BTW (21%)</td><td class="r">+ ${fmtEur(t.btw)}</td></tr>
-          <tr class="row-final"><td>TOTAAL incl. BTW</td><td class="r">${fmtEur(t.grandTotal)}</td></tr>
+          <tr class="row-incl"><td>Incl. BTW</td><td class="r">${fmtEur(t.grandTotal)}</td></tr>
         </tbody>
       </table>
     </div>
     ` : `
-    <!-- Internal PDF: full detail -->
-    ${qe.materials.length > 0 ? `
+    <!-- Internal PDF: full detail (disabled items excluded) -->
+    ${matRowsEnabled.length > 0 ? `
     <h3>Materialen</h3>
     <table class="content-table">
       <thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Stukprijs</th><th class="r" style="width:17%">Totaal</th></tr></thead>
@@ -5308,7 +5417,7 @@ ${opts.show_title_page ? `
     </table>
     ` : ''}
 
-    ${qe.services.length > 0 ? `
+    ${svcRowsEnabled.length > 0 ? `
     <h3>Diensten</h3>
     <table class="content-table">
       <thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Uren</th><th class="r" style="width:17%">Tarief/u</th><th class="r" style="width:17%">Totaal</th></tr></thead>
@@ -5319,11 +5428,11 @@ ${opts.show_title_page ? `
       <table class="content-table">
         <thead><tr><th colspan="2">Totaaloverzicht</th></tr></thead>
         <tbody>
-          ${qe.materials.length > 0 ? `<tr><td>Totaal materialen</td><td class="r">${fmtEur(t.matTotal)}</td></tr>` : ''}
-          ${qe.services.length > 0  ? `<tr><td>Totaal diensten</td><td class="r">${fmtEur(t.svcTotal)}</td></tr>` : ''}
-          <tr><td>Subtotaal excl. BTW</td><td class="r">${fmtEur(t.subtotal)}</td></tr>
+          ${matRowsEnabled.length > 0 ? `<tr><td>Totaal materialen</td><td class="r">${fmtEur(t.matTotal)}</td></tr>` : ''}
+          ${svcRowsEnabled.length > 0  ? `<tr><td>Totaal diensten</td><td class="r">${fmtEur(t.svcTotal)}</td></tr>` : ''}
+          <tr class="row-final"><td>TOTAAL excl. BTW</td><td class="r">${fmtEur(t.subtotal)}</td></tr>
           <tr class="row-btw"><td>BTW (21%)</td><td class="r">+ ${fmtEur(t.btw)}</td></tr>
-          <tr class="row-final"><td>TOTAAL incl. BTW</td><td class="r">${fmtEur(t.grandTotal)}</td></tr>
+          <tr class="row-incl"><td>Incl. BTW</td><td class="r">${fmtEur(t.grandTotal)}</td></tr>
         </tbody>
       </table>
     </div>

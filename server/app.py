@@ -170,6 +170,8 @@ def init_db():
         db.execute("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0")
     if 'margin' not in qicols:
         db.execute("ALTER TABLE quote_items ADD COLUMN margin REAL DEFAULT NULL")
+    if 'enabled' not in qicols:
+        db.execute("ALTER TABLE quote_items ADD COLUMN enabled INTEGER DEFAULT 1")
 
     # One-time migration: consolidate duplicate stages by (project_id, name)
     # and move their date ranges into stage_slots.

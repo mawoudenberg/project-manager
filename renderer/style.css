@@ -670,6 +670,33 @@ html[data-theme="dark"] #sidebar-logo {
   z-index: 1000;
   backdrop-filter: blur(3px);
 }
+/* Unsaved-changes confirmation dialog */
+.qe-unsaved-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2000;
+  backdrop-filter: blur(3px);
+}
+.qe-unsaved-box {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px 28px 22px;
+  width: 360px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.3);
+}
+.qe-unsaved-msg {
+  font-size: 15px;
+  color: var(--text);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+.qe-unsaved-btns {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
 .modal-overlay.hidden { display: none; }
 .modal {
   background: var(--bg2);
@@ -1310,6 +1337,7 @@ tr:hover .qi-del { opacity: 1; }
   padding: 10px 0 4px;
 }
 .qt-row.final .qt-val { color: var(--accent); }
+.qt-row.incl-note { font-size: 11px; color: var(--text3, var(--text2)); padding: 2px 0 6px; }
 .qt-row.profit {
   font-weight: 700;
   color: #1f7a4d;
@@ -1323,6 +1351,13 @@ tr:hover .qi-del { opacity: 1; }
 .svc-row-outsourced { background: rgba(255, 165, 0, 0.07); }
 .svc-row-outsourced td { color: #b06b00; }
 .qi-check { width: 16px; height: 16px; cursor: pointer; }
+.qi-row-disabled { opacity: 0.38; }
+.qi-row-disabled td { text-decoration: line-through; color: var(--text2) !important; }
+.qi-row-disabled .qi-check,
+.qi-row-disabled .qi-del,
+.qi-row-disabled .drag-handle { opacity: 1; text-decoration: none; }
+.qi-row-disabled input[type="text"],
+.qi-row-disabled input[type="number"] { text-decoration: line-through; }
 
 /* ─── Team Members ─────────────────────────────────────────────────────────── */
 .team-member-row {
@@ -1534,6 +1569,9 @@ tr:hover .qi-del { opacity: 1; }
 }
 .gnt-day-h.today-h   { color: var(--accent); background: rgba(79,142,247,.1); }
 .gnt-day-h.weekend-h { opacity: .55; }
+/* Week-start gap in working-day (no-weekends) mode */
+.gnt-day-h.week-start   { box-shadow: inset 4px 0 0 rgba(128,128,128,.3); }
+.gnt-day-cell.week-start { box-shadow: inset 4px 0 0 rgba(128,128,128,.3); }
 /* Week-column header (multi-week Gantt) */
 .gnt-week-h { flex-direction: column; justify-content: center; align-items: center; display: flex; padding: 4px 2px; }
 .gnt-wk-month { font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--accent); font-weight: 700; line-height: 1; }
@@ -1586,6 +1624,7 @@ tr:hover .qi-del { opacity: 1; }
   flex: 1;
   position: relative;
   height: 52px;
+  align-self: center;
   display: flex;
   overflow: hidden;
 }
@@ -1660,7 +1699,7 @@ tr:hover .qi-del { opacity: 1; }
 .gnt-toggle:hover { opacity: 1; }
 .gnt-stage-row { opacity: .85; background: var(--bg); border-left: none !important; }
 .gnt-stage-row .gnt-timeline { cursor: crosshair; }
-.gnt-stage-row .gnt-timeline { height: 36px; }
+.gnt-stage-row .gnt-timeline { height: 36px; align-self: center; }
 .gnt-stage-lbl {
   padding-left: 24px !important;
   font-size: 12px;
