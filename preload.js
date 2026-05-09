@@ -20,13 +20,15 @@ contextBridge.exposeInMainWorld('api', {
   apiFetch: (opts) => ipcRenderer.invoke('api:fetch', opts),
 
   // PDF export + logo
-  exportPdf: (html, filename) => ipcRenderer.invoke('pdf:export', { html, filename }),
+  exportPdf:    (html, filename, defaultDir) => ipcRenderer.invoke('pdf:export',    { html, filename, defaultDir }),
+  generatePdf:  (html)                       => ipcRenderer.invoke('pdf:generate',  { html }),
   getLogoDataUrl: () => ipcRenderer.invoke('logo:get'),
 
   // Auto-update
   onUpdateAvailable:  (cb)  => ipcRenderer.on('app:update-available', (_e, d) => cb(d)),
   onDownloadComplete: (cb)  => ipcRenderer.on('app:download-complete', (_e, p) => cb(p)),
   openUrl:            (url) => ipcRenderer.invoke('app:open-url', url),
+  openPath:           (p)   => ipcRenderer.invoke('shell:openPath', p),
   downloadUrl:        (url) => ipcRenderer.invoke('app:download-url', url),
 
   // DB sync (Google Drive changed the file)

@@ -95,6 +95,20 @@ document.addEventListener('keydown', async e => {
   }
 });
 
+// ── Prevent scroll-wheel and arrow keys from changing number input values ──
+// Scroll: blur the focused number input so the page scrolls instead
+document.addEventListener('wheel', () => {
+  if (document.activeElement?.type === 'number') document.activeElement.blur();
+}, { passive: true });
+
+// Arrow up/down: prevent value change, let the page scroll
+document.addEventListener('keydown', e => {
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && document.activeElement?.type === 'number') {
+    e.preventDefault();
+    document.activeElement.blur();
+  }
+}, true);
+
 /* ─── Startup ──────────────────────────────────────────────────────────────── */
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === 'dark' ? 'dark' : 'light';
@@ -227,6 +241,33 @@ async function createProjectFolder(name) {
     }
   } catch (e) {
     console.warn('create-project-folder error:', e);
+  }
+}
+
+// Open a project folder in Finder/Explorer.
+// First call: prompts the user to pick the projects root directory (saved to config).
+async function openProjectFolder(name, forceReset = false) {
+  if (!name?.trim()) { toast('Geen projectnaam opgegeven', 'warn'); return; }
+  let dir = forceReset ? null : state.config?.localProjectsDir;
+  if (!dir) {
+    // First time (or reset): ask user to select the ROOT projects folder,
+    // i.e. the folder that CONTAINS all individual project subfolders.
+    toast('Selecteer de Projecten-map (de map die alle losse projectmappen bevat, NIET een individuele projectmap)', 'info', 6000);
+    dir = await api.openFolder();
+    if (!dir) return;
+    const newCfg = { ...state.config, localProjectsDir: dir };
+    await api.configSet({ localProjectsDir: dir });
+    state.config = newCfg;
+    // Update the display in settings if open
+    const el = document.getElementById('cfg-projects-dir');
+    if (el) el.value = dir;
+    toast(`Projectenmap ingesteld op: ${dir}`);
+  }
+  const folderPath = dir.replace(/\/$/, '') + '/' + name.trim();
+  if (typeof api.openPath === 'function') {
+    api.openPath(folderPath);
+  } else {
+    toast('Map openen is alleen beschikbaar in de desktop app', 'warn');
   }
 }
 
@@ -397,7 +438,7 @@ function setView(view) {
   if (state.view === 'quote-editor' && qe && _qeDirty && view !== 'quote-editor') {
     _confirmUnsavedQE(result => {
       if (result === 'save') {
-        saveQuote().then(() => { qe = null; _qeDirty = false; setView(view); });
+        performSave().then(() => { qe = null; _qeDirty = false; setView(view); });
       } else if (result === 'discard') {
         _qeDirty = false;
         setView(view);
@@ -2005,7 +2046,10 @@ function renderProjectsView() {
           <div class="proj-progress">
             <div class="proj-progress-bar" style="width:${pct}%;background:${p.color||'#4f8ef7'}"></div>
           </div>
-          <div class="proj-card-meta">${doneCount}/${taskCount} taken afgerond</div>
+          <div class="proj-card-footer">
+            <div class="proj-card-meta">${doneCount}/${taskCount} taken afgerond</div>
+            <button class="btn btn-ghost btn-xs proj-folder-btn" data-name="${escHtml(p.name)}" title="Open projectmap in Finder">📂</button>
+          </div>
         </div>
       </div>`;
     }).join('') + `</div>`;
@@ -2017,6 +2061,12 @@ function renderProjectsView() {
       if (proj) renderProjectDetail(proj);
     };
   });
+  content.querySelectorAll('.proj-folder-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      openProjectFolder(btn.dataset.name);
+    };
+  });
 }
 
 /* ─── Project Detail Page ──────────────────────────────────────────────────── */
@@ -2025,13 +2075,15 @@ function renderProjectDetail(proj) {
   const content = document.getElementById('content');
   const ctrl    = document.getElementById('toolbar-controls');
 
-  // Toolbar: back | edit | add task
+  // Toolbar: back | edit | folder | add task
   ctrl.innerHTML = `
     <button class="btn btn-ghost btn-sm" id="proj-back-btn">← Projecten</button>
     <button class="btn btn-ghost btn-sm" id="proj-edit-btn">✏ Bewerken</button>
+    <button class="btn btn-ghost btn-sm" id="proj-folder-btn" title="Open projectmap in Finder">📂 Map</button>
     <button class="btn btn-primary btn-sm" id="proj-add-task-btn">+ Taak</button>`;
-  document.getElementById('proj-back-btn').onclick = () => setView('projects');
-  document.getElementById('proj-edit-btn').onclick = () => openProjectModal(proj);
+  document.getElementById('proj-back-btn').onclick  = () => setView('projects');
+  document.getElementById('proj-edit-btn').onclick  = () => openProjectModal(proj);
+  document.getElementById('proj-folder-btn').onclick = () => openProjectFolder(proj.name);
   document.getElementById('proj-add-task-btn').onclick = () => openTaskModal(null, null, proj.id);
 
   // Update toolbar title
@@ -3441,10 +3493,22 @@ function wireSettings() {
     const cfg = state.config || {};
     document.getElementById('cfg-name').value = cfg.name || '';
     document.getElementById('cfg-api-url').value = cfg.apiUrl || 'http://raspberrypi.local:5000';
+    document.getElementById('cfg-projects-dir').value = cfg.localProjectsDir || '';
     const theme = cfg.theme || 'light';
     document.querySelector(`input[name=theme][value=${theme}]`).checked = true;
     updateThemeCards(theme);
     document.getElementById('settings-modal').classList.remove('hidden');
+  };
+
+  document.getElementById('cfg-projects-dir-pick').onclick = async () => {
+    toast('Selecteer de Projecten-map (de map die alle losse projectmappen bevat)', 'info', 4000);
+    const dir = await api.openFolder();
+    if (dir) {
+      document.getElementById('cfg-projects-dir').value = dir;
+      // Apply immediately so folder buttons work right away without reopening settings
+      state.config = { ...state.config, localProjectsDir: dir };
+      await api.configSet({ localProjectsDir: dir });
+    }
   };
 
   document.getElementById('settings-cancel').onclick = () =>
@@ -3460,10 +3524,12 @@ function wireSettings() {
   document.getElementById('settings-save').onclick = async () => {
     const theme = document.querySelector('input[name=theme]:checked')?.value || 'light';
     const newConfig = {
+      ...state.config,                           // preserve caldav, localProjectsDir, etc.
       name: document.getElementById('cfg-name').value.trim() || state.config?.name || '',
       mode: 'api',
       apiUrl: document.getElementById('cfg-api-url').value.trim(),
       theme,
+      localProjectsDir: document.getElementById('cfg-projects-dir').value.trim() || state.config?.localProjectsDir || '',
     };
     await api.configSet(newConfig);
     state.config = newConfig;
@@ -4202,6 +4268,7 @@ function qwLoadImage(file) {
 async function openQuoteEditor(quote) {
   qe = freshQE(quote);
   _qeDirty = false;
+  state.view = 'quote-editor';   // so setView() can detect unsaved changes on back
 
   // Load existing items if editing
   if (qe.id) {
@@ -4220,6 +4287,7 @@ function renderQuoteEditorView() {
     <button class="btn btn-ghost btn-sm" id="qe-back">← Offertes</button>
     <button class="btn btn-secondary btn-sm" id="qe-delete-btn" ${!qe.id ? 'style="display:none"' : ''}>Verwijder</button>
     <button class="btn btn-secondary btn-sm" id="qe-project-btn" title="Maak project aan voor deze offerte">📁 Project</button>
+    <button class="btn btn-secondary btn-sm" id="qe-folder-btn" title="Open projectmap in Finder">📂 Map</button>
     <button class="btn btn-primary btn-sm" id="qe-save-btn">Opslaan</button>
     <div class="pdf-dropdown" id="pdf-dropdown">
       <button class="btn btn-secondary btn-sm" id="qe-pdf-btn">📄 PDF ▾</button>
@@ -4233,6 +4301,7 @@ function renderQuoteEditorView() {
   document.getElementById('qe-back').onclick = () => setView('quotes');
   document.getElementById('qe-save-btn').onclick = saveQuote;
   document.getElementById('qe-project-btn').onclick = () => createProjectFromQuote(qe.name);
+  document.getElementById('qe-folder-btn').onclick  = () => openProjectFolder(qe.name);
   document.getElementById('qe-pdf-btn').onclick = () => {
     document.getElementById('pdf-dropdown-menu').classList.toggle('hidden');
   };
@@ -4340,11 +4409,12 @@ function renderQuoteEditorView() {
       <table class="qi-table">
         <thead><tr>
           <th style="width:3%"></th>
-          <th style="width:37%">Omschrijving</th>
-          <th style="width:10%">Aantal</th>
+          <th style="width:3%"></th>
+          <th style="width:34%">Omschrijving</th>
+          <th style="width:9%">Aantal</th>
           <th class="num" style="width:8%" title="Marge per item (leeg = globale marge)">%</th>
-          <th class="num" style="width:16%">Stukprijs</th>
-          <th class="num" style="width:22%">Totaal</th>
+          <th class="num" style="width:15%">Stukprijs</th>
+          <th class="num" style="width:20%">Totaal</th>
           <th style="width:4%"></th>
         </tr></thead>
         <tbody id="mat-tbody"></tbody>
@@ -4371,11 +4441,12 @@ function renderQuoteEditorView() {
       <table class="qi-table">
         <thead><tr>
           <th style="width:3%"></th>
-          <th style="width:36%">Dienst</th>
+          <th style="width:3%"></th>
+          <th style="width:33%">Dienst</th>
           <th style="width:9%" title="Vink aan als deze dienst wordt uitbesteed">Uitb.</th>
-          <th style="width:13%">Uren</th>
-          <th class="num" style="width:17%">Tarief/uur</th>
-          <th class="num" style="width:18%">Totaal</th>
+          <th style="width:12%">Uren</th>
+          <th class="num" style="width:16%">Tarief/uur</th>
+          <th class="num" style="width:16%">Totaal</th>
           <th style="width:4%"></th>
         </tr></thead>
         <tbody id="svc-tbody"></tbody>
@@ -4560,10 +4631,10 @@ function renderMatTable() {
       <td class="drag-handle" title="Versleep">⠿</td>
       <td style="text-align:center"><input type="checkbox" class="qi-check qi-enabled" data-t="mat" data-i="${i}" data-f="enabled" ${m.enabled !== 0 ? 'checked' : ''} title="Post aan/uit" /></td>
       <td><input class="qi-input" data-t="mat" data-i="${i}" data-f="name"       value="${escHtml(m.name)}"       placeholder="Omschrijving" /></td>
-      <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="quantity"  value="${m.quantity}"  type="number" min="0" step="any" /></td>
+      <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="quantity"  value="${m.quantity ?? 1}"  type="number" min="0" step="any" /></td>
       <td><input class="qi-input num qi-margin" data-t="mat" data-i="${i}" data-f="margin" value="${m.margin ?? ''}" type="number" min="0" max="500" step="1" placeholder="${qe.margin}" title="Marge % (leeg = globaal ${qe.margin}%)" /></td>
-      <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="unit_price" value="${m.unit_price}" type="number" min="0" step="any" /></td>
-      <td class="num" id="mat-row-total-${i}">${m.enabled !== 0 ? fmtEur(m.quantity * m.unit_price) : '—'}</td>
+      <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="unit_price" value="${m.unit_price ?? 0}" type="number" min="0" step="any" /></td>
+      <td class="num" id="mat-row-total-${i}">${m.enabled !== 0 ? fmtEur((m.quantity ?? 1) * (m.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="mat" data-i="${i}">✕</button></td>
     </tr>`).join('') || `<tr><td colspan="8" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
 
@@ -4582,9 +4653,9 @@ function renderSvcTable() {
       <td style="text-align:center"><input type="checkbox" class="qi-check qi-enabled" data-t="svc" data-i="${i}" data-f="enabled" ${s.enabled !== 0 ? 'checked' : ''} title="Post aan/uit" /></td>
       <td><input class="qi-input" data-t="svc" data-i="${i}" data-f="name"       value="${escHtml(s.name)}"      placeholder="Dienst" /></td>
       <td style="text-align:center"><input type="checkbox" class="qi-check" data-t="svc" data-i="${i}" data-f="is_outsourced" ${s.is_outsourced ? 'checked' : ''} title="Uitbesteed werk" /></td>
-      <td><input class="qi-input num" data-t="svc" data-i="${i}" data-f="quantity"  value="${s.quantity}" type="number" min="0" step="0.5" /></td>
-      <td class="num"><input class="qi-input num" data-t="svc" data-i="${i}" data-f="unit_price" value="${s.unit_price}" type="number" min="0" step="any" /></td>
-      <td class="num" id="svc-row-total-${i}">${s.enabled !== 0 ? fmtEur(s.quantity * s.unit_price) : '—'}</td>
+      <td><input class="qi-input num" data-t="svc" data-i="${i}" data-f="quantity"  value="${s.quantity ?? 1}" type="number" min="0" step="0.5" /></td>
+      <td class="num"><input class="qi-input num" data-t="svc" data-i="${i}" data-f="unit_price" value="${s.unit_price ?? 0}" type="number" min="0" step="any" /></td>
+      <td class="num" id="svc-row-total-${i}">${s.enabled !== 0 ? fmtEur((s.quantity ?? 1) * (s.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
     </tr>`).join('') || `<tr><td colspan="8" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
 
@@ -4694,6 +4765,7 @@ function wireDragDrop(type) {
       _dragSrcIdx = null;
       if (type === 'mat') { renderMatTable(); updateTotals(); }
       else { renderSvcTable(); updateTotals(); }
+      markQEDirty();
     });
   });
 }
@@ -4702,12 +4774,12 @@ function wireDragDrop(type) {
 
 function wirePresetMenus() {
   _wirePresetMenu('mat', PRESET_MATERIALS,
-    p    => { qe.materials.push({ name: p.name, quantity: 1, unit: p.unit, unit_price: p.price, margin: null }); renderMatTable(); updateTotals(); },
-    name => { qe.materials.push({ name: name || '', quantity: 1, unit: 'st', unit_price: 0, margin: null }); renderMatTable(); updateTotals(); }
+    p    => { qe.materials.push({ name: p.name, quantity: 1, unit: p.unit, unit_price: p.price ?? 0, margin: null }); renderMatTable(); updateTotals(); markQEDirty(); },
+    name => { qe.materials.push({ name: name || '', quantity: 1, unit: 'st', unit_price: 0, margin: null }); renderMatTable(); updateTotals(); markQEDirty(); }
   );
   _wirePresetMenu('svc', PRESET_SERVICES,
-    p    => { qe.services.push({ name: p.name, quantity: 1, unit: 'uur', unit_price: p.rate }); renderSvcTable(); updateTotals(); },
-    name => { qe.services.push({ name: name || '', quantity: 1, unit: 'uur', unit_price: 0 }); renderSvcTable(); updateTotals(); }
+    p    => { qe.services.push({ name: p.name, quantity: 1, unit: 'uur', unit_price: p.rate ?? 0 }); renderSvcTable(); updateTotals(); markQEDirty(); },
+    name => { qe.services.push({ name: name || '', quantity: 1, unit: 'uur', unit_price: 0 }); renderSvcTable(); updateTotals(); markQEDirty(); }
   );
 }
 
@@ -4742,7 +4814,7 @@ function _wirePresetMenu(type, presets, onAdd, onEmpty) {
         ${items.map(p => `
           <div class="preset-item" data-name="${escHtml(p.name)}">
             <span>${escHtml(p.name)}</span>
-            <span class="preset-item-meta">${p.rate != null ? `€${p.rate}/u` : p.unit}</span>
+            <span class="preset-item-meta">${p.rate != null ? `€${p.rate}/u` : p.price != null ? `€${p.price}` : ''}</span>
           </div>`).join('')}
       </div>`).join('')
       : (!filter.trim() ? `<div class="preset-no-results">Geen resultaten</div>` : ''));
@@ -4838,6 +4910,7 @@ function renderExclusions() {
     btn.addEventListener('click', () => {
       qe.exclusions.push(btn.dataset.val);
       renderExclusions();
+      markQEDirty();
     });
   });
 }
@@ -4853,6 +4926,7 @@ function wireExclusions() {
     qe.exclusions.push(val);
     input.value = '';
     renderExclusions();
+    markQEDirty();
   };
 
   addBtn.addEventListener('click', addExcl);
@@ -5014,7 +5088,7 @@ function openSaveChecklist(onConfirm) {
 async function saveQuote() {
   if (!qe.name.trim()) { shake(document.getElementById('qe-name')); toast('Vul een projectnaam in'); return; }
   if (qe.checklist_done) {
-    performSave();
+    await performSave();
   } else {
     openSaveChecklist(() => { qe.checklist_done = true; updateChecklistBadge(); performSave(); });
   }
@@ -5462,7 +5536,33 @@ ${extraImagesPage}
 
   const suffix = isClient ? '' : '_intern';
   const clientName = (qe.client || '').replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  await api.exportPdf(html, `${quoteNum}_${clientName || 'offerte'}${suffix}.pdf`);
+  const pdfFilename = `${quoteNum}_${clientName || 'offerte'}${suffix}.pdf`;
+
+  if (state.config?.mode === 'api') {
+    // ── API mode: generate PDF bytes and save directly on server ──
+    const pdfBase64 = await api.generatePdf(html);
+    if (!pdfBase64) { toast('PDF genereren mislukt', 'error'); return; }
+
+    const projectName = qe.name?.trim();
+    if (!projectName) { toast('Geen projectnaam — sla de offerte eerst op', 'error'); return; }
+
+    const r = await api.apiFetch({
+      method: 'POST',
+      url:    `${state.config.apiUrl}/api/save-quote-pdf`,
+      body:   { project_name: projectName, filename: pdfFilename, pdf_base64: pdfBase64 },
+    });
+    if (r.data?.ok) {
+      toast(`📄 PDF opgeslagen in Offertes map van "${projectName}"`);
+    } else if (r.data?.no_folder) {
+      toast(`Projectmap "${projectName}" niet gevonden op server`, 'warn', 5000);
+    } else {
+      toast(`PDF opslaan mislukt: ${r.data?.error || 'onbekende fout'}`, 'error', 4000);
+    }
+  } else {
+    // ── File mode: local save dialog ──
+    await api.exportPdf(html, pdfFilename);
+  }
+
   } catch (err) {
     toast('PDF exporteren mislukt: ' + (err.message || err), 'error', 4000);
     console.error('exportQuotePdf error:', err);

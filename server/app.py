@@ -342,6 +342,56 @@ def create_project_folder():
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
+@app.route('/api/save-quote-pdf', methods=['POST'])
+def save_quote_pdf():
+    import re
+    try:
+        body = request.get_json(force=True) or {}
+        project_name = (body.get('project_name') or '').strip()
+        filename     = (body.get('filename') or 'offerte.pdf').strip()
+        pdf_b64      = body.get('pdf_base64') or ''
+
+        if not project_name:
+            return jsonify({'error': 'project_name is required'}), 400
+        if not pdf_b64:
+            return jsonify({'error': 'pdf_base64 is required'}), 400
+
+        # Sanitise filename (keep dashes, dots, underscores, letters, digits)
+        safe_filename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', filename)
+        if not safe_filename.endswith('.pdf'):
+            safe_filename += '.pdf'
+
+        # Resolve project folder — try exact name first, then case-insensitive
+        safe_name = re.sub(r'[\\/:*?"<>|]', '', project_name).strip()
+        project_dir = os.path.join(PROJECTEN_DIR, safe_name)
+        if not os.path.isdir(project_dir):
+            # Try case-insensitive match
+            try:
+                entries = os.listdir(PROJECTEN_DIR)
+                match = next((e for e in entries if e.lower() == safe_name.lower()), None)
+                if match:
+                    project_dir = os.path.join(PROJECTEN_DIR, match)
+            except Exception:
+                pass
+
+        if not os.path.isdir(project_dir):
+            return jsonify({'ok': False, 'no_folder': True,
+                            'msg': f'Projectmap niet gevonden: {safe_name}'}), 200
+
+        offertes_dir = os.path.join(project_dir, 'Offertes')
+        os.makedirs(offertes_dir, exist_ok=True)
+
+        dest = os.path.join(offertes_dir, safe_filename)
+        pdf_bytes = base64.b64decode(pdf_b64)
+        with open(dest, 'wb') as f:
+            f.write(pdf_bytes)
+
+        return jsonify({'ok': True, 'path': dest})
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--db',   default='/mnt/nas/shared/project-manager.db')

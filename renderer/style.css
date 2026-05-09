@@ -1512,6 +1512,8 @@ tr:hover .qi-del { opacity: 1; }
 }
 .proj-progress-bar { height: 100%; border-radius: 2px; transition: width .3s; }
 .proj-card-meta { font-size: 11px; color: var(--text2); }
+.proj-card-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.btn-xs { padding: 2px 6px; font-size: 12px; }
 
 .proj-detail-header {
   padding: 16px 20px;

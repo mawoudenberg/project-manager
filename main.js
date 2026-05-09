@@ -208,6 +208,10 @@ ipcMain.handle('app:open-url', (_e, url) => {
   shell.openExternal(url);
 });
 
+ipcMain.handle('shell:openPath', (_e, p) => {
+  shell.openPath(p);
+});
+
 ipcMain.handle('app:download-url', (_e, url) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.session.once('will-download', (_ev, item) => {
@@ -240,7 +244,7 @@ ipcMain.handle('logo:get', () => {
   } catch (_) { return null; }
 });
 
-ipcMain.handle('pdf:export', async (_e, { html, filename }) => {
+ipcMain.handle('pdf:export', async (_e, { html, filename, defaultDir }) => {
   const tmpFile = path.join(os.tmpdir(), `quote-${Date.now()}.html`);
   try {
     fs.writeFileSync(tmpFile, html, 'utf8');
@@ -260,16 +264,50 @@ ipcMain.handle('pdf:export', async (_e, { html, filename }) => {
     });
     win.close();
 
+    // Build default save path: use suggested folder if provided and it exists
+    let suggestedPath = filename || 'offerte.pdf';
+    if (defaultDir) {
+      try {
+        if (!fs.existsSync(defaultDir)) fs.mkdirSync(defaultDir, { recursive: true });
+        suggestedPath = path.join(defaultDir, filename || 'offerte.pdf');
+      } catch (_) { /* fallback to filename only */ }
+    }
+
     const result = await dialog.showSaveDialog(mainWindow, {
-      defaultPath: filename || 'offerte.pdf',
+      defaultPath: suggestedPath,
       filters: [{ name: 'PDF', extensions: ['pdf'] }],
     });
     if (!result.canceled) {
       fs.writeFileSync(result.filePath, pdfData);
       shell.openPath(result.filePath);
-      return { ok: true };
+      return { ok: true, pdfBase64: pdfData.toString('base64') };
     }
     return { ok: false };
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch (_) {}
+  }
+});
+
+// Generate PDF bytes without showing a save dialog (used in API mode)
+ipcMain.handle('pdf:generate', async (_e, { html }) => {
+  const tmpFile = path.join(os.tmpdir(), `quote-${Date.now()}.html`);
+  try {
+    fs.writeFileSync(tmpFile, html, 'utf8');
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: { nodeIntegration: false, contextIsolation: true },
+    });
+    await win.loadFile(tmpFile);
+    await new Promise(r => setTimeout(r, 300));
+    const pdfData = await win.webContents.printToPDF({
+      pageSize: 'A4',
+      printBackground: true,
+      margins: { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 },
+    });
+    win.close();
+    return pdfData.toString('base64');
+  } catch (_) {
+    return null;
   } finally {
     try { fs.unlinkSync(tmpFile); } catch (_) {}
   }

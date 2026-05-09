@@ -29,9 +29,13 @@ if (typeof window.api === 'undefined') {
       setTimeout(() => { w.focus(); w.print(); }, 400);
       return Promise.resolve({ ok: true });
     },
+    // In browser mode PDF bytes can't be generated via Electron IPC — return null
+    // so the API-mode path in exportQuotePdf gracefully shows an error toast.
+    generatePdf:    ()     => Promise.resolve(null),
     getLogoDataUrl: ()     => _fetch('/api/logo').then(d => d.url),
     onUpdateAvailable: ()  => {},
     openUrl:        (url)  => { window.open(url, '_blank'); return Promise.resolve(); },
+    openPath:       ()     => Promise.resolve(), // not available in browser
     downloadUrl:    (url)  => { window.open(url, '_blank'); return Promise.resolve(); },
     onDbChanged:    ()     => {},   // api polling in app.js covers this
   };
