@@ -30,7 +30,7 @@ const MONTHS = [
 let state = {
   config: null,
   view: 'monthly',
-  today: new Date(),
+  get today() { return new Date(); },  // always returns the actual current date
   cursor: new Date(),        // tracks month/week/day
   tasks: [],
   projects: [],
