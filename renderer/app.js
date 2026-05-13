@@ -3600,6 +3600,7 @@ function wireSettings() {
   document.getElementById('settings-save').onclick = async () => {
     const theme = document.querySelector('input[name=theme]:checked')?.value || 'light';
     const typedToken = document.getElementById('cfg-moneybird-token').value.trim();
+    if (typedToken) _moneybirdAdminId = null; // reset cache on token change
     const newConfig = {
       ...state.config,                           // preserve caldav, localProjectsDir, etc.
       name: document.getElementById('cfg-name').value.trim() || state.config?.name || '',
@@ -5329,14 +5330,8 @@ async function duplicateQuote() {
 
 // ─── Moneybird Integration ────────────────────────────────────────────────────
 
-async function moneybirdFetch(method, path, body) {
-  const token = state.config?.moneybirdToken;
-  if (!token) throw new Error('Geen Moneybird API-token ingesteld. Ga naar Instellingen.');
-  const adminId = '160867223787800345';
-  const url = `https://moneybird.com/api/v2/${adminId}/${path}`;
-
+async function _moneybirdRaw(method, url, token, body) {
   if (window.__WEB_MODE__) {
-    // Browser/Pi mode: proxy via server to avoid CORS
     const r = await fetch('/api/moneybird', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5346,11 +5341,8 @@ async function moneybirdFetch(method, path, body) {
     if (!r.ok) throw new Error(`Moneybird ${r.status}: ${text}`);
     try { return JSON.parse(text); } catch (_) { return text; }
   } else {
-    // Electron mode: direct HTTPS via main process
     const result = await api.apiFetch({
-      method,
-      url,
-      body: body ?? null,
+      method, url, body: body ?? null,
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (result.status >= 400) {
@@ -5358,6 +5350,26 @@ async function moneybirdFetch(method, path, body) {
     }
     return result.data;
   }
+}
+
+let _moneybirdAdminId = null;
+
+async function getMoneybirdAdminId() {
+  if (_moneybirdAdminId) return _moneybirdAdminId;
+  const token = state.config?.moneybirdToken;
+  if (!token) throw new Error('Geen Moneybird API-token ingesteld. Ga naar Instellingen.');
+  const admins = await _moneybirdRaw('GET', 'https://moneybird.com/api/v2/administrations.json', token, null);
+  if (!Array.isArray(admins) || admins.length === 0) throw new Error('Geen Moneybird-administratie gevonden voor dit token');
+  _moneybirdAdminId = admins[0].id;
+  return _moneybirdAdminId;
+}
+
+async function moneybirdFetch(method, path, body) {
+  const token = state.config?.moneybirdToken;
+  if (!token) throw new Error('Geen Moneybird API-token ingesteld. Ga naar Instellingen.');
+  const adminId = await getMoneybirdAdminId();
+  const url = `https://moneybird.com/api/v2/${adminId}/${path}`;
+  return _moneybirdRaw(method, url, token, body);
 }
 
 async function getMoneybirdTaxRateId() {
