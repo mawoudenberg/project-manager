@@ -1413,7 +1413,7 @@ function renderGanttProjPanel(panel) {
       : candidates.map(p => `
       <label class="gpf-row">
         <input type="checkbox" class="gpf-cb" data-id="${p.id}" ${state.ganttHiddenProjects.has(p.id) ? '' : 'checked'}>
-        <span class="gpf-dot" style="background:${p.color||'#4f8ef7'}"></span>
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color||'#4f8ef7'};flex-shrink:0"></span>
         <span class="gpf-name">${escHtml(p.name)}</span>
       </label>`).join('')}
   `;
