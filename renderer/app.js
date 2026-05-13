@@ -1393,7 +1393,8 @@ function ganttToolbarNav(label, prevFn, nextFn) {
 }
 
 function renderGanttProjPanel(panel) {
-  const candidates = state.projects.filter(p => !state.ganttHideInactive || p.status === 'active');
+  // Always show only active projects
+  const candidates = state.projects.filter(p => p.status === 'active');
   const hiddenCount = state.ganttHiddenProjects.size;
   panel.innerHTML = `
     <div class="gpf-header">
@@ -1403,7 +1404,6 @@ function renderGanttProjPanel(panel) {
     ${candidates.map(p => `
       <label class="gpf-row">
         <input type="checkbox" class="gpf-cb" data-id="${p.id}" ${state.ganttHiddenProjects.has(p.id) ? '' : 'checked'}>
-        <span class="gpf-dot" style="background:${p.color||'#4f8ef7'}"></span>
         <span class="gpf-name">${escHtml(p.name)}</span>
       </label>`).join('')}
   `;
@@ -1414,9 +1414,10 @@ function renderGanttProjPanel(panel) {
       else            state.ganttHiddenProjects.add(id);
       saveGanttHidden();
       renderGantt();
-      // Re-render panel in place so the badge updates without closing
+      // renderGantt() rebuilds the toolbar and adds 'hidden' to the new panel —
+      // re-open and repopulate it so the menu stays visible
       const p2 = document.getElementById('gantt-proj-panel');
-      if (p2 && !p2.classList.contains('hidden')) renderGanttProjPanel(p2);
+      if (p2) { p2.classList.remove('hidden'); renderGanttProjPanel(p2); }
     };
   });
   document.getElementById('gpf-reset')?.addEventListener('click', () => {
@@ -1424,7 +1425,7 @@ function renderGanttProjPanel(panel) {
     saveGanttHidden();
     renderGantt();
     const p2 = document.getElementById('gantt-proj-panel');
-    if (p2 && !p2.classList.contains('hidden')) renderGanttProjPanel(p2);
+    if (p2) { p2.classList.remove('hidden'); renderGanttProjPanel(p2); }
   });
 }
 
