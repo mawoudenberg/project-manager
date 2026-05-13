@@ -5457,10 +5457,9 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
 
     const invoice = await moneybirdFetch('POST', 'sales_invoices.json', {
       sales_invoice: {
-        contact_id:           contactId,
-        invoice_date:         qe.quote_date || toDateStr(new Date()),
-        reference:            qe.name,
-        details_attributes:   details,
+        contact_id:         contactId,
+        reference:          qe.name,
+        details_attributes: details,
       },
     });
 
