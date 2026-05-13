@@ -49,6 +49,7 @@ let state = {
   ganttMode: 'week',   // 'week' | 'day'
   ganttHideInactive: true,
   ganttHideWeekends: false,
+  ganttHiddenProjects: new Set(), // project IDs explicitly hidden by user
   projectsHideInactive: true,
   myTasksHideInactive: true,
   todoHideDone: false,
@@ -161,6 +162,7 @@ async function init() {
     const calPrefs = loadCalPrefs();
     if (calPrefs.view && CAL_VIEWS.has(calPrefs.view)) state.view = calPrefs.view;
     if (calPrefs.filter) Object.assign(state.calFilter, calPrefs.filter);
+    state.ganttHiddenProjects = loadGanttHidden();
     renderView();
     refreshTeamDatalist();
     startApiPolling();
@@ -413,6 +415,14 @@ function saveCalPrefs() {
 }
 function loadCalPrefs() {
   try { return JSON.parse(localStorage.getItem(CAL_PREFS_KEY)) || {}; } catch (_) { return {}; }
+}
+
+const GANTT_HIDDEN_KEY = 'ganttHiddenProjects';
+function saveGanttHidden() {
+  localStorage.setItem(GANTT_HIDDEN_KEY, JSON.stringify([...state.ganttHiddenProjects]));
+}
+function loadGanttHidden() {
+  try { return new Set(JSON.parse(localStorage.getItem(GANTT_HIDDEN_KEY)) || []); } catch (_) { return new Set(); }
 }
 
 function _confirmUnsavedQE(cb) {
@@ -684,8 +694,8 @@ function renderMonthly() {
   ctrl.innerHTML = `
     <div class="cal-nav">
       <button class="btn-icon" id="cal-prev">‹</button>
-      <span id="cal-month-label" style="display:none"></span>
       <button class="btn-icon" id="cal-next">›</button>
+      <button class="btn btn-ghost btn-sm" id="cal-today">Vandaag</button>
       ${calViewToggleHTML('monthly')}
       <button class="btn btn-primary btn-sm" id="cal-add">+ Taak toevoegen</button>
     </div>`;
@@ -704,24 +714,33 @@ function renderMonthly() {
   content.innerHTML = html;
 
   // Scroll to cursor month without animation
+  const scroll = document.getElementById('monthly-scroll');
   content.querySelectorAll('.month-page')[RANGE].scrollIntoView({ behavior: 'instant' });
 
-  // Track visible month → update label + cursor
-  const scroll = document.getElementById('monthly-scroll');
+  // Track visible month → update label + cursor.
+  // observerReady prevents the initial scrollIntoView from overwriting state.cursor.
+  let observerReady = false;
+  setTimeout(() => { observerReady = true; }, 300);
+
   const observer = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if (e.isIntersecting) {
-        const y = parseInt(e.target.dataset.year), m = parseInt(e.target.dataset.month);
-        state.cursor = new Date(y, m, 1);
-        const titleEl = document.getElementById('toolbar-title');
-        if (titleEl) titleEl.innerHTML = `<span class="cal-period-label">${MONTHS[m]}</span><span class="cal-period-year">${y}</span>`;
-      }
-    });
-  }, { threshold: 0.5, root: scroll });
+    // Pick the entry with the largest intersection ratio (most visible month)
+    const best = entries
+      .filter(e => e.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (!best) return;
+    const y = parseInt(best.target.dataset.year), m = parseInt(best.target.dataset.month);
+    if (observerReady) state.cursor = new Date(y, m, 1);
+    const titleEl = document.getElementById('toolbar-title');
+    if (titleEl) titleEl.innerHTML = `<span class="cal-period-label">${MONTHS[m]}</span><span class="cal-period-year">${y}</span>`;
+  }, { threshold: [0, 0.25, 0.5, 0.75, 1], root: scroll });
   content.querySelectorAll('.month-page').forEach(p => observer.observe(p));
 
-  document.getElementById('cal-prev').onclick = () => scroll.scrollBy({ top: -scroll.clientHeight, behavior: 'smooth' });
-  document.getElementById('cal-next').onclick = () => scroll.scrollBy({ top: scroll.clientHeight, behavior: 'smooth' });
+  document.getElementById('cal-prev').onclick  = () => scroll.scrollBy({ top: -scroll.clientHeight, behavior: 'smooth' });
+  document.getElementById('cal-next').onclick  = () => scroll.scrollBy({ top:  scroll.clientHeight, behavior: 'smooth' });
+  document.getElementById('cal-today').onclick = () => {
+    state.cursor = new Date();
+    renderMonthly();
+  };
   document.getElementById('cal-add').onclick  = () => openTaskModal(null, toDateStr(state.cursor));
 
   attachCalHandlers(content);
@@ -1101,17 +1120,15 @@ function renderWeekly() {
     <div class="cal-nav">
       <button class="btn-icon" id="wk-prev">‹</button>
       <button class="btn-icon" id="wk-next">›</button>
+      <button class="btn btn-ghost btn-sm" id="wk-today">Vandaag</button>
       ${calViewToggleHTML('weekly')}
     </div>`;
   wireCalViewToggle();
   renderCalFilterBar();
 
-  document.getElementById('wk-prev').onclick = () => {
-    state.cursor = new Date(monday); state.cursor.setDate(monday.getDate() - 7); renderWeekly();
-  };
-  document.getElementById('wk-next').onclick = () => {
-    state.cursor = new Date(monday); state.cursor.setDate(monday.getDate() + 7); renderWeekly();
-  };
+  document.getElementById('wk-prev').onclick  = () => { state.cursor = new Date(monday); state.cursor.setDate(monday.getDate() - 7); renderWeekly(); };
+  document.getElementById('wk-next').onclick  = () => { state.cursor = new Date(monday); state.cursor.setDate(monday.getDate() + 7); renderWeekly(); };
+  document.getElementById('wk-today').onclick = () => { state.cursor = new Date(); renderWeekly(); };
 
   const weekVisStages = visibleStages();
   let html = '<div id="weekly-grid">';
@@ -1342,6 +1359,12 @@ function ganttToolbarNav(label, prevFn, nextFn) {
       ${state.ganttMode === 'day' ? `<button class="btn btn-sm${state.ganttHideWeekends?' btn-primary':' btn-ghost'}" id="gnt-we-btn">
         ${state.ganttHideWeekends ? 'Toon weekends' : 'Geen weekends'}
       </button>` : ''}
+      <div class="gantt-proj-filter-wrap" id="gantt-proj-filter-wrap">
+        <button class="btn btn-sm btn-ghost" id="gnt-proj-pick-btn">
+          Projecten${state.ganttHiddenProjects.size ? ` <span class="badge-count">${state.ganttHiddenProjects.size} verborgen</span>` : ' ▾'}
+        </button>
+        <div class="gantt-proj-panel hidden" id="gantt-proj-panel"></div>
+      </div>
     </div>`;
   wireCalViewToggle();
   document.getElementById('gnt-prev').onclick = prevFn;
@@ -1350,7 +1373,59 @@ function ganttToolbarNav(label, prevFn, nextFn) {
   document.getElementById('gmt-day').onclick  = () => { state.ganttMode = 'day';  renderGantt(); };
   document.getElementById('gnt-filter-btn').onclick = () => { state.ganttHideInactive = !state.ganttHideInactive; renderGantt(); };
   document.getElementById('gnt-we-btn')?.addEventListener('click', () => { state.ganttHideWeekends = !state.ganttHideWeekends; renderGantt(); });
+
+  // Project pick panel
+  const pickBtn = document.getElementById('gnt-proj-pick-btn');
+  const panel   = document.getElementById('gantt-proj-panel');
+  pickBtn.onclick = (e) => {
+    e.stopPropagation();
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) renderGanttProjPanel(panel);
+  };
+  document.addEventListener('click', function closeProjPanel(e) {
+    if (!document.getElementById('gantt-proj-filter-wrap')?.contains(e.target)) {
+      panel.classList.add('hidden');
+      document.removeEventListener('click', closeProjPanel);
+    }
+  });
+
   renderCalFilterBar();
+}
+
+function renderGanttProjPanel(panel) {
+  const candidates = state.projects.filter(p => !state.ganttHideInactive || p.status === 'active');
+  const hiddenCount = state.ganttHiddenProjects.size;
+  panel.innerHTML = `
+    <div class="gpf-header">
+      <span>Projecten tonen</span>
+      ${hiddenCount ? `<button class="gpf-reset" id="gpf-reset">Alles tonen</button>` : ''}
+    </div>
+    ${candidates.map(p => `
+      <label class="gpf-row">
+        <input type="checkbox" class="gpf-cb" data-id="${p.id}" ${state.ganttHiddenProjects.has(p.id) ? '' : 'checked'}>
+        <span class="gpf-dot" style="background:${p.color||'#4f8ef7'}"></span>
+        <span class="gpf-name">${escHtml(p.name)}</span>
+      </label>`).join('')}
+  `;
+  panel.querySelectorAll('.gpf-cb').forEach(cb => {
+    cb.onchange = () => {
+      const id = parseInt(cb.dataset.id);
+      if (cb.checked) state.ganttHiddenProjects.delete(id);
+      else            state.ganttHiddenProjects.add(id);
+      saveGanttHidden();
+      renderGantt();
+      // Re-render panel in place so the badge updates without closing
+      const p2 = document.getElementById('gantt-proj-panel');
+      if (p2 && !p2.classList.contains('hidden')) renderGanttProjPanel(p2);
+    };
+  });
+  document.getElementById('gpf-reset')?.addEventListener('click', () => {
+    state.ganttHiddenProjects.clear();
+    saveGanttHidden();
+    renderGantt();
+    const p2 = document.getElementById('gantt-proj-panel');
+    if (p2 && !p2.classList.contains('hidden')) renderGanttProjPanel(p2);
+  });
 }
 
 /* ─── Gantt Week View (Projects, multi-week overview) ──────────────────────── */
@@ -1399,7 +1474,7 @@ function renderGanttWeek() {
   }
 
   const visibleProjects = state.projects
-    .filter(p => !state.ganttHideInactive || p.status === 'active')
+    .filter(p => (!state.ganttHideInactive || p.status === 'active') && !state.ganttHiddenProjects.has(p.id))
     .map(p => { const dates = projectEffectiveDates(p); return dates ? { ...p, ...dates } : null; })
     .filter(Boolean);
 
@@ -1898,7 +1973,7 @@ function renderGanttDay() {
 
   // Visible projects (any overlap with range)
   const visibleProjects = state.projects
-    .filter(p => (!state.ganttHideInactive || p.status === 'active') && p.start_date && p.end_date && p.start_date <= rangeEnd && p.end_date >= rangeStart);
+    .filter(p => (!state.ganttHideInactive || p.status === 'active') && !state.ganttHiddenProjects.has(p.id) && p.start_date && p.end_date && p.start_date <= rangeEnd && p.end_date >= rangeStart);
 
   if (visibleProjects.length === 0) {
     content.innerHTML = `<div id="gantt-wrap"><div class="empty"><div class="empty-icon">📁</div><p>Geen projecten in dit bereik. Maak een project aan via <strong>Projecten</strong> en stel start/einddatum in.</p></div></div>`;
@@ -3494,6 +3569,7 @@ function wireSettings() {
     document.getElementById('cfg-name').value = cfg.name || '';
     document.getElementById('cfg-api-url').value = cfg.apiUrl || 'http://raspberrypi.local:5000';
     document.getElementById('cfg-projects-dir').value = cfg.localProjectsDir || '';
+    document.getElementById('cfg-moneybird-token').value = cfg.moneybirdToken || '';
     const theme = cfg.theme || 'light';
     document.querySelector(`input[name=theme][value=${theme}]`).checked = true;
     updateThemeCards(theme);
@@ -3523,6 +3599,7 @@ function wireSettings() {
 
   document.getElementById('settings-save').onclick = async () => {
     const theme = document.querySelector('input[name=theme]:checked')?.value || 'light';
+    const typedToken = document.getElementById('cfg-moneybird-token').value.trim();
     const newConfig = {
       ...state.config,                           // preserve caldav, localProjectsDir, etc.
       name: document.getElementById('cfg-name').value.trim() || state.config?.name || '',
@@ -3530,6 +3607,8 @@ function wireSettings() {
       apiUrl: document.getElementById('cfg-api-url').value.trim(),
       theme,
       localProjectsDir: document.getElementById('cfg-projects-dir').value.trim() || state.config?.localProjectsDir || '',
+      // Keep existing token when field left blank
+      moneybirdToken: typedToken || state.config?.moneybirdToken || '',
     };
     await api.configSet(newConfig);
     state.config = newConfig;
@@ -4286,6 +4365,7 @@ function renderQuoteEditorView() {
   ctrl.innerHTML = `
     <button class="btn btn-ghost btn-sm" id="qe-back">← Offertes</button>
     <button class="btn btn-secondary btn-sm" id="qe-delete-btn" ${!qe.id ? 'style="display:none"' : ''}>Verwijder</button>
+    <button class="btn btn-secondary btn-sm" id="qe-dup-btn" ${!qe.id ? 'style="display:none"' : ''} title="Maak kopie van deze offerte">⧉ Dupliceer</button>
     <button class="btn btn-secondary btn-sm" id="qe-project-btn" title="Maak project aan voor deze offerte">📁 Project</button>
     <button class="btn btn-secondary btn-sm" id="qe-folder-btn" title="Open projectmap in Finder">📂 Map</button>
     <button class="btn btn-primary btn-sm" id="qe-save-btn">Opslaan</button>
@@ -4295,19 +4375,37 @@ function renderQuoteEditorView() {
         <button class="pdf-dropdown-item" id="pdf-internal">📋 Interne offerte (volledig)</button>
         <button class="pdf-dropdown-item" id="pdf-client">📄 Klantofferte (eindprijs)</button>
       </div>
+    </div>
+    <div class="pdf-dropdown" id="mb-dropdown">
+      <button class="btn btn-secondary btn-sm" id="qe-mb-btn" ${!qe.id ? 'style="display:none"' : ''} title="Factuur aanmaken in Moneybird">💶 Moneybird ▾</button>
+      <div class="pdf-dropdown-menu hidden" id="mb-dropdown-menu">
+        <button class="pdf-dropdown-item" id="mb-gespec">📋 Gespecificeerde factuur</button>
+        <button class="pdf-dropdown-item" id="mb-totaal">💰 Totaalfactuur</button>
+      </div>
     </div>`;
 
   document.getElementById('toolbar-title').textContent = qe.name || 'Nieuwe offerte';
   document.getElementById('qe-back').onclick = () => setView('quotes');
   document.getElementById('qe-save-btn').onclick = saveQuote;
+  document.getElementById('qe-dup-btn')?.addEventListener('click', duplicateQuote);
   document.getElementById('qe-project-btn').onclick = () => createProjectFromQuote(qe.name);
   document.getElementById('qe-folder-btn').onclick  = () => openProjectFolder(qe.name);
   document.getElementById('qe-pdf-btn').onclick = () => {
+    document.getElementById('mb-dropdown-menu')?.classList.add('hidden');
     document.getElementById('pdf-dropdown-menu').classList.toggle('hidden');
   };
   document.getElementById('pdf-internal').onclick = () => { document.getElementById('pdf-dropdown-menu').classList.add('hidden'); exportQuotePdf('internal'); };
   document.getElementById('pdf-client').onclick = () => { document.getElementById('pdf-dropdown-menu').classList.add('hidden'); exportQuotePdf('client'); };
-  document.addEventListener('click', e => { if (!e.target.closest('#pdf-dropdown')) document.getElementById('pdf-dropdown-menu')?.classList.add('hidden'); });
+  document.getElementById('qe-mb-btn')?.addEventListener('click', () => {
+    document.getElementById('pdf-dropdown-menu')?.classList.add('hidden');
+    document.getElementById('mb-dropdown-menu').classList.toggle('hidden');
+  });
+  document.getElementById('mb-gespec')?.addEventListener('click', () => { document.getElementById('mb-dropdown-menu').classList.add('hidden'); exportToMoneybird('gespecificeerd'); });
+  document.getElementById('mb-totaal')?.addEventListener('click',  () => { document.getElementById('mb-dropdown-menu').classList.add('hidden'); exportToMoneybird('totaal'); });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#pdf-dropdown')) document.getElementById('pdf-dropdown-menu')?.classList.add('hidden');
+    if (!e.target.closest('#mb-dropdown'))  document.getElementById('mb-dropdown-menu')?.classList.add('hidden');
+  });
   document.getElementById('qe-delete-btn')?.addEventListener('click', deleteQuote);
 
   const content = document.getElementById('content');
@@ -5184,6 +5282,183 @@ async function deleteQuote() {
   qe = null;
   toast('Offerte verwijderd');
   setView('quotes');
+}
+
+// ─── Duplicate Quote ─────────────────────────────────────────────────────────
+
+async function duplicateQuote() {
+  if (!qe.id) { toast('Sla de offerte eerst op', 'warn'); return; }
+  try {
+    const extrasJson = JSON.stringify({
+      client_contact:  qe.client_contact,
+      client_address:  qe.client_address,
+      client_postcode: qe.client_postcode,
+      client_email:    qe.client_email,
+      client_phone:    qe.client_phone,
+      extra_images:    qe.extra_images,
+      pdf_opts:        qe.pdf_opts,
+      outsource_margin: qe.outsource_margin,
+    });
+    const newQuoteData = {
+      name:       qe.name + ' (kopie)',
+      client:     qe.client,
+      quote_date: toDateStr(new Date()),
+      margin:     qe.margin,
+      status:     'draft',
+      notes:      qe.notes,
+      created_by: state.config?.name || '',
+      image_data: qe.image_data || '',
+      extras_json: extrasJson,
+    };
+    const res = await remoteQuery({ action: 'insert', table: 'quotes', data: newQuoteData });
+    const newId = res.id;
+    const allItems = [
+      ...qe.materials.map((m, i) => ({ quote_id: newId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0, enabled: m.enabled !== 0 ? 1 : 0 })),
+      ...qe.services.map( (s, i) => ({ quote_id: newId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0, enabled: s.enabled !== 0 ? 1 : 0 })),
+      ...qe.exclusions.map((ex, i) => ({ quote_id: newId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0, enabled: 1 })),
+    ];
+    for (const item of allItems) {
+      await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
+    }
+    toast('Offerte gedupliceerd');
+    await openQuoteEditor({ id: newId, ...newQuoteData });
+  } catch (err) {
+    toast('Dupliceren mislukt: ' + (err.message || err), 'error', 4000);
+  }
+}
+
+// ─── Moneybird Integration ────────────────────────────────────────────────────
+
+async function moneybirdFetch(method, path, body) {
+  const token = state.config?.moneybirdToken;
+  if (!token) throw new Error('Geen Moneybird API-token ingesteld. Ga naar Instellingen.');
+  const adminId = '160867223787800345';
+  const url = `https://moneybird.com/api/v2/${adminId}/${path}`;
+
+  if (window.__WEB_MODE__) {
+    // Browser/Pi mode: proxy via server to avoid CORS
+    const r = await fetch('/api/moneybird', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method, url, token, body: body ?? null }),
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`Moneybird ${r.status}: ${text}`);
+    try { return JSON.parse(text); } catch (_) { return text; }
+  } else {
+    // Electron mode: direct HTTPS via main process
+    const result = await api.apiFetch({
+      method,
+      url,
+      body: body ?? null,
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (result.status >= 400) {
+      throw new Error(`Moneybird fout ${result.status}: ${JSON.stringify(result.data)}`);
+    }
+    return result.data;
+  }
+}
+
+async function getMoneybirdTaxRateId() {
+  const rates = await moneybirdFetch('GET', 'tax_rates.json');
+  if (!Array.isArray(rates)) throw new Error('Kon BTW-tarieven niet ophalen');
+  // Prefer sales_invoice type at 21%
+  const rate = rates.find(r => parseFloat(r.percentage) === 21 && r.tax_rate_type === 'sales_invoice')
+            || rates.find(r => parseFloat(r.percentage) === 21);
+  if (!rate) throw new Error('Geen 21% BTW-tarief gevonden in Moneybird');
+  return rate.id;
+}
+
+async function findOrCreateMoneybirdContact() {
+  const name = (qe.client || '').trim();
+  if (!name) throw new Error('Vul eerst een klantnaam in');
+
+  // Search existing contacts
+  const results = await moneybirdFetch('GET', `contacts.json?query=${encodeURIComponent(name)}`);
+  if (Array.isArray(results) && results.length > 0) return results[0].id;
+
+  // Create new contact
+  const parts = (qe.client_postcode || '').trim().split(/\s+/);
+  const zipcode = parts[0] || '';
+  const city    = parts.slice(1).join(' ');
+  const nameParts = (qe.client_contact || '').trim().split(/\s+/);
+  const newContact = await moneybirdFetch('POST', 'contacts.json', {
+    contact: {
+      company_name: name,
+      firstname:    nameParts[0] || '',
+      lastname:     nameParts.slice(1).join(' '),
+      address1:     qe.client_address || '',
+      zipcode,
+      city,
+      email:        qe.client_email   || '',
+      phone:        qe.client_phone   || '',
+    },
+  });
+  return newContact.id;
+}
+
+async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
+  if (!qe.id) { toast('Sla de offerte eerst op', 'warn'); return; }
+  try {
+    toast('Factuur aanmaken in Moneybird…', 'info', 8000);
+
+    const taxRateId = await getMoneybirdTaxRateId();
+    const contactId = await findOrCreateMoneybirdContact();
+    const totals    = calcQETotals();
+    const globalMgn = parseFloat(qe.margin || 20);
+    const outMgn    = parseFloat(qe.outsource_margin || 15);
+
+    let details;
+    if (mode === 'totaal') {
+      details = [{
+        description: qe.name,
+        price:       totals.subtotal.toFixed(2),
+        amount:      '1 stuks',
+        tax_rate_id: taxRateId,
+      }];
+    } else {
+      // One line per enabled material + service
+      const matLines = qe.materials.filter(m => m.enabled !== 0).map(m => {
+        const pct = (m.margin != null && m.margin !== '') ? parseFloat(m.margin) : globalMgn;
+        return {
+          description: m.name,
+          price:       (m.unit_price * (1 + pct / 100)).toFixed(2),
+          amount:      `${m.quantity}${m.unit ? ' ' + m.unit : ''}`.trim() || '1',
+          tax_rate_id: taxRateId,
+        };
+      });
+      const svcLines = qe.services.filter(s => s.enabled !== 0).map(s => {
+        const price = s.is_outsourced
+          ? s.unit_price * (1 + outMgn / 100)
+          : s.unit_price;
+        return {
+          description: s.name,
+          price:       price.toFixed(2),
+          amount:      `${s.quantity} uur`,
+          tax_rate_id: taxRateId,
+        };
+      });
+      details = [...matLines, ...svcLines];
+    }
+
+    const invoice = await moneybirdFetch('POST', 'sales_invoices.json', {
+      sales_invoice: {
+        contact_id:           contactId,
+        invoice_date:         qe.quote_date || toDateStr(new Date()),
+        reference:            qe.name,
+        details_attributes:   details,
+      },
+    });
+
+    toast('Factuur aangemaakt! Opening in Moneybird…', 'success', 4000);
+    const mbUrl = `https://moneybird.com/160867223787800345/sales_invoices/${invoice.id}`;
+    if (api.openUrl) api.openUrl(mbUrl); else window.open(mbUrl, '_blank');
+
+  } catch (err) {
+    toast('Factuur mislukt: ' + err.message, 'error', 6000);
+    console.error('exportToMoneybird error:', err);
+  }
 }
 
 // ─── PDF Export ───────────────────────────────────────────────────────────────

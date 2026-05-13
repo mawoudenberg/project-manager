@@ -314,7 +314,7 @@ ipcMain.handle('pdf:generate', async (_e, { html }) => {
 });
 
 // API mode: proxy HTTP requests from renderer to avoid CORS issues
-ipcMain.handle('api:fetch', async (_e, { method, url, body }) => {
+ipcMain.handle('api:fetch', async (_e, { method, url, body, headers: extraHeaders }) => {
   const https = url.startsWith('https') ? require('https') : require('http');
   return new Promise((resolve, reject) => {
     const bodyStr = body ? JSON.stringify(body) : '';
@@ -327,6 +327,7 @@ ipcMain.handle('api:fetch', async (_e, { method, url, body }) => {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(bodyStr),
+        ...(extraHeaders || {}),
       },
     };
     const req = https.request(options, (res) => {

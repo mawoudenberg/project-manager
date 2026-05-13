@@ -392,6 +392,46 @@ def save_quote_pdf():
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
+@app.route('/api/moneybird', methods=['POST'])
+def moneybird_proxy():
+    """Proxy for Moneybird API calls (avoids CORS in browser mode)."""
+    import urllib.request, urllib.error
+    try:
+        body = request.get_json(force=True) or {}
+        method  = (body.get('method') or 'GET').upper()
+        url     = body.get('url', '')
+        token   = body.get('token', '')
+        payload = body.get('body')
+
+        if not url.startswith('https://moneybird.com/'):
+            return jsonify({'error': 'Ongeldige URL'}), 400
+        if not token:
+            return jsonify({'error': 'Geen token opgegeven'}), 400
+
+        req_body = json.dumps(payload).encode('utf-8') if payload is not None else None
+        req = urllib.request.Request(url, data=req_body, method=method)
+        req.add_header('Authorization', f'Bearer {token}')
+        req.add_header('Content-Type', 'application/json')
+        req.add_header('Accept', 'application/json')
+
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read().decode('utf-8')
+            try:
+                return jsonify(json.loads(raw))
+            except Exception:
+                return raw, resp.status, {'Content-Type': 'application/json'}
+
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode('utf-8')
+        try:
+            return jsonify(json.loads(raw)), e.code
+        except Exception:
+            return jsonify({'error': raw}), e.code
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--db',   default='/mnt/nas/shared/project-manager.db')

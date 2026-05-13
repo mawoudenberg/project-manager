@@ -5,7 +5,7 @@ if (typeof window.api === 'undefined') {
   async function _fetch(url, opts = {}) {
     const r = await fetch(url, {
       method: opts.method || 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       body: opts.body != null ? JSON.stringify(opts.body) : undefined,
     });
     if (!r.ok) throw new Error(await r.text());
@@ -22,7 +22,7 @@ if (typeof window.api === 'undefined') {
     },
     openFolder:     ()     => Promise.resolve(null),
     refresh:        ()     => Promise.resolve({ ok: true }),
-    apiFetch:       (o)    => _fetch(o.url, { method: o.method, body: o.body }),
+    apiFetch:       (o)    => _fetch(o.url, { method: o.method, body: o.body, headers: o.headers }),
     exportPdf:      (html) => {
       const w = window.open('', '_blank');
       w.document.write(html); w.document.close();
