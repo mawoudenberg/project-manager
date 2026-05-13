@@ -5331,6 +5331,7 @@ async function duplicateQuote() {
 // ─── Moneybird Integration ────────────────────────────────────────────────────
 
 async function _moneybirdRaw(method, url, token, body) {
+  console.log('[Moneybird]', method, url);
   if (window.__WEB_MODE__) {
     const r = await fetch('/api/moneybird', {
       method: 'POST',
@@ -5338,7 +5339,7 @@ async function _moneybirdRaw(method, url, token, body) {
       body: JSON.stringify({ method, url, token, body: body ?? null }),
     });
     const text = await r.text();
-    if (!r.ok) throw new Error(`Moneybird ${r.status}: ${text}`);
+    if (!r.ok) throw new Error(`Moneybird ${r.status} ${url}: ${text}`);
     try { return JSON.parse(text); } catch (_) { return text; }
   } else {
     const result = await api.apiFetch({
@@ -5346,7 +5347,7 @@ async function _moneybirdRaw(method, url, token, body) {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (result.status >= 400) {
-      throw new Error(`Moneybird fout ${result.status}: ${JSON.stringify(result.data)}`);
+      throw new Error(`Moneybird ${result.status} ${url}: ${JSON.stringify(result.data)}`);
     }
     return result.data;
   }
@@ -5464,7 +5465,7 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
     });
 
     toast('Factuur aangemaakt! Opening in Moneybird…', 'success', 4000);
-    const mbUrl = `https://moneybird.com/160867223787800345/sales_invoices/${invoice.id}`;
+    const mbUrl = `https://moneybird.com/${_moneybirdAdminId}/sales_invoices/${invoice.id}`;
     if (api.openUrl) api.openUrl(mbUrl); else window.open(mbUrl, '_blank');
 
   } catch (err) {
