@@ -220,7 +220,7 @@ html[data-theme="dark"] #sidebar-logo {
 
 /* ─── Calendar — Monthly ───────────────────────────────────────────────────── */
 .cal-nav { display: flex; align-items: center; gap: 12px; }
-.cal-nav span { font-size: 16px; font-weight: 600; min-width: 160px; text-align: center; }
+.cal-nav span:not(.gpf-name) { font-size: 16px; font-weight: 600; min-width: 160px; text-align: center; }
 
 #content.monthly-mode {
   overflow: hidden;
