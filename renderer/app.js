@@ -64,6 +64,8 @@ let ganttWheelController = null; // AbortController for gantt wheel listener cle
 let ganttDraw = null;            // active draw-new-bar drag state
 let ganttWorkdays  = null;          // working-day Date[] when hide-weekends is active
 let ganttDayOffFn  = null;          // index-of-date fn for hide-weekends mode
+let _ganttRangeStart = null;        // ISO date string of first visible day in current gantt range
+let _ganttRangeEnd   = null;        // ISO date string of last visible day in current gantt range
 
 function _dayOffset(fromStr, toStr) {
   return Math.round((new Date(toStr) - new Date(fromStr)) / 86400000);
@@ -1393,15 +1395,22 @@ function ganttToolbarNav(label, prevFn, nextFn) {
 }
 
 function renderGanttProjPanel(panel) {
-  // Always show only active projects
-  const candidates = state.projects.filter(p => p.status === 'active');
+  // Only projects that are active AND overlap the current visible range
+  const candidates = state.projects.filter(p =>
+    p.status === 'active' &&
+    p.start_date && p.end_date &&
+    (!_ganttRangeStart || p.end_date   >= _ganttRangeStart) &&
+    (!_ganttRangeEnd   || p.start_date <= _ganttRangeEnd)
+  );
   const hiddenCount = state.ganttHiddenProjects.size;
   panel.innerHTML = `
     <div class="gpf-header">
       <span>Projecten tonen</span>
       ${hiddenCount ? `<button class="gpf-reset" id="gpf-reset">Alles tonen</button>` : ''}
     </div>
-    ${candidates.map(p => `
+    ${candidates.length === 0
+      ? `<div style="padding:8px 12px;font-size:11px;color:var(--text2)">Geen actieve projecten in dit bereik</div>`
+      : candidates.map(p => `
       <label class="gpf-row">
         <input type="checkbox" class="gpf-cb" data-id="${p.id}" ${state.ganttHiddenProjects.has(p.id) ? '' : 'checked'}>
         <span class="gpf-name">${escHtml(p.name)}</span>
@@ -1457,6 +1466,8 @@ function renderGanttWeek() {
   const rangeEnd   = weeks[N_WEEKS - 1].end;
   const totalDays  = N_WEEKS * 7;
   const todayStr   = toDateStr(state.today);
+  _ganttRangeStart = rangeStart;
+  _ganttRangeEnd   = rangeEnd;
 
   const fmt = (date) => `${date.getDate()} ${MONTHS[date.getMonth()].slice(0,3)}`;
   const rangeLabel = `${fmt(weeks[0].mon)} – ${fmt(weeks[N_WEEKS-1].sun)} ${weeks[N_WEEKS-1].sun.getFullYear()}`;
@@ -1933,6 +1944,8 @@ function renderGanttDay() {
   const fmt = d => `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
   const lastDay = days[days.length - 1];
   const rangeLabel = `${fmt(days[0])} – ${fmt(lastDay)} ${lastDay.getFullYear()}`;
+  _ganttRangeStart = rangeStart;
+  _ganttRangeEnd   = rangeEnd;
 
   ganttToolbarNav(
     rangeLabel,

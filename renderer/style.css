@@ -1479,10 +1479,10 @@ tr:hover .qi-del { opacity: 1; }
 /* ─── Gantt project filter panel ──────────────────────────────────────────── */
 .gantt-proj-filter-wrap { position: relative; }
 .gantt-proj-panel {
-  position: absolute; top: calc(100% + 6px); right: 0;
+  position: absolute; top: calc(100% + 6px); left: 0;
   background: var(--bg2); border: 1px solid var(--border);
   border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
-  min-width: 220px; max-height: 320px; overflow-y: auto;
+  min-width: 200px; max-height: 320px; overflow-y: auto;
   z-index: 200; padding: 6px 0;
 }
 .gpf-header {
@@ -1495,10 +1495,10 @@ tr:hover .qi-del { opacity: 1; }
 .gpf-reset:hover { text-decoration: underline; }
 .gpf-row {
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; cursor: pointer; user-select: none;
+  padding: 4px 12px; cursor: pointer; user-select: none;
 }
 .gpf-row:hover { background: var(--bg3); }
-.gpf-name { font-size: 13px; color: var(--text); flex: 1; }
+.gpf-name { font-size: 11px; color: var(--text); flex: 1; }
 .gpf-row input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
 .badge-count {
   background: var(--accent); color: #fff; border-radius: 10px;
