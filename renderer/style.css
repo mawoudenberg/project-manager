@@ -2156,6 +2156,13 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 }
 .qi-unit:focus { color: var(--text); }
 
+/* Marge-cel diensten: toon streepje als niet uitbesteed, invoerveld als uitbesteed */
+.svc-margin-cell { padding: 0 6px; }
+.svc-mrgna { display: block; text-align: right; color: var(--text2); font-size: 13px; padding: 5px 2px; user-select: none; }
+.svc-margin-inp { display: none; }
+.svc-row-outsourced .svc-mrgna { display: none; }
+.svc-row-outsourced .svc-margin-inp { display: block; }
+
 /* ── Catalog Manager ── */
 .catalog-modal {
   width: 640px;

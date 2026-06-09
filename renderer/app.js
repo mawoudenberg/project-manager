@@ -4795,7 +4795,10 @@ function renderSvcTable() {
       <td style="text-align:center"><input type="checkbox" class="qi-check" data-t="svc" data-i="${i}" data-f="is_outsourced" ${s.is_outsourced ? 'checked' : ''} title="Uitbesteed werk" /></td>
       <td><input class="qi-input num" data-t="svc" data-i="${i}" data-f="quantity"  value="${s.quantity ?? 1}" type="number" min="0" step="0.5" /></td>
       <td><input class="qi-input qi-unit" data-t="svc" data-i="${i}" data-f="unit" value="${escHtml(s.unit ?? 'uur')}" placeholder="uur" maxlength="8" /></td>
-      <td><input class="qi-input num qi-margin" data-t="svc" data-i="${i}" data-f="margin" value="${s.margin ?? ''}" type="number" min="0" max="500" step="1" placeholder="0" title="Marge % (leeg = geen marge voor eigen werk; leeg = globale uitbestedingsmarge voor uitbesteed)" /></td>
+      <td class="svc-margin-cell">
+        <span class="svc-mrgna">—</span>
+        <input class="qi-input num qi-margin svc-margin-inp" data-t="svc" data-i="${i}" data-f="margin" value="${s.margin ?? ''}" type="number" min="0" max="500" step="1" placeholder="${qe.outsource_margin ?? 0}" title="Marge % (leeg = globale uitbestedingsmarge van ${qe.outsource_margin ?? 0}%)" />
+      </td>
       <td class="num"><input class="qi-input num" data-t="svc" data-i="${i}" data-f="unit_price" value="${s.unit_price ?? 0}" type="number" min="0" step="any" /></td>
       <td class="num" id="svc-row-total-${i}">${s.enabled !== 0 ? fmtEur((s.quantity ?? 1) * (s.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
@@ -4848,8 +4851,14 @@ function wireTableInputs(type) {
         const rowTotal = document.getElementById(`${type}-row-total-${i}`);
         if (rowTotal) rowTotal.textContent = chk.checked ? fmtEur(arr[i].quantity * arr[i].unit_price) : '—';
       } else {
-        // Toggle the outsourced styling on the row
+        // Toggle the outsourced styling on the row (CSS handles margin cell visibility)
         if (row) row.classList.toggle('svc-row-outsourced', !!chk.checked);
+        // Clear per-item margin when unchecking outsourced — it no longer applies
+        if (field === 'is_outsourced' && !chk.checked) {
+          arr[i].margin = null;
+          const marginInp = row?.querySelector('.svc-margin-inp');
+          if (marginInp) marginInp.value = '';
+        }
       }
       if (type === 'mat') updateMatSubtotals();
       if (type === 'svc') updateSvcSubtotals();
