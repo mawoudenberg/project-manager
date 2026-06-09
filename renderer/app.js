@@ -4092,6 +4092,8 @@ function freshQE(quote) {
     quote_date: quote?.quote_date ?? toDateStr(new Date()),
     margin:     quote?.margin     ?? 20,
     outsource_margin: stored.outsource_margin ?? 15,
+    fixed_price: stored.fixed_price ?? null,   // null = marge-modus; getal = vaste stuksprijs
+    fixed_qty:   stored.fixed_qty   ?? 1,
     status:     quote?.status     ?? 'draft',
     notes:      quote?.notes      ?? '',
     image_data:     quote?.image_data || (quote?.id ? localStorage.getItem('qimg_' + quote.id) : '') || '',
@@ -4596,6 +4598,28 @@ function renderQuoteEditorView() {
       <div class="qe-mat-subtotals" id="svc-subtotals"></div>
     </div>
 
+    <!-- Vaste stuksprijs -->
+    <div class="qe-section qe-fixed-section">
+      <div class="qe-section-header">
+        <label class="qe-fixed-toggle-label">
+          <input type="checkbox" id="qe-fixed-enabled" ${qe.fixed_price != null ? 'checked' : ''} />
+          <span class="qe-section-title">Vaste stuksprijs</span>
+        </label>
+        <span class="qe-fixed-hint">Zelf bepalen wat je vraagt; eigen verdiensten = verkoopprijs − inkoop materialen</span>
+      </div>
+      <div class="qe-fixed-body ${qe.fixed_price == null ? 'hidden' : ''}">
+        <div class="qe-fixed-row">
+          <span class="qe-fixed-lbl">Aantal</span>
+          <input class="qe-fixed-input" type="number" id="qe-fixed-qty" value="${qe.fixed_qty ?? 1}" min="1" step="1" />
+          <span class="qe-fixed-sep">×</span>
+          <span class="qe-fixed-lbl">Stuksprijs</span>
+          <input class="qe-fixed-input" type="number" id="qe-fixed-price" value="${qe.fixed_price ?? ''}" min="0" step="any" placeholder="0.00" />
+          <span class="qe-fixed-eq">=</span>
+          <span class="qe-fixed-total" id="qe-fixed-total">${qe.fixed_price != null ? fmtEur((qe.fixed_qty ?? 1) * qe.fixed_price) : '—'}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Exclusions -->
     <div class="qe-section qe-excl-section">
       <div class="qe-section-header">
@@ -4709,6 +4733,52 @@ function renderQuoteEditorView() {
     outMarginEl.addEventListener('input', e => {
       qe.outsource_margin = parseFloat(e.target.value) || 0;
       updateSvcSubtotals();
+      updateTotals();
+      markQEDirty();
+    });
+  }
+
+  // Vaste stuksprijs wiring
+  const fixedEnabled = document.getElementById('qe-fixed-enabled');
+  const fixedBody    = document.querySelector('.qe-fixed-body');
+  const fixedQtyEl   = document.getElementById('qe-fixed-qty');
+  const fixedPriceEl = document.getElementById('qe-fixed-price');
+  const fixedTotalEl = document.getElementById('qe-fixed-total');
+
+  function _updateFixedTotal() {
+    if (qe.fixed_price == null) return;
+    const total = (qe.fixed_qty ?? 1) * (qe.fixed_price ?? 0);
+    if (fixedTotalEl) fixedTotalEl.textContent = fmtEur(total);
+  }
+
+  if (fixedEnabled) {
+    fixedEnabled.addEventListener('change', e => {
+      if (e.target.checked) {
+        qe.fixed_price = parseFloat(fixedPriceEl?.value) || 0;
+        qe.fixed_qty   = parseFloat(fixedQtyEl?.value)   || 1;
+        fixedBody?.classList.remove('hidden');
+      } else {
+        qe.fixed_price = null;
+        fixedBody?.classList.add('hidden');
+      }
+      updateTotals();
+      markQEDirty();
+    });
+  }
+  if (fixedQtyEl) {
+    fixedQtyEl.addEventListener('focus', () => fixedQtyEl.select());
+    fixedQtyEl.addEventListener('input', e => {
+      qe.fixed_qty = parseFloat(e.target.value) || 1;
+      _updateFixedTotal();
+      updateTotals();
+      markQEDirty();
+    });
+  }
+  if (fixedPriceEl) {
+    fixedPriceEl.addEventListener('focus', () => fixedPriceEl.select());
+    fixedPriceEl.addEventListener('input', e => {
+      qe.fixed_price = parseFloat(e.target.value) || 0;
+      _updateFixedTotal();
       updateTotals();
       markQEDirty();
     });
@@ -5142,6 +5212,24 @@ function calcQuoteTotals(items, globalMargin, outsourceMargin) {
 }
 
 function calcQETotals() {
+  // Vaste stuksprijs modus: verkoopprijs is handmatig bepaald
+  if (qe.fixed_price != null) {
+    const matInkoop  = qe.materials.filter(m => m.enabled !== 0)
+      .reduce((s, m) => s + (m.quantity ?? 1) * (m.unit_price ?? 0), 0);
+    const revenue    = (qe.fixed_qty ?? 1) * (qe.fixed_price ?? 0);
+    const profit     = revenue - matInkoop;
+    const subtotal   = revenue;
+    const btw        = subtotal * 0.21;
+    return {
+      matEx: matInkoop, matMargin: 0, matTotal: matInkoop,
+      svcSelfTotal: 0, svcOutCost: 0, svcOutMargin: 0, svcOutTotal: 0, svcTotal: 0,
+      subtotal, btw, grandTotal: subtotal + btw,
+      marginPct: 0, outsourceMarginPct: qe.outsource_margin,
+      profit,
+      isFixedPrice: true, fixedRevenue: revenue, fixedQty: qe.fixed_qty ?? 1, fixedPrice: qe.fixed_price ?? 0,
+    };
+  }
+  // Standaard marge-modus
   const allItems = [
     ...qe.materials.map(i => ({ ...i, type: 'material' })),
     ...qe.services.map(i => ({ ...i, type: 'service' })),
@@ -5159,16 +5247,25 @@ function updateMatSubtotals() {
   const el = document.getElementById('mat-subtotals');
   if (!el || !qe) return;
   const t = calcQETotals();
-  el.innerHTML = `
-    <div class="row"><span>Subtotaal materialen</span><span>${fmtEur(t.matEx)}</span></div>
-    <div class="row"><span>${margeLabel(t.marginPct)}</span><span>+ ${fmtEur(t.matMargin)}</span></div>
-    <div class="row bold"><span>Totaal materialen</span><span>${fmtEur(t.matTotal)}</span></div>`;
+  if (t.isFixedPrice) {
+    el.innerHTML = `
+      <div class="row"><span>Inkoop materialen</span><span>${fmtEur(t.matEx)}</span></div>`;
+  } else {
+    el.innerHTML = `
+      <div class="row"><span>Subtotaal materialen</span><span>${fmtEur(t.matEx)}</span></div>
+      <div class="row"><span>${margeLabel(t.marginPct)}</span><span>+ ${fmtEur(t.matMargin)}</span></div>
+      <div class="row bold"><span>Totaal materialen</span><span>${fmtEur(t.matTotal)}</span></div>`;
+  }
 }
 
 function updateSvcSubtotals() {
   const el = document.getElementById('svc-subtotals');
   if (!el || !qe) return;
   const t = calcQETotals();
+  if (t.isFixedPrice) {
+    el.innerHTML = '';  // diensten tellen niet mee in vaste-prijs-modus
+    return;
+  }
   const hasOutsourced = t.svcOutCost > 0;
   el.innerHTML = `
     <div class="row"><span>Eigen diensten</span><span>${fmtEur(t.svcSelfTotal)}</span></div>
@@ -5185,6 +5282,20 @@ function updateTotals() {
   const el = document.getElementById('qe-totals-panel');
   if (!el || !qe) return;
   const t = calcQETotals();
+
+  if (t.isFixedPrice) {
+    el.innerHTML = `
+      <div class="qt-row"><span class="qt-label">Inkoop materialen</span><span class="qt-val">${fmtEur(t.matEx)}</span></div>
+      <div class="qt-divider"></div>
+      <div class="qt-row"><span class="qt-label">Verkoopprijs (${t.fixedQty} × ${fmtEur(t.fixedPrice)})</span><span class="qt-val">${fmtEur(t.fixedRevenue)}</span></div>
+      <div class="qt-row"><span class="qt-label">BTW (21%)</span><span class="qt-val">+ ${fmtEur(t.btw)}</span></div>
+      <div class="qt-row final"><span class="qt-label">TOTAAL excl. BTW</span><span class="qt-val">${fmtEur(t.subtotal)}</span></div>
+      <div class="qt-row incl-note"><span class="qt-label">Incl. BTW</span><span class="qt-val">${fmtEur(t.grandTotal)}</span></div>
+      <div class="qt-divider"></div>
+      <div class="qt-row profit"><span class="qt-label">Eigen verdiensten</span><span class="qt-val">${fmtEur(t.profit)}</span></div>`;
+    return;
+  }
+
   const hasOutsourced = t.svcOutCost > 0;
   el.innerHTML = `
     <div class="qt-row"><span class="qt-label">Materialen (excl. marge)</span><span class="qt-val">${fmtEur(t.matEx)}</span></div>
@@ -5286,6 +5397,8 @@ async function performSave() {
     extra_images: qe.extra_images,
     pdf_opts: qe.pdf_opts,
     outsource_margin: qe.outsource_margin,
+    fixed_price: qe.fixed_price,
+    fixed_qty:   qe.fixed_qty,
   });
   const quoteData = {
     name: qe.name.trim(), client: qe.client.trim(), quote_date: qe.quote_date,
@@ -5650,8 +5763,10 @@ async function exportQuotePdf(mode = 'internal') {
   const svcRowsEnabled = qe.services.filter(s => s.enabled !== 0);
 
   const matRows = matRowsEnabled.map(m => {
-    const effectivePct = (m.margin != null && m.margin !== '') ? parseFloat(m.margin) : t.marginPct;
-    const displayPrice = m.unit_price * (1 + effectivePct / 100);
+    // In vaste-prijs-modus: toon inkoopprijs (geen marge opgeteld)
+    const displayPrice = t.isFixedPrice
+      ? m.unit_price
+      : m.unit_price * (1 + ((m.margin != null && m.margin !== '') ? parseFloat(m.margin) : t.marginPct) / 100);
     const unit = escHtml(m.unit || 'st');
     return `
     <tr>
@@ -5915,12 +6030,12 @@ ${opts.show_title_page ? `
     ${matRowsEnabled.length > 0 ? `
     <h3>Materialen</h3>
     <table class="content-table">
-      <thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Stukprijs</th><th class="r" style="width:17%">Totaal</th></tr></thead>
+      <thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">${t.isFixedPrice ? 'Inkoopprijs' : 'Stukprijs'}</th><th class="r" style="width:17%">Totaal</th></tr></thead>
       <tbody>${matRows}</tbody>
     </table>
     ` : ''}
 
-    ${svcRowsEnabled.length > 0 ? `
+    ${!t.isFixedPrice && svcRowsEnabled.length > 0 ? `
     <h3>Diensten</h3>
     <table class="content-table">
       <thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Tarief</th><th class="r" style="width:17%">Totaal</th></tr></thead>
@@ -5931,8 +6046,14 @@ ${opts.show_title_page ? `
       <table class="content-table">
         <thead><tr><th colspan="2">Totaaloverzicht</th></tr></thead>
         <tbody>
-          ${matRowsEnabled.length > 0 ? `<tr><td>Totaal materialen</td><td class="r">${fmtEur(t.matTotal)}</td></tr>` : ''}
-          ${svcRowsEnabled.length > 0  ? `<tr><td>Totaal diensten</td><td class="r">${fmtEur(t.svcTotal)}</td></tr>` : ''}
+          ${t.isFixedPrice ? `
+            ${matRowsEnabled.length > 0 ? `<tr><td>Inkoop materialen</td><td class="r">${fmtEur(t.matEx)}</td></tr>` : ''}
+            <tr><td>Verkoopprijs (${t.fixedQty} × ${fmtEur(t.fixedPrice)})</td><td class="r">${fmtEur(t.fixedRevenue)}</td></tr>
+            <tr><td><em>Eigen verdiensten</em></td><td class="r"><em>${fmtEur(t.profit)}</em></td></tr>
+          ` : `
+            ${matRowsEnabled.length > 0 ? `<tr><td>Totaal materialen</td><td class="r">${fmtEur(t.matTotal)}</td></tr>` : ''}
+            ${svcRowsEnabled.length > 0  ? `<tr><td>Totaal diensten</td><td class="r">${fmtEur(t.svcTotal)}</td></tr>` : ''}
+          `}
           <tr class="row-final"><td>TOTAAL excl. BTW</td><td class="r">${fmtEur(t.subtotal)}</td></tr>
           <tr class="row-btw"><td>BTW (21%)</td><td class="r">+ ${fmtEur(t.btw)}</td></tr>
           <tr class="row-incl"><td>Incl. BTW</td><td class="r">${fmtEur(t.grandTotal)}</td></tr>
