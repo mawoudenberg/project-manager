@@ -428,11 +428,12 @@ function loadGanttHidden() {
 }
 
 function _confirmUnsavedQE(cb) {
+  const quoteName = qe?.name ? `"${qe.name}"` : 'deze offerte';
   const overlay = document.createElement('div');
   overlay.className = 'qe-unsaved-overlay';
   overlay.innerHTML = `
     <div class="qe-unsaved-box">
-      <p class="qe-unsaved-msg">Je hebt niet-opgeslagen wijzigingen in de offerte.</p>
+      <p class="qe-unsaved-msg">Je hebt niet-opgeslagen wijzigingen in ${escHtml(quoteName)}.<br>Wil je opslaan voordat je weggaat?</p>
       <div class="qe-unsaved-btns">
         <button class="btn btn-primary btn-sm" id="qeuc-save">Opslaan</button>
         <button class="btn btn-ghost  btn-sm" id="qeuc-discard">Niet opslaan</button>
@@ -4361,6 +4362,9 @@ function wireQuoteWizard() {
       qe.client_email    = qwSelectedClient.email    || '';
       qe.client_phone    = qwSelectedClient.phone    || '';
     }
+    // Mark as quote-editor view so setView() can intercept unsaved changes on back
+    state.view = 'quote-editor';
+    _qeDirty = false;
     renderQuoteEditorView();
   };
 }
