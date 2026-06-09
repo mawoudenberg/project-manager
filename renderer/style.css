@@ -1016,6 +1016,7 @@ html[data-theme="dark"] #sidebar-logo {
 }
 .quotes-table tr:hover td { background: var(--bg3); cursor: pointer; }
 .quotes-table td.amount { text-align: right; font-family: monospace; font-size: 13px; }
+.quotes-table td.qt-total.loading { color: var(--text2); }
 .quotes-table td:last-child { width: 36px; padding: 0 8px; }
 .quote-delete-btn {
   opacity: 0; background: none; border: none; color: var(--red);
@@ -2147,6 +2148,13 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
   color: var(--text2);
 }
 .qi-margin:focus { color: var(--text); }
+.qi-unit {
+  width: 100%;
+  font-size: 11px !important;
+  color: var(--text2);
+  text-align: center;
+}
+.qi-unit:focus { color: var(--text); }
 
 /* ── Catalog Manager ── */
 .catalog-modal {

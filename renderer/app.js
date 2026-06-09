@@ -4129,27 +4129,22 @@ async function renderQuoteList() {
     return;
   }
 
-  // Calculate total for each quote (load items)
-  const rows = await Promise.all(quotes.map(async q => {
-    const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: q.id } });
-    let outsourceMargin = 0;
-    try { outsourceMargin = JSON.parse(q.extras_json || '{}')?.outsource_margin || 0; } catch (_) {}
-    const t = calcQuoteTotals(items, q.margin, outsourceMargin);
-    return { q, total: t.subtotal };
-  }));
+  // Meest recente bovenaan
+  quotes.sort((a, b) => (b.quote_date || '').localeCompare(a.quote_date || ''));
 
+  // ── Fase 1: toon de lijst direct, totalen laden op de achtergrond ──
   let html = `<table class="quotes-table">
     <thead><tr>
       <th>Project</th><th>Klant</th><th>Datum</th>
       <th style="text-align:right">Totaal excl. BTW</th><th>Status</th><th></th>
     </tr></thead><tbody>`;
 
-  rows.forEach(({ q, total }) => {
+  quotes.forEach(q => {
     html += `<tr class="quote-row" data-id="${q.id}">
       <td><strong>${escHtml(q.name)}</strong></td>
       <td>${escHtml(q.client)}</td>
       <td>${q.quote_date || '—'}</td>
-      <td class="amount">${fmtEur(total)}</td>
+      <td class="amount qt-total loading" id="qt-total-${q.id}">…</td>
       <td><span class="badge badge-${q.status}">${fmtQuoteStatus(q.status)}</span></td>
       <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
@@ -4174,6 +4169,26 @@ async function renderQuoteList() {
       toast(`Offerte "${quote.name}" verwijderd`);
       renderQuoteList();
     };
+  });
+
+  // ── Fase 2: haal ALLE items in één request op, bereken totalen ──
+  // (N+1 requests → 2 requests totaal, ongeacht het aantal offertes)
+  const allItems = await remoteQuery({ action: 'select', table: 'quote_items' });
+  const itemsByQuote = {};
+  (allItems || []).forEach(item => {
+    if (!itemsByQuote[item.quote_id]) itemsByQuote[item.quote_id] = [];
+    itemsByQuote[item.quote_id].push(item);
+  });
+
+  quotes.forEach(q => {
+    const el = document.getElementById(`qt-total-${q.id}`);
+    if (!el) return; // gebruiker is al weggenavigeerd
+    const items = itemsByQuote[q.id] || [];
+    let outsourceMargin = 0;
+    try { outsourceMargin = JSON.parse(q.extras_json || '{}')?.outsource_margin || 0; } catch (_) {}
+    const t = calcQuoteTotals(items, q.margin, outsourceMargin);
+    el.textContent = fmtEur(t.subtotal);
+    el.classList.remove('loading');
   });
 }
 
@@ -4530,11 +4545,12 @@ function renderQuoteEditorView() {
         <thead><tr>
           <th style="width:3%"></th>
           <th style="width:3%"></th>
-          <th style="width:34%">Omschrijving</th>
-          <th style="width:9%">Aantal</th>
-          <th class="num" style="width:8%" title="Marge per item (leeg = globale marge)">%</th>
-          <th class="num" style="width:15%">Stukprijs</th>
-          <th class="num" style="width:20%">Totaal</th>
+          <th style="width:27%">Omschrijving</th>
+          <th style="width:7%">Aantal</th>
+          <th style="width:8%">Eenheid</th>
+          <th class="num" style="width:7%" title="Marge per item (leeg = globale marge)">%</th>
+          <th class="num" style="width:14%">Stukprijs</th>
+          <th class="num" style="width:17%">Totaal</th>
           <th style="width:4%"></th>
         </tr></thead>
         <tbody id="mat-tbody"></tbody>
@@ -4562,11 +4578,13 @@ function renderQuoteEditorView() {
         <thead><tr>
           <th style="width:3%"></th>
           <th style="width:3%"></th>
-          <th style="width:33%">Dienst</th>
-          <th style="width:9%" title="Vink aan als deze dienst wordt uitbesteed">Uitb.</th>
-          <th style="width:12%">Uren</th>
-          <th class="num" style="width:16%">Tarief/uur</th>
-          <th class="num" style="width:16%">Totaal</th>
+          <th style="width:24%">Dienst</th>
+          <th style="width:6%" title="Vink aan als deze dienst wordt uitbesteed">Uitb.</th>
+          <th style="width:7%">Aantal</th>
+          <th style="width:8%">Eenheid</th>
+          <th class="num" style="width:7%" title="Marge per item (leeg = geen marge voor eigen werk, globale uitbestedingsmarge voor uitbesteed)">%</th>
+          <th class="num" style="width:14%">Tarief</th>
+          <th class="num" style="width:13%">Totaal</th>
           <th style="width:4%"></th>
         </tr></thead>
         <tbody id="svc-tbody"></tbody>
@@ -4753,11 +4771,12 @@ function renderMatTable() {
       <td style="text-align:center"><input type="checkbox" class="qi-check qi-enabled" data-t="mat" data-i="${i}" data-f="enabled" ${m.enabled !== 0 ? 'checked' : ''} title="Post aan/uit" /></td>
       <td><input class="qi-input" data-t="mat" data-i="${i}" data-f="name"       value="${escHtml(m.name)}"       placeholder="Omschrijving" /></td>
       <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="quantity"  value="${m.quantity ?? 1}"  type="number" min="0" step="any" /></td>
+      <td><input class="qi-input qi-unit" data-t="mat" data-i="${i}" data-f="unit" value="${escHtml(m.unit ?? 'st')}" placeholder="st" maxlength="8" /></td>
       <td><input class="qi-input num qi-margin" data-t="mat" data-i="${i}" data-f="margin" value="${m.margin ?? ''}" type="number" min="0" max="500" step="1" placeholder="${qe.margin}" title="Marge % (leeg = globaal ${qe.margin}%)" /></td>
       <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="unit_price" value="${m.unit_price ?? 0}" type="number" min="0" step="any" /></td>
       <td class="num" id="mat-row-total-${i}">${m.enabled !== 0 ? fmtEur((m.quantity ?? 1) * (m.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="mat" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="8" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('mat');
   wireDragDrop('mat');
@@ -4775,10 +4794,12 @@ function renderSvcTable() {
       <td><input class="qi-input" data-t="svc" data-i="${i}" data-f="name"       value="${escHtml(s.name)}"      placeholder="Dienst" /></td>
       <td style="text-align:center"><input type="checkbox" class="qi-check" data-t="svc" data-i="${i}" data-f="is_outsourced" ${s.is_outsourced ? 'checked' : ''} title="Uitbesteed werk" /></td>
       <td><input class="qi-input num" data-t="svc" data-i="${i}" data-f="quantity"  value="${s.quantity ?? 1}" type="number" min="0" step="0.5" /></td>
+      <td><input class="qi-input qi-unit" data-t="svc" data-i="${i}" data-f="unit" value="${escHtml(s.unit ?? 'uur')}" placeholder="uur" maxlength="8" /></td>
+      <td><input class="qi-input num qi-margin" data-t="svc" data-i="${i}" data-f="margin" value="${s.margin ?? ''}" type="number" min="0" max="500" step="1" placeholder="0" title="Marge % (leeg = geen marge voor eigen werk; leeg = globale uitbestedingsmarge voor uitbesteed)" /></td>
       <td class="num"><input class="qi-input num" data-t="svc" data-i="${i}" data-f="unit_price" value="${s.unit_price ?? 0}" type="number" min="0" step="any" /></td>
       <td class="num" id="svc-row-total-${i}">${s.enabled !== 0 ? fmtEur((s.quantity ?? 1) * (s.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="8" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="10" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('svc');
   wireDragDrop('svc');
@@ -4899,8 +4920,8 @@ function wirePresetMenus() {
     name => { qe.materials.push({ name: name || '', quantity: 1, unit: 'st', unit_price: 0, margin: null }); renderMatTable(); updateTotals(); markQEDirty(); }
   );
   _wirePresetMenu('svc', PRESET_SERVICES,
-    p    => { qe.services.push({ name: p.name, quantity: 1, unit: 'uur', unit_price: p.rate ?? 0 }); renderSvcTable(); updateTotals(); markQEDirty(); },
-    name => { qe.services.push({ name: name || '', quantity: 1, unit: 'uur', unit_price: 0 }); renderSvcTable(); updateTotals(); markQEDirty(); }
+    p    => { qe.services.push({ name: p.name, quantity: 1, unit: p.unit || 'uur', unit_price: p.rate ?? 0, margin: null }); renderSvcTable(); updateTotals(); markQEDirty(); },
+    name => { qe.services.push({ name: name || '', quantity: 1, unit: 'uur', unit_price: 0, margin: null }); renderSvcTable(); updateTotals(); markQEDirty(); }
   );
 }
 
@@ -5077,9 +5098,17 @@ function calcQuoteTotals(items, globalMargin, outsourceMargin) {
   // Services: split into self vs outsourced
   const svcSelfItems = svcItems.filter(i => !i.is_outsourced);
   const svcOutItems  = svcItems.filter(i =>  i.is_outsourced);
-  const svcSelfTotal = svcSelfItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
+  // Self services: per-item margin if set; otherwise unit_price is already the selling price (no markup)
+  const svcSelfTotal = svcSelfItems.reduce((s, i) => {
+    const pct = (i.margin != null && i.margin !== '') ? parseFloat(i.margin) : 0;
+    return s + (i.quantity * i.unit_price * (1 + pct / 100));
+  }, 0);
+  // Outsourced: per-item margin overrides global outsource margin
   const svcOutCost   = svcOutItems.reduce((s, i) => s + (i.quantity * i.unit_price), 0);
-  const svcOutTotal  = svcOutCost * (1 + outsourceMarginPct / 100);
+  const svcOutTotal  = svcOutItems.reduce((s, i) => {
+    const pct = (i.margin != null && i.margin !== '') ? parseFloat(i.margin) : outsourceMarginPct;
+    return s + (i.quantity * i.unit_price * (1 + pct / 100));
+  }, 0);
   const svcOutMargin = svcOutTotal - svcOutCost;
   const svcTotal     = svcSelfTotal + svcOutTotal;
 
@@ -5610,22 +5639,33 @@ async function exportQuotePdf(mode = 'internal') {
   const matRows = matRowsEnabled.map(m => {
     const effectivePct = (m.margin != null && m.margin !== '') ? parseFloat(m.margin) : t.marginPct;
     const displayPrice = m.unit_price * (1 + effectivePct / 100);
+    const unit = escHtml(m.unit || 'st');
     return `
     <tr>
       <td>${escHtml(m.name)}</td>
-      <td class="r">${m.quantity}</td>
+      <td class="r">${m.quantity} ${unit}</td>
       <td class="r">${fmtEur(displayPrice)}</td>
       <td class="r">${fmtEur(m.quantity * displayPrice)}</td>
     </tr>`;
   }).join('');
 
-  const svcRows = svcRowsEnabled.map(s => `
+  const svcRows = svcRowsEnabled.map(s => {
+    const unit = escHtml(s.unit || 'uur');
+    let displayPrice = s.unit_price;
+    if (s.is_outsourced) {
+      const pct = (s.margin != null && s.margin !== '') ? parseFloat(s.margin) : t.outsourceMarginPct;
+      displayPrice = s.unit_price * (1 + pct / 100);
+    } else if (s.margin != null && s.margin !== '') {
+      displayPrice = s.unit_price * (1 + parseFloat(s.margin) / 100);
+    }
+    return `
     <tr>
       <td>${escHtml(s.name)}</td>
-      <td class="r">${s.quantity} u</td>
-      <td class="r">${fmtEur(s.unit_price)}/u</td>
-      <td class="r">${fmtEur(s.quantity * s.unit_price)}</td>
-    </tr>`).join('');
+      <td class="r">${s.quantity} ${unit}</td>
+      <td class="r">${fmtEur(displayPrice)}/${unit}</td>
+      <td class="r">${fmtEur(s.quantity * displayPrice)}</td>
+    </tr>`;
+  }).join('');
 
   // ── Client PDF: items listed, no individual prices (only enabled items) ──
   const clientItemsList = [
@@ -5870,7 +5910,7 @@ ${opts.show_title_page ? `
     ${svcRowsEnabled.length > 0 ? `
     <h3>Diensten</h3>
     <table class="content-table">
-      <thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Uren</th><th class="r" style="width:17%">Tarief/u</th><th class="r" style="width:17%">Totaal</th></tr></thead>
+      <thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Tarief</th><th class="r" style="width:17%">Totaal</th></tr></thead>
       <tbody>${svcRows}</tbody>
     </table>` : ''}
 
