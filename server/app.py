@@ -432,6 +432,46 @@ def moneybird_proxy():
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
+@app.route('/api/claude', methods=['POST'])
+def claude_proxy():
+    """Proxy for Anthropic Claude API calls (avoids CORS in browser mode)."""
+    import urllib.request, urllib.error
+    try:
+        body = request.get_json(force=True) or {}
+        token   = body.get('token', '')
+        payload = body.get('body')
+
+        if not token:
+            return jsonify({'error': 'Geen API-sleutel opgegeven'}), 400
+        if not payload:
+            return jsonify({'error': 'Geen request body opgegeven'}), 400
+
+        url = 'https://api.anthropic.com/v1/messages'
+        req_body = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=req_body, method='POST')
+        req.add_header('x-api-key', token)
+        req.add_header('anthropic-version', '2023-06-01')
+        req.add_header('Content-Type', 'application/json')
+        req.add_header('Accept', 'application/json')
+
+        with urllib.request.urlopen(req) as resp:
+            raw = resp.read().decode('utf-8')
+            try:
+                return jsonify(json.loads(raw))
+            except Exception:
+                return raw, 200, {'Content-Type': 'application/json'}
+
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode('utf-8')
+        try:
+            return jsonify(json.loads(raw)), e.code
+        except Exception:
+            return jsonify({'error': raw}), e.code
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--db',   default='/mnt/nas/shared/project-manager.db')

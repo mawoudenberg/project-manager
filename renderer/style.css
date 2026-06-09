@@ -1143,6 +1143,10 @@ html[data-theme="dark"] #sidebar-logo {
 .qe-opt input[type=checkbox] { accent-color: var(--accent); }
 .qe-opt:hover { color: var(--text); }
 
+.qe-notes-wrap {
+  position: relative;
+  margin-bottom: 18px;
+}
 .qe-notes {
   width: 100%;
   background: var(--bg3);
@@ -1156,9 +1160,14 @@ html[data-theme="dark"] #sidebar-logo {
   min-height: 90px;
   height: 120px;
   max-height: 600px;
-  margin-bottom: 18px;
+  margin-bottom: 0;
+  box-sizing: border-box;
 }
 .qe-notes:focus { outline: none; border-color: var(--accent); }
+.qe-ai-btn {
+  margin-top: 6px;
+  font-size: 12px;
+}
 
 .qe-section {
   background: var(--bg2);

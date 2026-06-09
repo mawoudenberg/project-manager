@@ -3585,6 +3585,7 @@ function wireSettings() {
     document.getElementById('cfg-api-url').value = cfg.apiUrl || 'http://raspberrypi.local:5000';
     document.getElementById('cfg-projects-dir').value = cfg.localProjectsDir || '';
     document.getElementById('cfg-moneybird-token').value = cfg.moneybirdToken || '';
+    document.getElementById('cfg-anthropic-token').value = cfg.anthropicToken || '';
     const theme = cfg.theme || 'light';
     document.querySelector(`input[name=theme][value=${theme}]`).checked = true;
     updateThemeCards(theme);
@@ -3616,6 +3617,7 @@ function wireSettings() {
     const theme = document.querySelector('input[name=theme]:checked')?.value || 'light';
     const typedToken = document.getElementById('cfg-moneybird-token').value.trim();
     if (typedToken) _moneybirdAdminId = null; // reset cache on token change
+    const typedAnthropicToken = document.getElementById('cfg-anthropic-token').value.trim();
     const newConfig = {
       ...state.config,                           // preserve caldav, localProjectsDir, etc.
       name: document.getElementById('cfg-name').value.trim() || state.config?.name || '',
@@ -3625,6 +3627,7 @@ function wireSettings() {
       localProjectsDir: document.getElementById('cfg-projects-dir').value.trim() || state.config?.localProjectsDir || '',
       // Keep existing token when field left blank
       moneybirdToken: typedToken || state.config?.moneybirdToken || '',
+      anthropicToken: typedAnthropicToken || state.config?.anthropicToken || '',
     };
     await api.configSet(newConfig);
     state.config = newConfig;
@@ -4488,7 +4491,10 @@ function renderQuoteEditorView() {
       </div>
     </div>
 
-    <textarea class="qe-notes" id="qe-notes" placeholder="Toelichting — omschrijf het project, de aanpak of bijzondere afspraken…">${escHtml(qe.notes)}</textarea>
+    <div class="qe-notes-wrap">
+      <textarea class="qe-notes" id="qe-notes" placeholder="Toelichting — omschrijf het project, de aanpak of bijzondere afspraken…">${escHtml(qe.notes)}</textarea>
+      <button class="btn btn-secondary btn-sm qe-ai-btn" id="qe-ai-gen-btn" type="button" title="Laat AI een toelichting schrijven op basis van je steekwoorden">✨ Genereer</button>
+    </div>
 
     <!-- PDF Options -->
     <details class="qe-details">
@@ -4667,6 +4673,7 @@ function renderQuoteEditorView() {
     }
   });
   document.getElementById('qe-notes').addEventListener('input',   e => { qe.notes = e.target.value; markQEDirty(); });
+  document.getElementById('qe-ai-gen-btn').onclick = generateToelichtingLLM;
   document.getElementById('qe-margin').addEventListener('focus',  e => e.target.select());
   document.getElementById('qe-margin').addEventListener('input',  e => {
     qe.margin = parseFloat(e.target.value) || 0;
@@ -5344,6 +5351,73 @@ async function duplicateQuote() {
 }
 
 // ─── Moneybird Integration ────────────────────────────────────────────────────
+
+/* ─── AI Toelichting Genereren ─────────────────────────────────────────────── */
+async function generateToelichtingLLM() {
+  const token = state.config?.anthropicToken;
+  if (!token) {
+    toast('Geen Anthropic API-sleutel ingesteld. Ga naar Instellingen → AI-assistent.', 'error', 4000);
+    return;
+  }
+  const textarea = document.getElementById('qe-notes');
+  const keywords = textarea.value.trim();
+  if (!keywords) {
+    toast('Typ eerst een paar steekwoorden in het toelichtingsveld.', 'info', 3000);
+    return;
+  }
+  const btn = document.getElementById('qe-ai-gen-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Genereren…';
+  try {
+    const text = await _callClaudeAPI(token, keywords);
+    textarea.value = text;
+    qe.notes = text;
+    markQEDirty();
+  } catch (err) {
+    toast(`AI-fout: ${err.message}`, 'error', 5000);
+    console.error('[Claude API]', err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✨ Genereer';
+  }
+}
+
+async function _callClaudeAPI(token, keywords) {
+  const prompt = `Je schrijft een professionele toelichting voor een offerte van een bouw- of verbouwbedrijf.\nSchrijf op basis van de volgende steekwoorden een vloeiende, beknopte alinea van 2-4 zinnen die past als projectomschrijving in een offerte.\nGebruik zakelijke maar toegankelijke taal. Schrijf in het Nederlands.\n\nSteekwoorden: ${keywords}\n\nGeef alleen de toelichting zelf, zonder aanhalingstekens of extra uitleg.`;
+
+  const requestBody = {
+    model: 'claude-opus-4-8',
+    max_tokens: 512,
+    messages: [{ role: 'user', content: prompt }],
+  };
+
+  if (window.__WEB_MODE__) {
+    // In browser/Pi mode: route through server proxy to avoid CORS
+    const r = await fetch('/api/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, body: requestBody }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    return data.content?.[0]?.text?.trim() || '';
+  } else {
+    // In Electron mode: call Claude API directly via IPC
+    const result = await api.apiFetch({
+      method: 'POST',
+      url: 'https://api.anthropic.com/v1/messages',
+      body: requestBody,
+      headers: {
+        'x-api-key': token,
+        'anthropic-version': '2023-06-01',
+      },
+    });
+    if (result.status >= 400) {
+      throw new Error(result.data?.error?.message || `Claude API ${result.status}: ${JSON.stringify(result.data)}`);
+    }
+    return result.data?.content?.[0]?.text?.trim() || '';
+  }
+}
 
 async function _moneybirdRaw(method, url, token, body) {
   console.log('[Moneybird]', method, url);
