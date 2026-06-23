@@ -4129,7 +4129,13 @@ async function renderQuoteList() {
   document.getElementById('new-quote-btn').onclick = () => openQuoteWizard();
   content.innerHTML = '';
 
-  const quotes = await remoteQuery({ action: 'select', table: 'quotes' });
+  // Alleen lichte kolommen ophalen — image_data/extras_json (foto's, JSON-blobs) zijn
+  // groot en worden pas geladen zodra je een specifieke offerte opent.
+  const quotes = await remoteQuery({
+    action: 'select',
+    table: 'quotes',
+    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status'],
+  });
 
   if (!Array.isArray(quotes) || quotes.length === 0) {
     document.getElementById('content').innerHTML =
@@ -4164,8 +4170,9 @@ async function renderQuoteList() {
 
   document.querySelectorAll('.quote-row').forEach(row => {
     row.onclick = async () => {
-      const quote = quotes.find(q => q.id == row.dataset.id);
-      if (quote) openQuoteEditor(quote);
+      // Lijst bevat alleen lichte kolommen — volledige rij (foto, extras_json) pas ophalen bij openen.
+      const [full] = await remoteQuery({ action: 'select', table: 'quotes', where: { id: row.dataset.id } });
+      if (full) openQuoteEditor(full);
     };
   });
 
@@ -4185,8 +4192,11 @@ async function renderQuoteList() {
   // (legacy offertes van vóór de total_price-kolom — na deze keer staat 'ie vast)
   const legacyQuotes = quotes.filter(q => q.total_price == null);
   for (const q of legacyQuotes) {
-    const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: q.id } });
-    const subtotal = computeLegacyQuoteSubtotal(q, items || []);
+    const [items, [fullQ]] = await Promise.all([
+      remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: q.id } }),
+      remoteQuery({ action: 'select', table: 'quotes', where: { id: q.id }, columns: ['margin', 'extras_json'] }),
+    ]);
+    const subtotal = computeLegacyQuoteSubtotal({ ...q, ...fullQ }, items || []);
     await remoteQuery({ action: 'update', table: 'quotes', data: { total_price: subtotal }, where: { id: q.id } });
     const el = document.getElementById(`qt-total-${q.id}`);
     if (el) { el.textContent = fmtEur(subtotal); el.classList.remove('loading'); }

@@ -242,7 +242,14 @@ def handle_query():
 
         with get_db() as db:
             if action == 'select':
-                sql = f"SELECT * FROM {table}"
+                columns = body.get('columns')
+                select_cols = '*'
+                if isinstance(columns, list) and columns:
+                    valid_cols = {row[1] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+                    safe_cols = [c for c in columns if c in valid_cols]
+                    if safe_cols:
+                        select_cols = ', '.join(safe_cols)
+                sql = f"SELECT {select_cols} FROM {table}"
                 params = []
                 if where:
                     clauses = [f"{k}=?" for k in where]

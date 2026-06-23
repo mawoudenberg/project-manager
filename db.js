@@ -219,11 +219,11 @@ function migrateSchema() {
 
 // ─── Generic query dispatcher ─────────────────────────────────────────────────
 
-function query({ action, table, data, where }) {
+function query({ action, table, data, where, columns }) {
   if (!db) throw new Error('Database not open');
 
   switch (action) {
-    case 'select': return selectRows(table, where);
+    case 'select': return selectRows(table, where, columns);
     case 'insert': return insertRow(table, data);
     case 'update': return updateRow(table, data, where);
     case 'delete': return deleteRow(table, where);
@@ -231,9 +231,10 @@ function query({ action, table, data, where }) {
   }
 }
 
-function selectRows(table, where) {
+function selectRows(table, where, columns) {
   validateTable(table);
-  let sql = `SELECT * FROM ${table}`;
+  const selectCols = sanitizeColumns(table, columns);
+  let sql = `SELECT ${selectCols} FROM ${table}`;
   const params = [];
 
   if (where && Object.keys(where).length > 0) {
@@ -246,6 +247,16 @@ function selectRows(table, where) {
 
   sql += orderFor(table);
   return db.prepare(sql).all(...params);
+}
+
+// Restricts a requested column list to columns that actually exist on the table,
+// so callers can ask for a lightweight projection (e.g. quote list view) without
+// risking SQL injection via arbitrary column names.
+function sanitizeColumns(table, columns) {
+  if (!Array.isArray(columns) || columns.length === 0) return '*';
+  const validCols = new Set(db.pragma(`table_info(${table})`).map(c => c.name));
+  const safe = columns.filter(c => validCols.has(c));
+  return safe.length ? safe.join(', ') : '*';
 }
 
 function checkpoint() {
