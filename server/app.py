@@ -162,6 +162,8 @@ def init_db():
         db.execute("ALTER TABLE quotes ADD COLUMN image_data TEXT DEFAULT ''")
     if 'extras_json' not in qcols:
         db.execute("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''")
+    if 'total_price' not in qcols:
+        db.execute("ALTER TABLE quotes ADD COLUMN total_price REAL")
     scols = [r[1] for r in db.execute("PRAGMA table_info(project_stages)").fetchall()]
     if 'notes' not in scols:
         db.execute("ALTER TABLE project_stages ADD COLUMN notes TEXT DEFAULT ''")

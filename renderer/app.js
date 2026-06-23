@@ -92,6 +92,11 @@ function pushUndo(label, fn) {
 }
 document.addEventListener('keydown', async e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+    // Don't hijack Cmd/Ctrl+Z while typing — let the field's native undo work,
+    // and don't pop a stale app-level undo entry that could navigate away.
+    const tag = document.activeElement?.tagName;
+    const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable;
+    if (isEditable) return;
     e.preventDefault();
     const entry = undoStack.pop();
     if (entry) { await entry.fn(); toast(`↩ ${entry.label}`); }
@@ -4135,7 +4140,8 @@ async function renderQuoteList() {
   // Meest recente bovenaan
   quotes.sort((a, b) => (b.quote_date || '').localeCompare(a.quote_date || ''));
 
-  // ── Fase 1: toon de lijst direct, totalen laden op de achtergrond ──
+  // ── Eén request: alleen de quotes-tabel. Prijs staat al in total_price ──
+  // (geen quote_items nodig — die worden alleen geladen zodra je een offerte opent)
   let html = `<table class="quotes-table">
     <thead><tr>
       <th>Project</th><th>Klant</th><th>Datum</th>
@@ -4143,11 +4149,12 @@ async function renderQuoteList() {
     </tr></thead><tbody>`;
 
   quotes.forEach(q => {
+    const hasTotal = q.total_price != null;
     html += `<tr class="quote-row" data-id="${q.id}">
       <td><strong>${escHtml(q.name)}</strong></td>
       <td>${escHtml(q.client)}</td>
       <td>${q.quote_date || '—'}</td>
-      <td class="amount qt-total loading" id="qt-total-${q.id}">…</td>
+      <td class="amount qt-total${hasTotal ? '' : ' loading'}" id="qt-total-${q.id}">${hasTotal ? fmtEur(q.total_price) : '…'}</td>
       <td><span class="badge badge-${q.status}">${fmtQuoteStatus(q.status)}</span></td>
       <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
@@ -4174,25 +4181,16 @@ async function renderQuoteList() {
     };
   });
 
-  // ── Fase 2: haal ALLE items in één request op, bereken totalen ──
-  // (N+1 requests → 2 requests totaal, ongeacht het aantal offertes)
-  const allItems = await remoteQuery({ action: 'select', table: 'quote_items' });
-  const itemsByQuote = {};
-  (allItems || []).forEach(item => {
-    if (!itemsByQuote[item.quote_id]) itemsByQuote[item.quote_id] = [];
-    itemsByQuote[item.quote_id].push(item);
-  });
-
-  quotes.forEach(q => {
+  // ── Eenmalige achtergrond-backfill: alleen offertes zonder opgeslagen total_price ──
+  // (legacy offertes van vóór de total_price-kolom — na deze keer staat 'ie vast)
+  const legacyQuotes = quotes.filter(q => q.total_price == null);
+  for (const q of legacyQuotes) {
+    const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: q.id } });
+    const subtotal = computeLegacyQuoteSubtotal(q, items || []);
+    await remoteQuery({ action: 'update', table: 'quotes', data: { total_price: subtotal }, where: { id: q.id } });
     const el = document.getElementById(`qt-total-${q.id}`);
-    if (!el) return; // gebruiker is al weggenavigeerd
-    const items = itemsByQuote[q.id] || [];
-    let outsourceMargin = 0;
-    try { outsourceMargin = JSON.parse(q.extras_json || '{}')?.outsource_margin || 0; } catch (_) {}
-    const t = calcQuoteTotals(items, q.margin, outsourceMargin);
-    el.textContent = fmtEur(t.subtotal);
-    el.classList.remove('loading');
-  });
+    if (el) { el.textContent = fmtEur(subtotal); el.classList.remove('loading'); }
+  }
 }
 
 // ─── Quote Wizard ─────────────────────────────────────────────────────────────
@@ -5211,6 +5209,17 @@ function calcQuoteTotals(items, globalMargin, outsourceMargin) {
   };
 }
 
+// Computes the subtotal (excl. BTW) for a quote row + its raw quote_items,
+// used to backfill quotes.total_price for legacy quotes saved before that column existed.
+function computeLegacyQuoteSubtotal(quote, items) {
+  let extras = {};
+  try { extras = JSON.parse(quote.extras_json || '{}') || {}; } catch (_) {}
+  if (extras.fixed_price != null) {
+    return (extras.fixed_qty ?? 1) * extras.fixed_price;
+  }
+  return calcQuoteTotals(items, quote.margin, extras.outsource_margin ?? 0).subtotal;
+}
+
 function calcQETotals() {
   // Vaste stuksprijs modus: verkoopprijs is handmatig bepaald
   if (qe.fixed_price != null) {
@@ -5388,6 +5397,7 @@ let _savingQuote = false;
 async function performSave() {
   if (_savingQuote) return;
   _savingQuote = true;
+  const _saveTotals = calcQETotals();
   const extrasJson = JSON.stringify({
     client_contact: qe.client_contact,
     client_address: qe.client_address,
@@ -5406,6 +5416,7 @@ async function performSave() {
     created_by: state.config?.name || '',
     image_data: qe.image_data || '',
     extras_json: extrasJson,
+    total_price: _saveTotals.subtotal,
   };
 
   try {
@@ -5476,6 +5487,8 @@ async function duplicateQuote() {
       extra_images:    qe.extra_images,
       pdf_opts:        qe.pdf_opts,
       outsource_margin: qe.outsource_margin,
+      fixed_price: qe.fixed_price,
+      fixed_qty:   qe.fixed_qty,
     });
     const newQuoteData = {
       name:       qe.name + ' (kopie)',
@@ -5487,6 +5500,7 @@ async function duplicateQuote() {
       created_by: state.config?.name || '',
       image_data: qe.image_data || '',
       extras_json: extrasJson,
+      total_price: calcQETotals().subtotal,
     };
     const res = await remoteQuery({ action: 'insert', table: 'quotes', data: newQuoteData });
     const newId = res.id;

@@ -165,6 +165,8 @@ function migrateSchema() {
   const quoteCols = db.pragma('table_info(quotes)').map(c => c.name);
   if (!quoteCols.includes('image_data'))  db.exec("ALTER TABLE quotes ADD COLUMN image_data  TEXT DEFAULT ''");
   if (!quoteCols.includes('extras_json')) db.exec("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''");
+  // Denormalized total (excl. BTW), kept in sync on save — lets the quote list load instantly
+  if (!quoteCols.includes('total_price')) db.exec("ALTER TABLE quotes ADD COLUMN total_price REAL");
 
   const stageCols = db.pragma('table_info(project_stages)').map(c => c.name);
   if (!stageCols.includes('notes')) {
