@@ -5538,7 +5538,8 @@ async function generateToelichtingLLM() {
   btn.disabled = true;
   btn.textContent = '⏳ Genereren…';
   try {
-    const text = await _callClaudeAPI(token, keywords);
+    const requestBody = _buildToelichtingRequest(keywords);
+    const text = await _sendClaudeRequest(token, requestBody);
     textarea.value = text;
     qe.notes = text;
     markQEDirty();
@@ -5551,15 +5552,45 @@ async function generateToelichtingLLM() {
   }
 }
 
-async function _callClaudeAPI(token, keywords) {
-  const prompt = `Je schrijft een professionele toelichting voor een offerte van een bouw- of verbouwbedrijf.\nSchrijf op basis van de volgende steekwoorden een vloeiende, beknopte alinea van 2-4 zinnen die past als projectomschrijving in een offerte.\nGebruik zakelijke maar toegankelijke taal. Schrijf in het Nederlands.\n\nSteekwoorden: ${keywords}\n\nGeef alleen de toelichting zelf, zonder aanhalingstekens of extra uitleg.`;
+// Bouwt de Claude-request inclusief projectfoto en offertegegevens (materialen/diensten/klant) als context
+function _buildToelichtingRequest(keywords) {
+  const contextLines = [];
+  if (qe.name)   contextLines.push(`Projectnaam: ${qe.name}`);
+  if (qe.client) contextLines.push(`Klant: ${qe.client}`);
 
-  const requestBody = {
+  const mats = (qe.materials || []).filter(m => m.enabled !== 0 && m.name?.trim());
+  if (mats.length) {
+    contextLines.push(`Materialen: ${mats.map(m => `${m.name} (${m.quantity ?? 1} ${m.unit || 'st'})`).join(', ')}`);
+  }
+  const svcs = (qe.services || []).filter(s => s.enabled !== 0 && s.name?.trim());
+  if (svcs.length) {
+    contextLines.push(`Diensten: ${svcs.map(s => `${s.name} (${s.quantity ?? 1} ${s.unit || 'uur'})`).join(', ')}`);
+  }
+  const context = contextLines.join('\n');
+
+  let imageBlock = null;
+  const m = (qe.image_data || '').match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (m) imageBlock = { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } };
+
+  const prompt = `Je schrijft een professionele toelichting voor een offerte van een bouw- of verbouwbedrijf.
+Schrijf op basis van de steekwoorden${imageBlock ? ', de bijgevoegde projectfoto' : ''}${context ? ' en de offertegegevens' : ''} hieronder een vloeiende, beknopte alinea van 2-4 zinnen die past als projectomschrijving in een offerte.
+Gebruik zakelijke maar toegankelijke taal. Schrijf in het Nederlands. Verzin geen materialen, diensten of details die niet genoemd zijn of niet op de foto te zien zijn.
+
+Steekwoorden: ${keywords}
+${context ? `\nOffertegegevens:\n${context}` : ''}
+
+Geef alleen de toelichting zelf, zonder aanhalingstekens of extra uitleg.`;
+
+  const content = imageBlock ? [imageBlock, { type: 'text', text: prompt }] : prompt;
+
+  return {
     model: 'claude-opus-4-8',
     max_tokens: 512,
-    messages: [{ role: 'user', content: prompt }],
+    messages: [{ role: 'user', content }],
   };
+}
 
+async function _sendClaudeRequest(token, requestBody) {
   if (window.__WEB_MODE__) {
     // In browser/Pi mode: route through server proxy to avoid CORS
     const r = await fetch('/api/claude', {
