@@ -325,6 +325,10 @@ function startApiPolling() {
           action: 'select', table: 'todo_items', where: { list_id: list.id },
         });
       }
+      // Never blindly re-render while editing a quote — its unsaved state lives only
+      // in `qe`, and re-rendering would discard it (the dispatch table below has no
+      // 'quote-editor' entry, so it used to fall back to the monthly view).
+      if (state.view === 'quote-editor') return;
       renderView();
     } catch (_) {
       // silently ignore network errors during background poll
@@ -405,6 +409,7 @@ function renderView() {
     gantt:    renderGantt,
     projects: renderProjectsView,
     klanten:  renderKlanten,
+    'quote-editor': renderQuoteEditorView,
   };
   (views[state.view] || renderMonthly)();
 }
@@ -4436,7 +4441,13 @@ function renderQuoteEditorView() {
   document.getElementById('qe-back').onclick = () => setView('quotes');
   document.getElementById('qe-save-btn').onclick = saveQuote;
   document.getElementById('qe-dup-btn')?.addEventListener('click', duplicateQuote);
-  document.getElementById('qe-project-btn').onclick = () => createProjectFromQuote(qe.name);
+  document.getElementById('qe-project-btn').onclick = async () => {
+    // Sla de offerte eerst op — anders bestaat het project straks wel, maar de
+    // (nieuwe/gewijzigde) offerte alleen nog in het geheugen.
+    if (!qe.name.trim()) { shake(document.getElementById('qe-name')); toast('Vul een projectnaam in'); return; }
+    if (!qe.id || _qeDirty) await performSave();
+    createProjectFromQuote(qe.name);
+  };
   document.getElementById('qe-folder-btn').onclick  = () => openProjectFolder(qe.name);
   document.getElementById('qe-pdf-btn').onclick = () => {
     document.getElementById('mb-dropdown-menu')?.classList.add('hidden');
