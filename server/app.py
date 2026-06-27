@@ -102,6 +102,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS projects (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 name        TEXT NOT NULL,
+                client      TEXT DEFAULT '',
                 description TEXT DEFAULT '',
                 start_date  TEXT DEFAULT '',
                 end_date    TEXT DEFAULT '',
@@ -149,6 +150,17 @@ def init_db():
                 sort_order  INTEGER DEFAULT 0,
                 created_at  TEXT DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS clients (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL DEFAULT '',
+                contact     TEXT DEFAULT '',
+                address     TEXT DEFAULT '',
+                postcode    TEXT DEFAULT '',
+                email       TEXT DEFAULT '',
+                phone       TEXT DEFAULT '',
+                notes       TEXT DEFAULT '',
+                created_at  TEXT DEFAULT (datetime('now'))
+            );
         """)
     # Migrate: add sort_order to todo_lists if missing
     cols = [r[1] for r in db.execute("PRAGMA table_info(todo_lists)").fetchall()]
@@ -174,6 +186,9 @@ def init_db():
         db.execute("ALTER TABLE quote_items ADD COLUMN margin REAL DEFAULT NULL")
     if 'enabled' not in qicols:
         db.execute("ALTER TABLE quote_items ADD COLUMN enabled INTEGER DEFAULT 1")
+    pcols = [r[1] for r in db.execute("PRAGMA table_info(projects)").fetchall()]
+    if 'client' not in pcols:
+        db.execute("ALTER TABLE projects ADD COLUMN client TEXT DEFAULT ''")
 
     # One-time migration: consolidate duplicate stages by (project_id, name)
     # and move their date ranges into stage_slots.
@@ -327,6 +342,13 @@ def health():
 PROJECTEN_DIR  = '/mnt/projects/Vonk & Vorm Data/Studio Vonk & Vorm/Projecten'
 VOORBEELD_MAP  = '/mnt/projects/Vonk & Vorm Data/Studio Vonk & Vorm/Projecten/Voorbeeld map'
 
+INACTIVE_DIR     = os.path.join(PROJECTEN_DIR, 'ZZ - Niet actieve projecten')
+INACTIVE_SUBDIRS = {
+    'done':     os.path.join(INACTIVE_DIR, 'Afgeronde projecten'),
+    'on_hold':  os.path.join(INACTIVE_DIR, 'In de wacht'),
+    'rejected': os.path.join(INACTIVE_DIR, 'Afgewezen offertes'),
+}
+
 @app.route('/api/create-project-folder', methods=['POST'])
 def create_project_folder():
     import shutil, os, re
@@ -346,6 +368,57 @@ def create_project_folder():
             return jsonify({'error': 'Voorbeeld map not found', 'path': VOORBEELD_MAP}), 500
         shutil.copytree(VOORBEELD_MAP, dest)
         return jsonify({'ok': True, 'created': True, 'path': dest})
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
+@app.route('/api/move-project-folder', methods=['POST'])
+def move_project_folder():
+    import shutil, os, re
+    try:
+        body = request.get_json(force=True) or {}
+        name     = (body.get('name') or '').strip()
+        category = (body.get('category') or '').strip()
+        if not name:
+            return jsonify({'error': 'name is required'}), 400
+        if category not in ('active', 'done', 'on_hold', 'rejected'):
+            return jsonify({'error': 'invalid category'}), 400
+        safe_name = re.sub(r'[\\/:*?"<>|]', '', name).strip()
+        if not safe_name:
+            return jsonify({'error': 'invalid project name'}), 400
+
+        dest_dir = PROJECTEN_DIR if category == 'active' else INACTIVE_SUBDIRS[category]
+        dest = os.path.join(dest_dir, safe_name)
+
+        # Find the folder's current location, searching the active root and
+        # every inactive subfolder (case-insensitive, like save-quote-pdf).
+        current = None
+        for d in [PROJECTEN_DIR] + list(INACTIVE_SUBDIRS.values()):
+            if not os.path.isdir(d):
+                continue
+            candidate = os.path.join(d, safe_name)
+            if os.path.isdir(candidate):
+                current = candidate
+                break
+            try:
+                match = next((e for e in os.listdir(d) if e.lower() == safe_name.lower()), None)
+            except Exception:
+                match = None
+            if match:
+                current = os.path.join(d, match)
+                break
+
+        if current is None:
+            return jsonify({'ok': True, 'moved': False, 'msg': f'Geen map gevonden voor "{safe_name}"'})
+        if os.path.abspath(current) == os.path.abspath(dest):
+            return jsonify({'ok': True, 'moved': False, 'msg': 'Map staat al op de juiste plek', 'path': current})
+        if os.path.exists(dest):
+            return jsonify({'ok': False, 'error': f'Doelmap bestaat al: {dest}'}), 409
+
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.move(current, dest)
+        return jsonify({'ok': True, 'moved': True, 'from': current, 'to': dest})
     except Exception as e:
         import traceback
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500

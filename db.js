@@ -173,6 +173,9 @@ function migrateSchema() {
     db.exec("ALTER TABLE project_stages ADD COLUMN notes TEXT DEFAULT ''");
   }
 
+  const projCols = db.pragma('table_info(projects)').map(c => c.name);
+  if (!projCols.includes('client')) db.exec("ALTER TABLE projects ADD COLUMN client TEXT DEFAULT ''");
+
   const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
   if (!qiCols.includes('is_outsourced')) db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0");
   if (!qiCols.includes('margin'))        db.exec("ALTER TABLE quote_items ADD COLUMN margin        REAL    DEFAULT NULL");

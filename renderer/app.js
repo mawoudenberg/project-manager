@@ -253,6 +253,27 @@ async function createProjectFolder(name) {
   }
 }
 
+// Keeps a project's folder in sync with its status — moves it into/out of the
+// "ZZ - Niet actieve projecten" subfolders. No-op if the folder doesn't exist
+// yet or is already in the right place. `category` is 'active' | 'done' | 'on_hold' | 'rejected'.
+async function moveProjectFolder(name, category) {
+  if (state.config?.mode !== 'api') return; // local mode: no server filesystem
+  try {
+    const r = await api.apiFetch({
+      method: 'POST',
+      url:    `${state.config.apiUrl}/api/move-project-folder`,
+      body:   { name, category },
+    });
+    if (r.status >= 400) {
+      console.warn('Map verplaatsen mislukt:', r.data?.error || r.status);
+    } else if (r.data?.moved) {
+      toast(`📂 Map "${name}" verplaatst`);
+    }
+  } catch (e) {
+    console.warn('move-project-folder error:', e);
+  }
+}
+
 // Open a project folder in Finder/Explorer.
 // First call: prompts the user to pick the projects root directory (saved to config).
 async function openProjectFolder(name, forceReset = false) {
@@ -2424,6 +2445,8 @@ function openProjectModal(proj) {
   const isEdit = !!proj;
   document.getElementById('project-modal-title').textContent = isEdit ? 'Project bewerken' : 'Nieuw project';
   document.getElementById('proj-name').value   = proj?.name        || '';
+  document.getElementById('proj-client').value = proj?.client      || '';
+  document.getElementById('proj-client-suggestions').classList.add('hidden');
   document.getElementById('proj-desc').value   = proj?.description || '';
   document.getElementById('proj-start').value  = proj?.start_date  || '';
   document.getElementById('proj-end').value    = proj?.end_date    || '';
@@ -2451,12 +2474,49 @@ function wireProjectModal() {
     if (e.target === document.getElementById('project-modal')) closeProjectModal();
   });
 
+  // Custom autocomplete for client field (same pattern as the quote wizard)
+  const projClientInput = document.getElementById('proj-client');
+  const projSugg = document.getElementById('proj-client-suggestions');
+
+  function showProjClientSuggestions(query) {
+    const q = query.trim().toLowerCase();
+    const matches = q
+      ? state.clients.filter(c => c.name.toLowerCase().includes(q))
+      : state.clients;
+    if (!matches.length) { projSugg.classList.add('hidden'); return; }
+    projSugg.innerHTML = matches.map(c =>
+      `<div class="qw-suggestion-item" data-id="${c.id}">${escHtml(c.name)}</div>`
+    ).join('');
+    projSugg.classList.remove('hidden');
+    projSugg.querySelectorAll('.qw-suggestion-item').forEach(item => {
+      item.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const c = state.clients.find(cl => cl.id === parseInt(item.dataset.id));
+        if (!c) return;
+        projClientInput.value = c.name;
+        projSugg.classList.add('hidden');
+      });
+    });
+  }
+
+  projClientInput.addEventListener('focus', () => {
+    if (state.clients.length) showProjClientSuggestions(projClientInput.value);
+  });
+  projClientInput.addEventListener('input', e => showProjClientSuggestions(e.target.value));
+  projClientInput.addEventListener('blur', () => {
+    setTimeout(() => projSugg.classList.add('hidden'), 150);
+  });
+  projClientInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') projSugg.classList.add('hidden');
+  });
+
   document.getElementById('proj-save').onclick = async () => {
     const name = document.getElementById('proj-name').value.trim();
     if (!name) { shake(document.getElementById('proj-name')); return; }
     const selectedSwatch = document.querySelector('#proj-color-swatches .color-swatch.selected');
     const data = {
       name,
+      client:      document.getElementById('proj-client').value.trim(),
       description: document.getElementById('proj-desc').value.trim(),
       start_date:  document.getElementById('proj-start').value || '',
       end_date:    document.getElementById('proj-end').value   || '',
@@ -2470,6 +2530,7 @@ function wireProjectModal() {
       await remoteQuery({ action: 'insert', table: 'projects', data });
       createProjectFolder(data.name); // fire-and-forget
     }
+    moveProjectFolder(data.name, data.status); // fire-and-forget: sync folder location to status
     await Promise.all([loadProjects(), loadStages()]);
     closeProjectModal();
     renderView();
@@ -4735,6 +4796,7 @@ function renderQuoteEditorView() {
       await remoteQuery({ action: 'update', table: 'quotes', data: { status: qe.status }, where: { id: qe.id } });
       toast('Status opgeslagen');
       if (qe.status === 'sent' || qe.status === 'accepted') createProjectFromQuote(qe.name, true);
+      if (qe.status === 'rejected') moveProjectFolder(qe.name, 'rejected'); // no-op if no folder exists yet
     } else {
       markQEDirty();
     }
