@@ -457,8 +457,10 @@ function _confirmUnsavedQE(cb) {
 }
 
 function setView(view) {
-  // Warn before leaving the quote editor with unsaved changes
-  if (state.view === 'quote-editor' && qe && _qeDirty && view !== 'quote-editor') {
+  // Warn before leaving the quote editor with unsaved changes. A brand-new
+  // quote (no qe.id yet) counts as unsaved even if _qeDirty is still false —
+  // e.g. one created via the wizard and never touched afterwards.
+  if (state.view === 'quote-editor' && qe && (_qeDirty || !qe.id) && view !== 'quote-editor') {
     _confirmUnsavedQE(result => {
       if (result === 'save') {
         performSave().then(() => { qe = null; _qeDirty = false; setView(view); });
