@@ -235,6 +235,26 @@ async function createProjectFromQuote(quoteName, askFirst = true) {
   }
 }
 
+// The project a quote belongs to is tracked explicitly via qe.project_name —
+// falls back to qe.name for quotes saved before this field existed (implicit
+// link by name). Keeps the link stable across renames and duplicates.
+function quoteProjectName() {
+  return (qe.project_name || qe.name || '').trim();
+}
+
+async function linkQuoteToProject(name) {
+  const projectName = (name || '').trim();
+  if (!projectName) return;
+  qe.project_name = projectName;
+  if (qe.id) {
+    try {
+      await remoteQuery({ action: 'update', table: 'quotes', data: { project_name: projectName }, where: { id: qe.id } });
+    } catch (e) {
+      console.warn('linkQuoteToProject failed:', e);
+    }
+  }
+}
+
 async function createProjectFolder(name) {
   if (state.config?.mode !== 'api') return; // local mode: no server filesystem
   try {
@@ -4156,6 +4176,7 @@ function freshQE(quote) {
   return {
     id:         quote?.id         ?? null,
     name:       quote?.name       ?? '',
+    project_name: quote?.project_name ?? '',
     client:     quote?.client     ?? '',
     client_contact: stored.client_contact ?? '',
     client_address: stored.client_address ?? '',
@@ -4509,9 +4530,11 @@ function renderQuoteEditorView() {
     // (nieuwe/gewijzigde) offerte alleen nog in het geheugen.
     if (!qe.name.trim()) { shake(document.getElementById('qe-name')); toast('Vul een projectnaam in'); return; }
     if (!qe.id || _qeDirty) await performSave();
-    createProjectFromQuote(qe.name);
+    const linkName = quoteProjectName();
+    createProjectFromQuote(linkName);
+    await linkQuoteToProject(linkName);
   };
-  document.getElementById('qe-folder-btn').onclick  = () => openProjectFolder(qe.name);
+  document.getElementById('qe-folder-btn').onclick  = () => openProjectFolder(quoteProjectName());
   document.getElementById('qe-pdf-btn').onclick = () => {
     document.getElementById('mb-dropdown-menu')?.classList.add('hidden');
     document.getElementById('pdf-dropdown-menu').classList.toggle('hidden');
@@ -4795,8 +4818,12 @@ function renderQuoteEditorView() {
     if (qe.id) {
       await remoteQuery({ action: 'update', table: 'quotes', data: { status: qe.status }, where: { id: qe.id } });
       toast('Status opgeslagen');
-      if (qe.status === 'sent' || qe.status === 'accepted') createProjectFromQuote(qe.name, true);
-      if (qe.status === 'rejected') moveProjectFolder(qe.name, 'rejected'); // no-op if no folder exists yet
+      const linkName = quoteProjectName();
+      if (qe.status === 'sent' || qe.status === 'accepted') {
+        createProjectFromQuote(linkName, true);
+        await linkQuoteToProject(linkName);
+      }
+      if (qe.status === 'rejected') moveProjectFolder(linkName, 'rejected'); // no-op if no folder exists yet
     } else {
       markQEDirty();
     }
@@ -5498,6 +5525,7 @@ async function performSave() {
   const quoteData = {
     name: qe.name.trim(), client: qe.client.trim(), quote_date: qe.quote_date,
     margin: qe.margin, status: qe.status, notes: qe.notes.trim(),
+    project_name: qe.project_name || '',
     created_by: state.config?.name || '',
     image_data: qe.image_data || '',
     extras_json: extrasJson,
@@ -5538,8 +5566,10 @@ async function performSave() {
 
     // When status is "verzonden" or "geaccepteerd", offer to create a matching project
     if ((qe.status === 'sent' || qe.status === 'accepted') && qe.name) {
-      const existing = state.projects.find(p => p.name.trim().toLowerCase() === qe.name.trim().toLowerCase());
-      if (!existing) createProjectFromQuote(qe.name, /*silent=*/false);
+      const linkName = quoteProjectName();
+      const existing = state.projects.find(p => p.name.trim().toLowerCase() === linkName.toLowerCase());
+      if (!existing) createProjectFromQuote(linkName, /*silent=*/false);
+      await linkQuoteToProject(linkName);
     }
   } catch (err) {
     toast('Opslaan mislukt: ' + (err.message || err), 'error', 4000);
@@ -5577,6 +5607,7 @@ async function duplicateQuote() {
     });
     const newQuoteData = {
       name:       qe.name + ' (kopie)',
+      project_name: quoteProjectName(), // keep linked to the same project/folder as the original
       client:     qe.client,
       quote_date: toDateStr(new Date()),
       margin:     qe.margin,
@@ -6223,7 +6254,7 @@ ${extraImagesPage}
     const pdfBase64 = await api.generatePdf(html);
     if (!pdfBase64) { toast('PDF genereren mislukt', 'error'); return; }
 
-    const projectName = qe.name?.trim();
+    const projectName = quoteProjectName();
     if (!projectName) { toast('Geen projectnaam — sla de offerte eerst op', 'error'); return; }
 
     const r = await api.apiFetch({

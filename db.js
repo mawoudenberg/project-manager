@@ -115,6 +115,7 @@ function createSchema() {
       margin      REAL DEFAULT 20,
       status      TEXT DEFAULT 'draft',
       notes       TEXT DEFAULT '',
+      project_name TEXT DEFAULT '',
       created_by  TEXT DEFAULT '',
       created_at  TEXT DEFAULT (datetime('now'))
     );
@@ -167,6 +168,9 @@ function migrateSchema() {
   if (!quoteCols.includes('extras_json')) db.exec("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''");
   // Denormalized total (excl. BTW), kept in sync on save — lets the quote list load instantly
   if (!quoteCols.includes('total_price')) db.exec("ALTER TABLE quotes ADD COLUMN total_price REAL");
+  // Explicit link to the project's name — decouples project linkage from the quote's own
+  // (editable, duplicatable) name so a duplicated/renamed quote keeps pointing at the same project.
+  if (!quoteCols.includes('project_name')) db.exec("ALTER TABLE quotes ADD COLUMN project_name TEXT DEFAULT ''");
 
   const stageCols = db.pragma('table_info(project_stages)').map(c => c.name);
   if (!stageCols.includes('notes')) {

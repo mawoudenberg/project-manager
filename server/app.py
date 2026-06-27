@@ -126,6 +126,7 @@ def init_db():
                 name        TEXT NOT NULL, client TEXT DEFAULT '',
                 quote_date  TEXT DEFAULT (date('now')), margin REAL DEFAULT 20,
                 status      TEXT DEFAULT 'draft', notes TEXT DEFAULT '',
+                project_name TEXT DEFAULT '',
                 created_by  TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS quote_items (
@@ -176,6 +177,8 @@ def init_db():
         db.execute("ALTER TABLE quotes ADD COLUMN extras_json TEXT DEFAULT ''")
     if 'total_price' not in qcols:
         db.execute("ALTER TABLE quotes ADD COLUMN total_price REAL")
+    if 'project_name' not in qcols:
+        db.execute("ALTER TABLE quotes ADD COLUMN project_name TEXT DEFAULT ''")
     scols = [r[1] for r in db.execute("PRAGMA table_info(project_stages)").fetchall()]
     if 'notes' not in scols:
         db.execute("ALTER TABLE project_stages ADD COLUMN notes TEXT DEFAULT ''")
