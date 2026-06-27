@@ -340,7 +340,7 @@ def health():
 
 
 PROJECTEN_DIR  = '/mnt/projects/Vonk & Vorm Data/Studio Vonk & Vorm/Projecten'
-VOORBEELD_MAP  = '/mnt/projects/Vonk & Vorm Data/Studio Vonk & Vorm/Projecten/Voorbeeld map'
+VOORBEELD_MAP  = '/mnt/projects/Vonk & Vorm Data/Studio Vonk & Vorm/Projecten/ZZ - Voorbeeld map'
 
 INACTIVE_DIR     = os.path.join(PROJECTEN_DIR, 'ZZ - Niet actieve projecten')
 INACTIVE_SUBDIRS = {
