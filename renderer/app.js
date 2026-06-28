@@ -263,9 +263,20 @@ async function persistQuoteProjectLink(quoteId, projectName) {
 // hetzelfde gedrag heeft. `quote` moet minstens {id, name, project_name, status} hebben;
 // wordt in-place gemuteerd (zelfde object teruggeven aan de aanroeper is dan niet nodig).
 async function changeQuoteStatus(quote, newStatus) {
+  const oldStatus = quote.status;
   quote.status = newStatus;
   if (!quote.id) return;
-  await remoteQuery({ action: 'update', table: 'quotes', data: { status: newStatus }, where: { id: quote.id } });
+  const data = { status: newStatus };
+  if (newStatus === 'later' && oldStatus !== 'later') {
+    // Vers op "later" gezet — klok voor de follow-up-herinnering opnieuw starten.
+    data.later_since = new Date().toISOString();
+    data.later_snoozed_until = '';
+  } else if (newStatus !== 'later' && oldStatus === 'later') {
+    data.later_since = '';
+    data.later_snoozed_until = '';
+  }
+  Object.assign(quote, data);
+  await remoteQuery({ action: 'update', table: 'quotes', data, where: { id: quote.id } });
   const linkName = (quote.project_name || quote.name || '').trim();
   if (!linkName) return;
   if (newStatus === 'sent' || newStatus === 'accepted') {
@@ -274,6 +285,12 @@ async function changeQuoteStatus(quote, newStatus) {
     await persistQuoteProjectLink(quote.id, linkName);
   }
   if (newStatus === 'rejected') moveProjectFolder(linkName, 'rejected');
+}
+
+async function snoozeQuoteReminder(quoteId) {
+  const until = new Date();
+  until.setMonth(until.getMonth() + 1);
+  await remoteQuery({ action: 'update', table: 'quotes', data: { later_snoozed_until: until.toISOString() }, where: { id: quoteId } });
 }
 
 async function createProjectFolder(name) {
@@ -4292,6 +4309,20 @@ function renderBizDashboardContent(snap) {
       </div>
     </div>
 
+    <div class="biz-reminders-card">
+      <div class="biz-card-title">🔔 Follow-up: offertes op "later"</div>
+      ${snap.staleLaterQuotes.length
+        ? `<ul class="biz-reminders-list">${snap.staleLaterQuotes.map(q => {
+            const since = q.later_since ? new Date(q.later_since) : new Date(q.created_at || q.quote_date);
+            const ageDays = Math.floor((Date.now() - since) / 86400000);
+            return `<li>
+              <span>${escHtml(q.name)} — al ${ageDays} dagen op "later" (${fmtEur(q.total_price)})</span>
+              <button class="btn btn-secondary btn-sm biz-snooze-btn" data-id="${q.id}">😴 Snooze 1 maand</button>
+            </li>`;
+          }).join('')}</ul>`
+        : `<p class="biz-empty-sub">Geen "later"-offertes die langer dan ${BIZ_THRESHOLDS.laterReminderDays} dagen wachten op een follow-up.</p>`}
+    </div>
+
     <div class="biz-trend-card">
       <div class="biz-card-title">📊 Omzettrend (laatste 6 maanden)</div>
       ${snap.moneybirdError
@@ -4327,6 +4358,14 @@ function renderBizDashboardContent(snap) {
   </div>`;
 
   document.getElementById('biz-refresh-btn').onclick = () => refreshBizInsights(snap);
+  document.querySelectorAll('.biz-snooze-btn').forEach(btn => {
+    btn.onclick = async () => {
+      await snoozeQuoteReminder(parseInt(btn.dataset.id));
+      toast('Herinnering uitgesteld met 1 maand');
+      snap.staleLaterQuotes = snap.staleLaterQuotes.filter(q => q.id != btn.dataset.id);
+      renderBizDashboardContent(snap);
+    };
+  });
   renderBizChatMessages();
   wireBizChatPanel();
 }
@@ -6036,6 +6075,7 @@ const BIZ_THRESHOLDS = {
   minNewQuotesPer30Days: 2,         // minder dan 2 nieuwe offertes/maand = waarschuwing
   idealActiveProjectsMin: 2,        // projectbelasting-score is 10 binnen dit bereik
   idealActiveProjectsMax: 6,
+  laterReminderDays: 60,            // "later"-offerte ouder dan 2 maanden -> follow-up-herinnering
 };
 
 const MB_OUTSTANDING_STATES = ['open', 'late', 'reminded', 'pending_payment'];
@@ -6065,7 +6105,7 @@ async function computeBusinessSnapshot() {
   const endOfLastMonth    = new Date(startOfThisMonth.getTime() - 1);
 
   const [quotes, invoices] = await Promise.all([
-    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at'] }),
+    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until'] }),
     fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
   ]);
   const projects = state.projects?.length ? state.projects : await remoteQuery({ action: 'select', table: 'projects' });
@@ -6076,6 +6116,16 @@ async function computeBusinessSnapshot() {
   // pijplijn — ze tellen niet mee in openQuotesValue/orderportefeuille, maar worden wel
   // los getoond zodat ze niet uit het zicht verdwijnen.
   const laterQuotes    = quotes.filter(q => q.status === 'later');
+  // Follow-up-herinnering: een "later"-offerte die al >= 2 maanden zo staat (en niet
+  // gesnoozed is) moet weer onder de aandacht komen. later_since is leeg voor offertes
+  // die al "later" waren vóór deze feature bestond — val dan terug op created_at/quote_date.
+  const staleLaterQuotes = laterQuotes.filter(q => {
+    const since = q.later_since ? new Date(q.later_since) : new Date(q.created_at || q.quote_date);
+    const ageDays = (now - since) / 86400000;
+    if (ageDays < BIZ_THRESHOLDS.laterReminderDays) return false;
+    if (q.later_snoozed_until && new Date(q.later_snoozed_until) > now) return false;
+    return true;
+  });
   // Algemene/interne projecten (bv. "Algemeen") horen niet bij de actieve pijplijn —
   // ze blijven gewoon 'active' (zichtbaar in Gantt/kalender), maar tellen hier niet mee.
   const activeProjects = projects.filter(p => p.status === 'active' && !p.exclude_from_analysis);
@@ -6163,7 +6213,7 @@ async function computeBusinessSnapshot() {
     openQuotes, openQuotesValue,
     acceptedQuotes, orderportefeuille,
     fulfilledQuotes, fulfilledQuotesValue,
-    laterQuotes, laterQuotesValue,
+    laterQuotes, laterQuotesValue, staleLaterQuotes,
     newQuotes30d, newQuotesPrev30d,
     clientCount: state.clients?.length || 0,
   };
@@ -6279,6 +6329,9 @@ function buildSnapshotContextText(snap) {
   }
   if (snap.laterQuotes.length) {
     lines.push(`Uitgesteld/later (bewust niet meegeteld in de actieve pijplijn, bv. seizoensgebonden): ${snap.laterQuotes.length} offertes, ${fmtEur(snap.laterQuotesValue)} — ${snap.laterQuotes.map(q => q.name).join(', ')}`);
+  }
+  if (snap.staleLaterQuotes.length) {
+    lines.push(`Wacht al >= ${BIZ_THRESHOLDS.laterReminderDays} dagen op follow-up: ${snap.staleLaterQuotes.map(q => q.name).join(', ')}`);
   }
   lines.push(`Nieuwe offertes laatste 30 dagen: ${snap.newQuotes30d} (voorgaande 30 dagen: ${snap.newQuotesPrev30d})`);
   if (snap.moneybirdError) {

@@ -171,6 +171,10 @@ function migrateSchema() {
   // Explicit link to the project's name — decouples project linkage from the quote's own
   // (editable, duplicatable) name so a duplicated/renamed quote keeps pointing at the same project.
   if (!quoteCols.includes('project_name')) db.exec("ALTER TABLE quotes ADD COLUMN project_name TEXT DEFAULT ''");
+  // Wanneer een offerte op status "later" is gezet (los van created_at, dat veel ouder
+  // kan zijn) + tot wanneer een follow-up-herinnering is uitgesteld via de snooze-knop.
+  if (!quoteCols.includes('later_since'))         db.exec("ALTER TABLE quotes ADD COLUMN later_since TEXT DEFAULT ''");
+  if (!quoteCols.includes('later_snoozed_until')) db.exec("ALTER TABLE quotes ADD COLUMN later_snoozed_until TEXT DEFAULT ''");
 
   const stageCols = db.pragma('table_info(project_stages)').map(c => c.name);
   if (!stageCols.includes('notes')) {

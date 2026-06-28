@@ -2490,7 +2490,7 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
   grid-template-columns: minmax(220px, 1fr) 2fr;
   gap: 12px;
 }
-.biz-score-card, .biz-warnings-card, .biz-trend-card, .biz-insights-card, .biz-chat-card {
+.biz-score-card, .biz-warnings-card, .biz-reminders-card, .biz-trend-card, .biz-insights-card, .biz-chat-card {
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -2508,6 +2508,9 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .biz-score-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; }
 
 .biz-warnings-list { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+
+.biz-reminders-list { list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.biz-reminders-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .biz-warnings-list li { line-height: 1.4; }
 .biz-empty-sub { font-size: 13px; color: var(--text2); }
 
