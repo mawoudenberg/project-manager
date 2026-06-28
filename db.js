@@ -179,6 +179,10 @@ function migrateSchema() {
 
   const projCols = db.pragma('table_info(projects)').map(c => c.name);
   if (!projCols.includes('client')) db.exec("ALTER TABLE projects ADD COLUMN client TEXT DEFAULT ''");
+  // Algemene/interne projecten (bv. "Algemeen" voor opruimen/acquisitie) horen niet bij
+  // de actieve pijplijn — uitsluiten van de Bedrijfsanalyse-cijfers zonder hun status
+  // (en daarmee Gantt/kalender-zichtbaarheid) aan te raken.
+  if (!projCols.includes('exclude_from_analysis')) db.exec("ALTER TABLE projects ADD COLUMN exclude_from_analysis INTEGER DEFAULT 0");
 
   const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
   if (!qiCols.includes('is_outsourced')) db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0");

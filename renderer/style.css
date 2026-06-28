@@ -718,6 +718,15 @@ html[data-theme="dark"] #sidebar-logo {
 .form-group textarea { resize: vertical; min-height: 70px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 
+.proj-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
 /* Compact task modal */
 #task-modal .modal { padding: 18px 20px; width: 440px; }
 #task-modal .modal h2 { font-size: 15px; margin-bottom: 12px; }

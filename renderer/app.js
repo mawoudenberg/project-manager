@@ -2493,6 +2493,7 @@ function openProjectModal(proj) {
   document.getElementById('proj-start').value  = proj?.start_date  || '';
   document.getElementById('proj-end').value    = proj?.end_date    || '';
   document.getElementById('proj-status').value = proj?.status      || 'active';
+  document.getElementById('proj-exclude-analysis').checked = !!proj?.exclude_from_analysis;
   document.getElementById('proj-delete').classList.toggle('hidden', !isEdit);
   // Auto-pick an unused color for new projects
   let defaultColor = COLORS[0];
@@ -2564,6 +2565,7 @@ function wireProjectModal() {
       end_date:    document.getElementById('proj-end').value   || '',
       status:      document.getElementById('proj-status').value,
       color:       selectedSwatch?.dataset.color || COLORS[0],
+      exclude_from_analysis: document.getElementById('proj-exclude-analysis').checked ? 1 : 0,
       created_by:  state.config?.name || '',
     };
     if (state.editingProject) {
@@ -6075,7 +6077,9 @@ async function computeBusinessSnapshot() {
   // pijplijn — ze tellen niet mee in openQuotesValue/orderportefeuille, maar worden wel
   // los getoond zodat ze niet uit het zicht verdwijnen.
   const laterQuotes    = quotes.filter(q => q.status === 'later');
-  const activeProjects = projects.filter(p => p.status === 'active');
+  // Algemene/interne projecten (bv. "Algemeen") horen niet bij de actieve pijplijn —
+  // ze blijven gewoon 'active' (zichtbaar in Gantt/kalender), maar tellen hier niet mee.
+  const activeProjects = projects.filter(p => p.status === 'active' && !p.exclude_from_analysis);
 
   const sumPrice = list => list.reduce((s, q) => s + (Number(q.total_price) || 0), 0);
   const openQuotesValue     = sumPrice(openQuotes);

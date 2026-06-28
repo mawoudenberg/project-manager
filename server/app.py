@@ -192,6 +192,8 @@ def init_db():
     pcols = [r[1] for r in db.execute("PRAGMA table_info(projects)").fetchall()]
     if 'client' not in pcols:
         db.execute("ALTER TABLE projects ADD COLUMN client TEXT DEFAULT ''")
+    if 'exclude_from_analysis' not in pcols:
+        db.execute("ALTER TABLE projects ADD COLUMN exclude_from_analysis INTEGER DEFAULT 0")
 
     # One-time migration: consolidate duplicate stages by (project_id, name)
     # and move their date ranges into stage_slots.
