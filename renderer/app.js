@@ -450,6 +450,7 @@ function renderView() {
     gantt:    renderGantt,
     projects: renderProjectsView,
     klanten:  renderKlanten,
+    analyse:  renderBedrijfsanalyse,
     'quote-editor': renderQuoteEditorView,
   };
   (views[state.view] || renderMonthly)();
@@ -520,7 +521,7 @@ function setView(view) {
     const isActive = b.dataset.view === view || (b.dataset.view === 'calendar' && CAL_VIEWS.has(view));
     b.classList.toggle('active', isActive);
   });
-  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten', klanten:'Klanten' };
+  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten', klanten:'Klanten', analyse:'Bedrijfsanalyse' };
   const titleEl = document.getElementById('toolbar-title');
   titleEl.className = '';
   titleEl.textContent = titles[view] ?? '';
@@ -4158,6 +4159,220 @@ function wireKlantModal() {
   };
 }
 
+// ─── Bedrijfsanalyse View ──────────────────────────────────────────────────────
+
+let _bizSnapshot = null;
+
+async function renderBedrijfsanalyse() {
+  document.getElementById('toolbar-title').textContent = 'Bedrijfsanalyse';
+  document.getElementById('toolbar-controls').innerHTML = '';
+  const content = document.getElementById('content');
+
+  if (!state.config?.moneybirdToken || !state.config?.anthropicToken) {
+    content.innerHTML = `
+      <div class="empty-state">
+        <p>Bedrijfsanalyse heeft zowel een Moneybird- als een Anthropic API-sleutel nodig.</p>
+        <p>Ga naar Instellingen om deze in te stellen.</p>
+      </div>`;
+    return;
+  }
+
+  content.innerHTML = `<div class="biz-dashboard"><div class="biz-loading">⏳ Bedrijfscijfers ophalen…</div></div>`;
+
+  let snap;
+  try {
+    snap = await computeBusinessSnapshot();
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state"><p>Kon bedrijfscijfers niet ophalen: ${escHtml(e.message || String(e))}</p></div>`;
+    return;
+  }
+  if (state.view !== 'analyse') return; // user navigated away while loading
+  _bizSnapshot = snap;
+  renderBizDashboardContent(snap);
+}
+
+function renderBizDashboardContent(snap) {
+  const content = document.getElementById('content');
+  const cached = loadCachedInsights();
+  const warnings = computeWarnings(snap);
+  const score = computeBusinessScore(snap);
+
+  const revChangePct = pctChange(snap.thisMonthRevenue, snap.lastMonthRevenue);
+  // Voor openstaande facturen is een dáling juist positief, dus het teken omdraaien.
+  const outChangePct = pctChange(snap.outstanding.sum, snap.outstandingLastMonth.sum);
+
+  const chgBadge = (pct, invert = false) => {
+    if (pct == null) return '';
+    const good = invert ? pct <= 0 : pct >= 0;
+    return `<span class="biz-chg ${good ? 'biz-chg-up' : 'biz-chg-down'}">${pct >= 0 ? '+' : ''}${pct.toFixed(0)}%</span>`;
+  };
+
+  const maxTrend = Math.max(1, ...snap.revenueTrend6mo.map(m => m.total));
+
+  content.innerHTML = `
+  <div class="biz-dashboard">
+    <div class="biz-toprow">
+      <button class="btn btn-secondary btn-sm" id="biz-refresh-btn">🔄 Vernieuw analyse</button>
+      <span class="biz-updated-at">${cached ? 'AI-analyse van ' + fmtDateTime(cached.generatedAt) : 'Nog geen AI-analyse gegenereerd'}</span>
+    </div>
+
+    <div class="biz-advice-banner">
+      ${cached?.advice
+        ? `<div class="biz-advice-tag">📌 Belangrijkste advies</div><div class="biz-advice-text">Mijn advies: ${escHtml(cached.advice)}</div>`
+        : `<span class="biz-advice-empty">Klik op "Vernieuw analyse" voor een AI-advies op basis van je actuele cijfers.</span>`}
+    </div>
+
+    <div class="biz-kpi-grid">
+      <div class="biz-kpi-card">
+        <div class="biz-kpi-label">📈 Omzet deze maand</div>
+        <div class="biz-kpi-value">${snap.moneybirdError ? '—' : fmtEur(snap.thisMonthRevenue)} ${chgBadge(revChangePct)}</div>
+      </div>
+      <div class="biz-kpi-card">
+        <div class="biz-kpi-label">💰 Openstaande facturen</div>
+        <div class="biz-kpi-value">${snap.moneybirdError ? '—' : fmtEur(snap.outstanding.sum)} ${chgBadge(outChangePct, /*invert=*/true)}</div>
+        <div class="biz-kpi-sub">${snap.moneybirdError ? 'Moneybird niet bereikbaar' : `${snap.outstanding.count} facturen${snap.overdueCount ? `, ${snap.overdueCount} te laat` : ''}`}</div>
+      </div>
+      <div class="biz-kpi-card">
+        <div class="biz-kpi-label">📂 Lopende projecten</div>
+        <div class="biz-kpi-value">${snap.activeProjects.length}</div>
+      </div>
+      <div class="biz-kpi-card">
+        <div class="biz-kpi-label">📋 Openstaande offertes</div>
+        <div class="biz-kpi-value">${fmtEur(snap.openQuotesValue)}</div>
+        <div class="biz-kpi-sub">${snap.openQuotes.length} offertes</div>
+      </div>
+      <div class="biz-kpi-card">
+        <div class="biz-kpi-label">📅 Orderportefeuille</div>
+        <div class="biz-kpi-value">${fmtEur(snap.orderportefeuille)}</div>
+        <div class="biz-kpi-sub">${snap.acceptedQuotes.length} geaccepteerde offertes</div>
+      </div>
+    </div>
+
+    <div class="biz-secondary-grid">
+      <div class="biz-score-card">
+        <div class="biz-card-title">🎯 Bedrijfsscore</div>
+        <div class="biz-score-value">${score.total.toFixed(1)}<span class="biz-score-max">/10</span></div>
+        <div class="biz-score-breakdown">
+          ${Object.entries(score.breakdown).map(([k, v]) => `
+            <div class="biz-score-row">
+              <span class="biz-score-row-label">${BIZ_SCORE_LABELS[k] || k}</span>
+              <div class="biz-score-bar"><div class="biz-score-bar-fill" style="width:${v * 10}%"></div></div>
+              <span class="biz-score-row-val">${v.toFixed(1)}</span>
+            </div>`).join('')}
+        </div>
+      </div>
+      <div class="biz-warnings-card">
+        <div class="biz-card-title">⚠️ Aandachtspunten</div>
+        ${warnings.length
+          ? `<ul class="biz-warnings-list">${warnings.map(w => `<li>${w.icon} ${escHtml(w.text)}</li>`).join('')}</ul>`
+          : `<p class="biz-empty-sub">Geen bijzonderheden — alles ziet er gezond uit.</p>`}
+      </div>
+    </div>
+
+    <div class="biz-trend-card">
+      <div class="biz-card-title">📊 Omzettrend (laatste 6 maanden)</div>
+      ${snap.moneybirdError
+        ? `<p class="biz-empty-sub">Moneybird-data niet beschikbaar.</p>`
+        : `<div class="biz-trend-bars">
+            ${snap.revenueTrend6mo.map(m => `
+              <div class="biz-trend-col">
+                <div class="biz-trend-bar-track"><div class="biz-trend-bar" style="height:${Math.max(2, (m.total / maxTrend) * 100)}%" title="${fmtEur(m.total)}"></div></div>
+                <div class="biz-trend-label">${m.label}</div>
+              </div>`).join('')}
+          </div>`}
+    </div>
+
+    <div class="biz-insights-card">
+      <div class="biz-card-title">🤖 AI Inzichten</div>
+      ${cached?.insights?.length
+        ? `<ul class="biz-insights-list">${cached.insights.map(i => `<li>${escHtml(i)}</li>`).join('')}</ul>`
+        : `<p class="biz-empty-sub">Nog geen inzichten gegenereerd. Klik op "Vernieuw analyse".</p>`}
+    </div>
+
+    <div class="biz-chat-card">
+      <div class="biz-card-title">💬 Vraag het je bedrijfscoach</div>
+      <div class="biz-quick-questions">
+        ${BIZ_QUICK_QUESTIONS.map(q => `<button class="biz-quick-btn" data-q="${escHtml(q)}">${escHtml(q)}</button>`).join('')}
+      </div>
+      <div class="biz-chat-messages" id="biz-chat-messages"></div>
+      <div class="biz-chat-input-row">
+        <input type="text" id="biz-chat-input" placeholder="Stel een vraag over je bedrijf…" autocomplete="off" />
+        <button class="btn btn-primary btn-sm" id="biz-chat-send">Verstuur</button>
+        <button class="btn btn-ghost btn-sm" id="biz-chat-clear" title="Wis gesprek">🗑</button>
+      </div>
+    </div>
+  </div>`;
+
+  document.getElementById('biz-refresh-btn').onclick = () => refreshBizInsights(snap);
+  renderBizChatMessages();
+  wireBizChatPanel();
+}
+
+async function refreshBizInsights(snap) {
+  const btn = document.getElementById('biz-refresh-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Analyseren…'; }
+  try {
+    await generateBusinessInsights(snap);
+    toast('Analyse vernieuwd');
+    renderBizDashboardContent(snap);
+  } catch (e) {
+    toast('AI-analyse mislukt: ' + (e.message || e), 'error', 5000);
+  } finally {
+    const btn2 = document.getElementById('biz-refresh-btn');
+    if (btn2) { btn2.disabled = false; btn2.textContent = '🔄 Vernieuw analyse'; }
+  }
+}
+
+function renderBizChatMessages() {
+  const container = document.getElementById('biz-chat-messages');
+  if (!container) return;
+  const history = loadChatHistory();
+  container.innerHTML = history.length
+    ? history.map(m => `
+        <div class="biz-chat-msg biz-chat-${m.role}">
+          <div class="biz-chat-bubble">${escHtml(m.content).replace(/\n/g, '<br>')}</div>
+        </div>`).join('')
+    : `<p class="biz-chat-empty">Stel een vraag over je bedrijf, of gebruik een van de knoppen hierboven.</p>`;
+  container.scrollTop = container.scrollHeight;
+}
+
+function wireBizChatPanel() {
+  const input    = document.getElementById('biz-chat-input');
+  const sendBtn  = document.getElementById('biz-chat-send');
+  const clearBtn = document.getElementById('biz-chat-clear');
+  if (!input) return;
+
+  const send = async (presetText) => {
+    const q = (presetText ?? input.value).trim();
+    if (!q) return;
+    input.value = '';
+    sendBtn.disabled = true;
+    const priorHistory = loadChatHistory();
+    saveChatHistory([...priorHistory, { role: 'user', content: q }]);
+    renderBizChatMessages();
+    try {
+      const reply = await sendBizChatMessage(q, priorHistory);
+      saveChatHistory([...loadChatHistory(), { role: 'assistant', content: reply }]);
+      renderBizChatMessages();
+    } catch (e) {
+      toast('AI-fout: ' + (e.message || e), 'error', 5000);
+    } finally {
+      sendBtn.disabled = false;
+    }
+  };
+
+  sendBtn.onclick = () => send();
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+  clearBtn.onclick = () => {
+    if (!confirm('Gespreksgeschiedenis wissen?')) return;
+    clearChatHistory();
+    renderBizChatMessages();
+  };
+  document.querySelectorAll('.biz-quick-btn').forEach(btn => {
+    btn.onclick = () => send(btn.dataset.q);
+  });
+}
+
 // ─── Quote State ──────────────────────────────────────────────────────────────
 
 // qe = quoteEditor live state (in-memory while editing)
@@ -5776,6 +5991,314 @@ async function moneybirdFetch(method, path, body) {
   const adminId = await getMoneybirdAdminId();
   const url = `https://moneybird.com/api/v2/${adminId}/${path}`;
   return _moneybirdRaw(method, url, token, body);
+}
+
+/* ─── Bedrijfsanalyse / Business Coach ─────────────────────────────────────────
+   Alle berekeningen hieronder (snapshot, waarschuwingen, score) zijn pure,
+   lokale functies zonder Claude-aanroep — gratis en instant. Alleen de
+   AI-Inzichten/Advies-generatie en de chat kosten een Anthropic API-call. */
+
+// Drempelwaarden — heuristieken, vrij aan te passen zonder de rest te raken.
+const BIZ_THRESHOLDS = {
+  minOrderportefeuilleMonths: 1,    // < 1 maand dekking aan geaccepteerd werk = waarschuwing
+  maxOutstandingVsAvgRevenue: 0.5,  // openstaand > 50% van gemiddelde maandomzet = waarschuwing
+  longRunningProjectDays: 60,       // actief project ouder dan 60 dagen = "langlopend"
+  minNewQuotesPer30Days: 2,         // minder dan 2 nieuwe offertes/maand = waarschuwing
+  idealActiveProjectsMin: 2,        // projectbelasting-score is 10 binnen dit bereik
+  idealActiveProjectsMax: 6,
+};
+
+const MB_OUTSTANDING_STATES = ['open', 'late', 'reminded', 'pending_payment'];
+const MB_EXCLUDED_REVENUE_STATES = ['draft', 'uncollectible'];
+
+// Haalt álle verkoopfacturen op (all-time) — voor een 6 maanden oud bedrijf is
+// dit een handvol pagina's, dus simpeler en betrouwbaarder dan filteren op
+// Moneybird's period/filter-syntax en daarna alsnog moeten samenvoegen.
+async function fetchAllMoneybirdInvoices() {
+  let all = [];
+  for (let page = 1; page <= 20; page++) {
+    const batch = await moneybirdFetch('GET', `sales_invoices.json?per_page=100&page=${page}`);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    all = all.concat(batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
+function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
+function monthLabel(d) { return d.toLocaleDateString('nl-NL', { month: 'short', year: '2-digit' }); }
+
+async function computeBusinessSnapshot() {
+  const now = new Date();
+  const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const endOfLastMonth    = new Date(startOfThisMonth.getTime() - 1);
+
+  const [quotes, invoices] = await Promise.all([
+    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at'] }),
+    fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
+  ]);
+  const projects = state.projects?.length ? state.projects : await remoteQuery({ action: 'select', table: 'projects' });
+
+  // ── Lokale data: offertes & projecten ──
+  const openQuotes     = quotes.filter(q => q.status === 'draft' || q.status === 'sent');
+  const acceptedQuotes = quotes.filter(q => q.status === 'accepted');
+  const activeProjects = projects.filter(p => p.status === 'active');
+
+  const sumPrice = list => list.reduce((s, q) => s + (Number(q.total_price) || 0), 0);
+  const openQuotesValue     = sumPrice(openQuotes);
+  const orderportefeuille   = sumPrice(acceptedQuotes);
+
+  const daysAgo = n => new Date(now.getTime() - n * 86400000);
+  const quoteCreated = q => new Date(q.created_at || q.quote_date);
+  const newQuotes30d   = quotes.filter(q => quoteCreated(q) >= daysAgo(30)).length;
+  const newQuotesPrev30d = quotes.filter(q => quoteCreated(q) >= daysAgo(60) && quoteCreated(q) < daysAgo(30)).length;
+
+  const longRunningProjects = activeProjects.filter(p => {
+    if (!p.start_date) return false;
+    return (now - new Date(p.start_date)) / 86400000 > BIZ_THRESHOLDS.longRunningProjectDays;
+  });
+
+  // ── Moneybird data: omzet, trend, openstaande facturen ──
+  let thisMonthRevenue = null, lastMonthRevenue = null, revenueTrend6mo = [];
+  let outstanding = { count: 0, sum: 0 }, outstandingLastMonth = { count: 0, sum: 0 };
+  let overdueCount = 0;
+  let moneybirdError = invoices === null;
+
+  if (Array.isArray(invoices)) {
+    const counted = invoices.filter(inv => !MB_EXCLUDED_REVENUE_STATES.includes(inv.state));
+    const revenueOf = inv => Number(inv.total_price_excl_tax) || 0;
+
+    thisMonthRevenue = sumWhere(counted, inv => inv.invoice_date && new Date(inv.invoice_date) >= startOfThisMonth, revenueOf);
+    lastMonthRevenue = sumWhere(counted, inv => inv.invoice_date && new Date(inv.invoice_date) >= startOfLastMonth && new Date(inv.invoice_date) <= endOfLastMonth, revenueOf);
+
+    // 6-maands trend, inclusief lopende maand
+    const months = [];
+    for (let i = 5; i >= 0; i--) months.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
+    revenueTrend6mo = months.map(m => {
+      const next = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+      const total = sumWhere(counted, inv => inv.invoice_date && new Date(inv.invoice_date) >= m && new Date(inv.invoice_date) < next, revenueOf);
+      return { label: monthLabel(m), total };
+    });
+
+    const outstandingInvoices = invoices.filter(inv => MB_OUTSTANDING_STATES.includes(inv.state));
+    outstanding = { count: outstandingInvoices.length, sum: sumWhere(outstandingInvoices, () => true, revenueOf) };
+    overdueCount = invoices.filter(inv => inv.state === 'late').length;
+
+    // Benadering van "openstaand op het einde van vorige maand": gefactureerd
+    // vóór die datum, en op dat moment nog niet (volledig) betaald.
+    const outstandingAsOfLastMonth = invoices.filter(inv => {
+      if (!inv.invoice_date || MB_EXCLUDED_REVENUE_STATES.includes(inv.state)) return false;
+      if (new Date(inv.invoice_date) > endOfLastMonth) return false;
+      const paidAt = inv.paid_at ? new Date(inv.paid_at) : null;
+      return !paidAt || paidAt > endOfLastMonth;
+    });
+    outstandingLastMonth = { count: outstandingAsOfLastMonth.length, sum: sumWhere(outstandingAsOfLastMonth, () => true, revenueOf) };
+  }
+
+  const avgMonthlyRevenue3mo = revenueTrend6mo.length
+    ? revenueTrend6mo.slice(-3).reduce((s, m) => s + m.total, 0) / 3
+    : null;
+
+  return {
+    generatedAt: now.toISOString(),
+    moneybirdError,
+    thisMonthRevenue, lastMonthRevenue, revenueTrend6mo, avgMonthlyRevenue3mo,
+    outstanding, outstandingLastMonth, overdueCount,
+    activeProjects, longRunningProjects,
+    openQuotes, openQuotesValue,
+    acceptedQuotes, orderportefeuille,
+    newQuotes30d, newQuotesPrev30d,
+    clientCount: state.clients?.length || 0,
+  };
+}
+
+function sumWhere(list, predicate, valueFn) {
+  return list.filter(predicate).reduce((s, item) => s + valueFn(item), 0);
+}
+
+function pctChange(curr, prev) {
+  if (prev == null || curr == null || prev === 0) return null;
+  return ((curr - prev) / Math.abs(prev)) * 100;
+}
+
+function computeWarnings(snap) {
+  const warnings = [];
+  const coverageMonths = snap.avgMonthlyRevenue3mo > 0 ? snap.orderportefeuille / snap.avgMonthlyRevenue3mo : null;
+
+  if (coverageMonths != null && coverageMonths < BIZ_THRESHOLDS.minOrderportefeuilleMonths) {
+    warnings.push({ icon: '⚠️', text: `Lage orderportefeuille — nog maar ${coverageMonths.toFixed(1)} maand omzet aan geaccepteerd werk in de pijplijn.` });
+  }
+  if (!snap.moneybirdError && snap.avgMonthlyRevenue3mo > 0 &&
+      snap.outstanding.sum > snap.avgMonthlyRevenue3mo * BIZ_THRESHOLDS.maxOutstandingVsAvgRevenue) {
+    warnings.push({ icon: '⚠️', text: `Veel openstaande facturen — ${fmtEur(snap.outstanding.sum)} nog te ontvangen (${snap.outstanding.count} facturen).` });
+  }
+  if (!snap.moneybirdError && snap.overdueCount > 0) {
+    warnings.push({ icon: '⚠️', text: `${snap.overdueCount} factu${snap.overdueCount === 1 ? 'ur' : 'ren'} te laat — actie ondernemen om betaling binnen te krijgen.` });
+  }
+  if (snap.longRunningProjects.length > 0) {
+    warnings.push({ icon: '⚠️', text: `${snap.longRunningProjects.length} langlopend(e) project(en): ${snap.longRunningProjects.map(p => p.name).join(', ')}.` });
+  }
+  if (snap.newQuotes30d < BIZ_THRESHOLDS.minNewQuotesPer30Days) {
+    warnings.push({ icon: '⚠️', text: `Weinig nieuwe offertes — slechts ${snap.newQuotes30d} in de afgelopen 30 dagen.` });
+  }
+  return warnings;
+}
+
+function computeBusinessScore(snap) {
+  // Orderportefeuille: dekking in maanden, 0 mnd = 0, 3+ mnd = 10
+  const coverageMonths = snap.avgMonthlyRevenue3mo > 0 ? snap.orderportefeuille / snap.avgMonthlyRevenue3mo : null;
+  const orderScore = coverageMonths == null ? 5 : Math.max(0, Math.min(10, (coverageMonths / 3) * 10));
+
+  // Cashflow: openstaand bedrag t.o.v. gemiddelde maandomzet — 0 openstaand = 10
+  const outstandingRatio = (!snap.moneybirdError && snap.avgMonthlyRevenue3mo > 0)
+    ? snap.outstanding.sum / snap.avgMonthlyRevenue3mo : null;
+  const cashflowScore = outstandingRatio == null ? 5 : Math.max(0, 10 - outstandingRatio * 5);
+
+  // Facturen: punten aftrek per te-laat-factuur
+  const facturenScore = snap.moneybirdError ? 5 : Math.max(0, 10 - snap.overdueCount * 2);
+
+  // Projectbelasting: ideaal binnen [min,max], daarbuiten aftrek per project
+  const n = snap.activeProjects.length;
+  const { idealActiveProjectsMin: lo, idealActiveProjectsMax: hi } = BIZ_THRESHOLDS;
+  const projectScore = (n >= lo && n <= hi) ? 10 : Math.max(0, 10 - Math.abs(n < lo ? lo - n : n - hi) * 1.5);
+
+  const total = (orderScore + cashflowScore + facturenScore + projectScore) / 4;
+  return {
+    total: Math.round(total * 10) / 10,
+    breakdown: {
+      orderportefeuille: Math.round(orderScore * 10) / 10,
+      cashflow:          Math.round(cashflowScore * 10) / 10,
+      facturen:          Math.round(facturenScore * 10) / 10,
+      projectbelasting:  Math.round(projectScore * 10) / 10,
+    },
+  };
+}
+
+const BIZ_SCORE_LABELS = {
+  orderportefeuille: 'Orderportefeuille',
+  cashflow:          'Cashflow',
+  facturen:          'Facturen',
+  projectbelasting:  'Projectbelasting',
+};
+
+const BIZ_QUICK_QUESTIONS = [
+  'Hoe gaat het met mijn bedrijf?',
+  'Waar liggen de grootste groeikansen?',
+  'Kunnen we iemand aannemen?',
+  'Welke projecten verdienen aandacht?',
+];
+
+function fmtDateTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' }) + ' ' +
+         d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+}
+
+// Vaste rol/regels voor de AI — gedeeld door de Inzichten/Advies-generatie én de chat.
+function buildCoachSystemPrompt() {
+  return `Je bent een vaste bedrijfscoach en CFO voor Studio Vonk & Vorm, een jong technisch projectbedrijf van nog geen 6 maanden oud dat wil groeien.
+
+Gedraag je als een ervaren ondernemer die helpt bij het nemen van strategische beslissingen. Vertaal cijfers naar concrete acties — beschrijf ze niet alleen.
+
+Regels:
+- Denk als ondernemer, niet als accountant.
+- Focus op groei én continuïteit.
+- Geef alleen inzichten die daadwerkelijk relevant zijn — geen opvulzinnen of open deuren.
+- Onderbouw elke uitspraak met de beschikbare cijfers.
+- Geef duidelijk aan wanneer er onvoldoende data is voor een harde conclusie.
+- Vermijd algemene managementclichés.
+- Schrijf in het Nederlands, beknopt en concreet.`;
+}
+
+function buildSnapshotContextText(snap) {
+  const lines = [];
+  lines.push(`Datum: ${toDateStr(new Date(snap.generatedAt))}`);
+  lines.push(`Aantal klanten: ${snap.clientCount}`);
+  lines.push(`Lopende projecten: ${snap.activeProjects.length}${snap.longRunningProjects.length ? ` (waarvan ${snap.longRunningProjects.length} al langer dan ${BIZ_THRESHOLDS.longRunningProjectDays} dagen actief: ${snap.longRunningProjects.map(p => p.name).join(', ')})` : ''}`);
+  lines.push(`Openstaande offertes: ${snap.openQuotes.length} stuks, totale waarde ${fmtEur(snap.openQuotesValue)}`);
+  lines.push(`Orderportefeuille (geaccepteerde offertes, nog te factureren): ${fmtEur(snap.orderportefeuille)} (${snap.acceptedQuotes.length} offertes)`);
+  lines.push(`Nieuwe offertes laatste 30 dagen: ${snap.newQuotes30d} (voorgaande 30 dagen: ${snap.newQuotesPrev30d})`);
+  if (snap.moneybirdError) {
+    lines.push(`Moneybird-factuurdata kon niet worden opgehaald — geen omzet-/factuurcijfers beschikbaar.`);
+  } else {
+    lines.push(`Omzet deze maand (gefactureerd, incl. nog niet betaald): ${fmtEur(snap.thisMonthRevenue)}`);
+    lines.push(`Omzet vorige maand: ${fmtEur(snap.lastMonthRevenue)}`);
+    lines.push(`Omzettrend laatste 6 maanden: ${snap.revenueTrend6mo.map(m => `${m.label} ${fmtEur(m.total)}`).join(', ')}`);
+    lines.push(`Openstaande facturen: ${snap.outstanding.count} stuks, totaal ${fmtEur(snap.outstanding.sum)}, waarvan ${snap.overdueCount} te laat`);
+  }
+  return lines.join('\n');
+}
+
+const BIZ_INSIGHTS_CACHE_KEY = 'bizInsightsCache';
+
+function loadCachedInsights() {
+  try { return JSON.parse(localStorage.getItem(BIZ_INSIGHTS_CACHE_KEY)) || null; } catch (_) { return null; }
+}
+function saveCachedInsights(data) {
+  localStorage.setItem(BIZ_INSIGHTS_CACHE_KEY, JSON.stringify(data));
+}
+
+async function generateBusinessInsights(existingSnapshot) {
+  const token = state.config?.anthropicToken;
+  if (!token) throw new Error('Geen Anthropic API-sleutel ingesteld. Ga naar Instellingen → AI-assistent.');
+  const snap = existingSnapshot || await computeBusinessSnapshot();
+  const context = buildSnapshotContextText(snap);
+  const prompt = `Hier zijn de actuele bedrijfscijfers:
+
+${context}
+
+Geef 3 tot 5 korte, concrete inzichten — observaties die er daadwerkelijk toe doen, geen herhaling van de cijfers zelf — en daarna één concreet hoofdadvies voor de komende weken.
+
+Antwoord ALLEEN met geldige JSON in exact dit formaat, zonder markdown-codeblok of extra tekst eromheen:
+{"insights": ["...", "..."], "advice": "..."}`;
+
+  const requestBody = {
+    model: 'claude-opus-4-8',
+    max_tokens: 1024,
+    system: buildCoachSystemPrompt(),
+    messages: [{ role: 'user', content: prompt }],
+  };
+  const text = await _sendClaudeRequest(token, requestBody);
+  let parsed;
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+  } catch (e) {
+    throw new Error('Kon AI-antwoord niet verwerken als JSON: ' + e.message);
+  }
+  const result = {
+    generatedAt: new Date().toISOString(),
+    insights: Array.isArray(parsed.insights) ? parsed.insights : [],
+    advice: parsed.advice || '',
+  };
+  saveCachedInsights(result);
+  return result;
+}
+
+const BIZ_CHAT_KEY = 'bizChatHistory';
+
+function loadChatHistory() {
+  try { return JSON.parse(localStorage.getItem(BIZ_CHAT_KEY)) || []; } catch (_) { return []; }
+}
+function saveChatHistory(history) {
+  localStorage.setItem(BIZ_CHAT_KEY, JSON.stringify(history));
+}
+function clearChatHistory() {
+  localStorage.removeItem(BIZ_CHAT_KEY);
+}
+
+async function sendBizChatMessage(userText, priorHistory) {
+  const token = state.config?.anthropicToken;
+  if (!token) throw new Error('Geen Anthropic API-sleutel ingesteld. Ga naar Instellingen → AI-assistent.');
+  const snap = await computeBusinessSnapshot();
+  const system = buildCoachSystemPrompt() +
+    `\n\nActuele bedrijfscijfers:\n${buildSnapshotContextText(snap)}\n\n` +
+    `Sluit je antwoord af met een losse regel die begint met "Mijn advies:" gevolgd door één concrete actie.`;
+  const messages = [...priorHistory, { role: 'user', content: userText }]
+    .map(m => ({ role: m.role, content: m.content }));
+  const requestBody = { model: 'claude-opus-4-8', max_tokens: 1024, system, messages };
+  return _sendClaudeRequest(token, requestBody);
 }
 
 async function getMoneybirdTaxRateId() {
