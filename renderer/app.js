@@ -275,6 +275,14 @@ async function changeQuoteStatus(quote, newStatus) {
     data.later_since = '';
     data.later_snoozed_until = '';
   }
+  if (newStatus === 'sent' && oldStatus !== 'sent') {
+    // Vers verzonden — klok voor de follow-up-herinnering (reactie klant) opnieuw starten.
+    data.sent_since = new Date().toISOString();
+    data.sent_snoozed_until = '';
+  } else if (newStatus !== 'sent' && oldStatus === 'sent') {
+    data.sent_since = '';
+    data.sent_snoozed_until = '';
+  }
   Object.assign(quote, data);
   await remoteQuery({ action: 'update', table: 'quotes', data, where: { id: quote.id } });
   const linkName = (quote.project_name || quote.name || '').trim();
@@ -295,8 +303,8 @@ function computeSnoozeUntil(preset) {
   return d;
 }
 
-async function snoozeQuoteReminder(quoteId, until) {
-  await remoteQuery({ action: 'update', table: 'quotes', data: { later_snoozed_until: until.toISOString() }, where: { id: quoteId } });
+async function snoozeQuoteReminder(quoteId, until, field = 'later_snoozed_until') {
+  await remoteQuery({ action: 'update', table: 'quotes', data: { [field]: until.toISOString() }, where: { id: quoteId } });
 }
 
 async function createProjectFolder(name) {
@@ -4237,6 +4245,32 @@ async function renderBedrijfsanalyse() {
   renderBizDashboardContent(snap);
 }
 
+// Bouwt de <ul> voor een follow-up-herinneringskaart (offertes op "later" of verzonden
+// zonder reactie) — beide gebruiken hetzelfde snooze-mechanisme, alleen een ander
+// "sinds"-veld en snooze-veld in de database. Geeft null terug als de lijst leeg is,
+// zodat de aanroeper zelf de leeg-state-tekst kan tonen.
+function reminderListHtml(list, sinceField, snoozeField, labelFn) {
+  if (!list.length) return null;
+  return `<ul class="biz-reminders-list">${list.map(q => {
+    const since = q[sinceField] ? new Date(q[sinceField]) : new Date(q.created_at || q.quote_date);
+    q.__ageDays = Math.floor((Date.now() - since) / 86400000);
+    return `<li>
+      <span>${escHtml(q.name)} — ${labelFn(q)} (${fmtEur(q.total_price)})</span>
+      <div class="biz-snooze-controls">
+        <select class="biz-snooze-select" data-id="${q.id}" data-field="${snoozeField}">
+          <option value="" selected disabled>😴 Snooze…</option>
+          <option value="1d">1 dag</option>
+          <option value="1w">1 week</option>
+          <option value="1m">1 maand</option>
+          <option value="custom">📅 Specifieke datum…</option>
+        </select>
+        <input type="date" class="biz-snooze-date hidden" data-id="${q.id}" />
+        <button class="btn btn-secondary btn-sm biz-snooze-apply hidden" data-id="${q.id}">Snooze</button>
+      </div>
+    </li>`;
+  }).join('')}</ul>`;
+}
+
 function renderBizDashboardContent(snap) {
   const content = document.getElementById('content');
   const cached = loadCachedInsights();
@@ -4317,26 +4351,14 @@ function renderBizDashboardContent(snap) {
 
     <div class="biz-reminders-card">
       <div class="biz-card-title">🔔 Follow-up: offertes op "later"</div>
-      ${snap.staleLaterQuotes.length
-        ? `<ul class="biz-reminders-list">${snap.staleLaterQuotes.map(q => {
-            const since = q.later_since ? new Date(q.later_since) : new Date(q.created_at || q.quote_date);
-            const ageDays = Math.floor((Date.now() - since) / 86400000);
-            return `<li>
-              <span>${escHtml(q.name)} — al ${ageDays} dagen op "later" (${fmtEur(q.total_price)})</span>
-              <div class="biz-snooze-controls">
-                <select class="biz-snooze-select" data-id="${q.id}">
-                  <option value="" selected disabled>😴 Snooze…</option>
-                  <option value="1d">1 dag</option>
-                  <option value="1w">1 week</option>
-                  <option value="1m">1 maand</option>
-                  <option value="custom">📅 Specifieke datum…</option>
-                </select>
-                <input type="date" class="biz-snooze-date hidden" data-id="${q.id}" />
-                <button class="btn btn-secondary btn-sm biz-snooze-apply hidden" data-id="${q.id}">Snooze</button>
-              </div>
-            </li>`;
-          }).join('')}</ul>`
-        : `<p class="biz-empty-sub">Geen "later"-offertes die langer dan ${BIZ_THRESHOLDS.laterReminderDays} dagen wachten op een follow-up.</p>`}
+      ${reminderListHtml(snap.staleLaterQuotes, 'later_since', 'later_snoozed_until', q => `al ${q.__ageDays} dagen op "later"`)
+        || `<p class="biz-empty-sub">Geen "later"-offertes die langer dan ${BIZ_THRESHOLDS.laterReminderDays} dagen wachten op een follow-up.</p>`}
+    </div>
+
+    <div class="biz-reminders-card">
+      <div class="biz-card-title">🔔 Follow-up: verzonden offertes</div>
+      ${reminderListHtml(snap.staleSentQuotes, 'sent_since', 'sent_snoozed_until', q => `al ${q.__ageDays} dagen verzonden, geen reactie`)
+        || `<p class="biz-empty-sub">Geen verzonden offertes die langer dan ${BIZ_THRESHOLDS.sentReminderDays} dagen wachten op een reactie.</p>`}
     </div>
 
     <div class="biz-trend-card">
@@ -4375,14 +4397,17 @@ function renderBizDashboardContent(snap) {
 
   document.getElementById('biz-refresh-btn').onclick = () => refreshBizInsights(snap);
 
-  const applySnooze = async (quoteId, until, label) => {
-    await snoozeQuoteReminder(quoteId, until);
+  const reminderListKeyFor = field => field === 'sent_snoozed_until' ? 'staleSentQuotes' : 'staleLaterQuotes';
+  const applySnooze = async (quoteId, field, until, label) => {
+    await snoozeQuoteReminder(quoteId, until, field);
     toast(`Herinnering uitgesteld tot ${label}`);
-    snap.staleLaterQuotes = snap.staleLaterQuotes.filter(q => q.id != quoteId);
+    const listKey = reminderListKeyFor(field);
+    snap[listKey] = snap[listKey].filter(q => q.id != quoteId);
     renderBizDashboardContent(snap);
   };
   document.querySelectorAll('.biz-snooze-select').forEach(sel => {
     const id = parseInt(sel.dataset.id);
+    const field = sel.dataset.field;
     const dateInput = document.querySelector(`.biz-snooze-date[data-id="${sel.dataset.id}"]`);
     const applyBtn  = document.querySelector(`.biz-snooze-apply[data-id="${sel.dataset.id}"]`);
     sel.onchange = async () => {
@@ -4392,11 +4417,11 @@ function renderBizDashboardContent(snap) {
         return;
       }
       const labels = { '1d': '1 dag', '1w': '1 week', '1m': '1 maand' };
-      await applySnooze(id, computeSnoozeUntil(sel.value), labels[sel.value]);
+      await applySnooze(id, field, computeSnoozeUntil(sel.value), labels[sel.value]);
     };
     applyBtn.onclick = async () => {
       if (!dateInput.value) { shake(dateInput); return; }
-      await applySnooze(id, new Date(dateInput.value), dateInput.value);
+      await applySnooze(id, field, new Date(dateInput.value), dateInput.value);
     };
   });
   renderBizChatMessages();
@@ -6109,6 +6134,7 @@ const BIZ_THRESHOLDS = {
   idealActiveProjectsMin: 2,        // projectbelasting-score is 10 binnen dit bereik
   idealActiveProjectsMax: 6,
   laterReminderDays: 60,            // "later"-offerte ouder dan 2 maanden -> follow-up-herinnering
+  sentReminderDays: 14,             // verzonden offerte zonder reactie na 2 weken -> follow-up-herinnering
 };
 
 const MB_OUTSTANDING_STATES = ['open', 'late', 'reminded', 'pending_payment'];
@@ -6138,7 +6164,7 @@ async function computeBusinessSnapshot() {
   const endOfLastMonth    = new Date(startOfThisMonth.getTime() - 1);
 
   const [quotes, invoices] = await Promise.all([
-    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until'] }),
+    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until'] }),
     fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
   ]);
   const projects = state.projects?.length ? state.projects : await remoteQuery({ action: 'select', table: 'projects' });
@@ -6157,6 +6183,17 @@ async function computeBusinessSnapshot() {
     const ageDays = (now - since) / 86400000;
     if (ageDays < BIZ_THRESHOLDS.laterReminderDays) return false;
     if (q.later_snoozed_until && new Date(q.later_snoozed_until) > now) return false;
+    return true;
+  });
+  // Follow-up-herinnering voor verzonden offertes zonder reactie: zelfde mechanisme als
+  // "later", maar met een drempel van 2 weken — sent_since is leeg voor offertes die al
+  // verzonden waren vóór deze feature bestond, val dan terug op created_at/quote_date.
+  const sentQuotes = quotes.filter(q => q.status === 'sent');
+  const staleSentQuotes = sentQuotes.filter(q => {
+    const since = q.sent_since ? new Date(q.sent_since) : new Date(q.created_at || q.quote_date);
+    const ageDays = (now - since) / 86400000;
+    if (ageDays < BIZ_THRESHOLDS.sentReminderDays) return false;
+    if (q.sent_snoozed_until && new Date(q.sent_snoozed_until) > now) return false;
     return true;
   });
   // Algemene/interne projecten (bv. "Algemeen") horen niet bij de actieve pijplijn —
@@ -6218,8 +6255,13 @@ async function computeBusinessSnapshot() {
       return { label: monthLabel(m), total };
     });
 
+    // Moneybirds "Te ontvangen": incl. BTW, en houdt rekening met al ontvangen
+    // deelbetalingen — vandaar total_unpaid (restbedrag) i.p.v. het volledige
+    // factuurbedrag excl. BTW (dat is revenueOf, alleen voor omzet-cijfers).
+    const unpaidOf = inv => Number(inv.total_unpaid) || 0;
+
     const outstandingInvoices = invoices.filter(inv => MB_OUTSTANDING_STATES.includes(inv.state));
-    outstanding = { count: outstandingInvoices.length, sum: sumWhere(outstandingInvoices, () => true, revenueOf) };
+    outstanding = { count: outstandingInvoices.length, sum: sumWhere(outstandingInvoices, () => true, unpaidOf) };
     overdueCount = invoices.filter(inv => inv.state === 'late').length;
 
     // Benadering van "openstaand op het einde van vorige maand": gefactureerd
@@ -6230,7 +6272,7 @@ async function computeBusinessSnapshot() {
       const paidAt = inv.paid_at ? new Date(inv.paid_at) : null;
       return !paidAt || paidAt > endOfLastMonth;
     });
-    outstandingLastMonth = { count: outstandingAsOfLastMonth.length, sum: sumWhere(outstandingAsOfLastMonth, () => true, revenueOf) };
+    outstandingLastMonth = { count: outstandingAsOfLastMonth.length, sum: sumWhere(outstandingAsOfLastMonth, () => true, unpaidOf) };
   }
 
   const avgMonthlyRevenue3mo = revenueTrend6mo.length
@@ -6247,6 +6289,7 @@ async function computeBusinessSnapshot() {
     acceptedQuotes, orderportefeuille,
     fulfilledQuotes, fulfilledQuotesValue,
     laterQuotes, laterQuotesValue, staleLaterQuotes,
+    staleSentQuotes,
     newQuotes30d, newQuotesPrev30d,
     clientCount: state.clients?.length || 0,
   };
@@ -6365,6 +6408,9 @@ function buildSnapshotContextText(snap) {
   }
   if (snap.staleLaterQuotes.length) {
     lines.push(`Wacht al >= ${BIZ_THRESHOLDS.laterReminderDays} dagen op follow-up: ${snap.staleLaterQuotes.map(q => q.name).join(', ')}`);
+  }
+  if (snap.staleSentQuotes.length) {
+    lines.push(`Verzonden, maar >= ${BIZ_THRESHOLDS.sentReminderDays} dagen geen reactie van de klant: ${snap.staleSentQuotes.map(q => q.name).join(', ')}`);
   }
   lines.push(`Nieuwe offertes laatste 30 dagen: ${snap.newQuotes30d} (voorgaande 30 dagen: ${snap.newQuotesPrev30d})`);
   if (snap.moneybirdError) {

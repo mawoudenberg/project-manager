@@ -175,6 +175,9 @@ function migrateSchema() {
   // kan zijn) + tot wanneer een follow-up-herinnering is uitgesteld via de snooze-knop.
   if (!quoteCols.includes('later_since'))         db.exec("ALTER TABLE quotes ADD COLUMN later_since TEXT DEFAULT ''");
   if (!quoteCols.includes('later_snoozed_until')) db.exec("ALTER TABLE quotes ADD COLUMN later_snoozed_until TEXT DEFAULT ''");
+  // Zelfde mechanisme, maar voor verzonden offertes zonder reactie van de klant.
+  if (!quoteCols.includes('sent_since'))         db.exec("ALTER TABLE quotes ADD COLUMN sent_since TEXT DEFAULT ''");
+  if (!quoteCols.includes('sent_snoozed_until')) db.exec("ALTER TABLE quotes ADD COLUMN sent_snoozed_until TEXT DEFAULT ''");
 
   const stageCols = db.pragma('table_info(project_stages)').map(c => c.name);
   if (!stageCols.includes('notes')) {

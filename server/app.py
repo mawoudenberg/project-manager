@@ -183,6 +183,10 @@ def init_db():
         db.execute("ALTER TABLE quotes ADD COLUMN later_since TEXT DEFAULT ''")
     if 'later_snoozed_until' not in qcols:
         db.execute("ALTER TABLE quotes ADD COLUMN later_snoozed_until TEXT DEFAULT ''")
+    if 'sent_since' not in qcols:
+        db.execute("ALTER TABLE quotes ADD COLUMN sent_since TEXT DEFAULT ''")
+    if 'sent_snoozed_until' not in qcols:
+        db.execute("ALTER TABLE quotes ADD COLUMN sent_snoozed_until TEXT DEFAULT ''")
     scols = [r[1] for r in db.execute("PRAGMA table_info(project_stages)").fetchall()]
     if 'notes' not in scols:
         db.execute("ALTER TABLE project_stages ADD COLUMN notes TEXT DEFAULT ''")
