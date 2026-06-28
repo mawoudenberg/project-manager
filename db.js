@@ -190,6 +190,9 @@ function migrateSchema() {
   // de actieve pijplijn — uitsluiten van de Bedrijfsanalyse-cijfers zonder hun status
   // (en daarmee Gantt/kalender-zichtbaarheid) aan te raken.
   if (!projCols.includes('exclude_from_analysis')) db.exec("ALTER TABLE projects ADD COLUMN exclude_from_analysis INTEGER DEFAULT 0");
+  // Handmatige koppeling met een Moneybird-Project (id), voor wanneer de naam in
+  // Moneybird afwijkt van de projectnaam in deze app en automatisch matchen faalt.
+  if (!projCols.includes('moneybird_project_id')) db.exec("ALTER TABLE projects ADD COLUMN moneybird_project_id TEXT DEFAULT ''");
 
   const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
   if (!qiCols.includes('is_outsourced')) db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0");

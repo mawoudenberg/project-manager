@@ -4271,6 +4271,39 @@ function reminderListHtml(list, sinceField, snoozeField, labelFn) {
   }).join('')}</ul>`;
 }
 
+// Beste-gok suggestie voor handmatig koppelen van een niet-gematcht Moneybird-project
+// aan een project in deze app — simpele woord-overlap/substring-score, geen externe
+// libs nodig voor dit soort eenmalige, door de gebruiker te bevestigen suggesties.
+function guessProjectMatch(mbName, localProjects) {
+  const norm = s => s.toLowerCase().trim();
+  const mbNorm = norm(mbName);
+  const mbWords = mbNorm.split(/\s+/).filter(Boolean);
+  let best = null, bestScore = 0;
+  localProjects.forEach(p => {
+    const pNorm = norm(p.name);
+    const pWords = pNorm.split(/\s+/).filter(Boolean);
+    let score = mbWords.filter(w => pWords.includes(w)).length;
+    if (pNorm.includes(mbNorm) || mbNorm.includes(pNorm)) score += 5;
+    if (score > bestScore) { bestScore = score; best = p; }
+  });
+  return bestScore > 0 ? best : null;
+}
+
+// Dropdown om een niet-gematcht Moneybird-project handmatig aan een project in deze
+// app te koppelen — beste gok staat als eerste, niet-placeholder optie bovenin.
+function unmatchedCostLinkHtml(c) {
+  const suggestion = guessProjectMatch(c.name, state.projects || []);
+  const rest = (state.projects || [])
+    .filter(p => p.id !== suggestion?.id)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return `<select class="biz-link-mb-project" data-mb-id="${escHtml(String(c.mbProjectId))}">
+    <option value="" selected disabled>🔗 Koppel aan project…</option>
+    ${suggestion ? `<option value="${suggestion.id}">⭐ ${escHtml(suggestion.name)} (suggestie)</option>` : ''}
+    ${rest.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('')}
+  </select>`;
+}
+
 function renderBizDashboardContent(snap) {
   const content = document.getElementById('content');
   const cached = loadCachedInsights();
@@ -4315,6 +4348,7 @@ function renderBizDashboardContent(snap) {
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📂 Lopende projecten</div>
         <div class="biz-kpi-value">${snap.activeProjects.length}</div>
+        <div class="biz-kpi-sub">${snap.upcomingProjects.length ? `waarvan ${snap.upcomingProjects.length} nog ingepland (telt nog niet als belasting)` : ''}</div>
       </div>
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📋 Openstaande offertes</div>
@@ -4374,6 +4408,22 @@ function renderBizDashboardContent(snap) {
           </div>`}
     </div>
 
+    <div class="biz-costs-card">
+      <div class="biz-card-title">💸 Kosten per project</div>
+      ${snap.costsError
+        ? `<p class="biz-empty-sub">Moneybird-kosten/projectdata niet beschikbaar.</p>`
+        : (snap.costsByProject.length || snap.unmatchedProjectCosts.length)
+          ? `<ul class="biz-costs-list">
+              ${snap.costsByProject.map(c => `<li><span class="biz-costs-name">${escHtml(c.name)}</span><span class="biz-costs-amount">${fmtEur(c.cost)}</span></li>`).join('')}
+              ${snap.unmatchedProjectCosts.map(c => `<li class="biz-costs-unmatched">
+                  <span class="biz-costs-name">${escHtml(c.name)} (geen match in deze app)</span>
+                  <span class="biz-costs-link">${unmatchedCostLinkHtml(c)}</span>
+                  <span class="biz-costs-amount">${fmtEur(c.cost)}</span>
+                </li>`).join('')}
+            </ul>`
+          : `<p class="biz-empty-sub">Geen kosten gevonden die in Moneybird aan een Project zijn gekoppeld.</p>`}
+    </div>
+
     <div class="biz-insights-card">
       <div class="biz-card-title">🤖 AI Inzichten</div>
       ${cached?.insights?.length
@@ -4422,6 +4472,18 @@ function renderBizDashboardContent(snap) {
     applyBtn.onclick = async () => {
       if (!dateInput.value) { shake(dateInput); return; }
       await applySnooze(id, field, new Date(dateInput.value), dateInput.value);
+    };
+  });
+  document.querySelectorAll('.biz-link-mb-project').forEach(sel => {
+    sel.onchange = async () => {
+      const localProjectId = Number(sel.value);
+      if (!localProjectId) return;
+      const mbProjectId = sel.dataset.mbId;
+      await remoteQuery({ action: 'update', table: 'projects', data: { moneybird_project_id: mbProjectId }, where: { id: localProjectId } });
+      const proj = state.projects.find(p => p.id === localProjectId);
+      if (proj) proj.moneybird_project_id = mbProjectId;
+      toast('Project gekoppeld');
+      await renderBedrijfsanalyse();
     };
   });
   renderBizChatMessages();
@@ -6154,6 +6216,32 @@ async function fetchAllMoneybirdInvoices() {
   return all;
 }
 
+// Inkoopfacturen (kosten van leveranciers) — nodig om kosten per Moneybird-Project
+// (de native Project-koppeling die op factuurregels wordt gezet) te kunnen optellen.
+async function fetchAllMoneybirdPurchaseInvoices() {
+  let all = [];
+  for (let page = 1; page <= 20; page++) {
+    const batch = await moneybirdFetch('GET', `documents/purchase_invoices.json?per_page=100&page=${page}`);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    all = all.concat(batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
+// Alle Moneybird-Projecten (state:all, dus ook gearchiveerde — anders mist een
+// gearchiveerd project zijn kosten in het overzicht zodra het project klaar is).
+async function fetchAllMoneybirdProjects() {
+  let all = [];
+  for (let page = 1; page <= 20; page++) {
+    const batch = await moneybirdFetch('GET', `projects.json?filter=state:all&per_page=100&page=${page}`);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    all = all.concat(batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
 function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
 function monthLabel(d) { return d.toLocaleDateString('nl-NL', { month: 'short', year: '2-digit' }); }
 
@@ -6163,11 +6251,15 @@ async function computeBusinessSnapshot() {
   const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const endOfLastMonth    = new Date(startOfThisMonth.getTime() - 1);
 
-  const [quotes, invoices] = await Promise.all([
+  const [quotes, invoices, purchaseInvoices, mbProjects] = await Promise.all([
     remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until'] }),
     fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
+    fetchAllMoneybirdPurchaseInvoices().catch(e => { console.warn('Moneybird kosten-snapshot fout:', e); return null; }),
+    fetchAllMoneybirdProjects().catch(e => { console.warn('Moneybird projecten-snapshot fout:', e); return null; }),
   ]);
   const projects = state.projects?.length ? state.projects : await remoteQuery({ action: 'select', table: 'projects' });
+  const stages    = state.stages?.length    ? state.stages    : await remoteQuery({ action: 'select', table: 'project_stages' });
+  const stageSlots = state.stageSlots?.length ? state.stageSlots : await remoteQuery({ action: 'select', table: 'stage_slots' });
 
   // ── Lokale data: offertes & projecten ──
   const openQuotes     = quotes.filter(q => q.status === 'draft' || q.status === 'sent');
@@ -6200,6 +6292,27 @@ async function computeBusinessSnapshot() {
   // ze blijven gewoon 'active' (zichtbaar in Gantt/kalender), maar tellen hier niet mee.
   const activeProjects = projects.filter(p => p.status === 'active' && !p.exclude_from_analysis);
 
+  // Projectbelasting moet de Gantt-planning meewegen: een project dat pas over 2
+  // maanden ingepland staat, drukt nu nog niet op de capaciteit. We pakken de
+  // vroegste ingeplande startdatum (via stage_slots, met fallback op de oudere
+  // project_stages.start_date en als laatste op het project zelf) — pas als die
+  // datum in het verleden of heden ligt (of er is geen planning bekend) telt het
+  // project mee als "actief belastend".
+  const projectEarliestStart = proj => {
+    const stageIds = new Set(stages.filter(s => s.project_id === proj.id).map(s => s.id));
+    const dates = [];
+    stageSlots.forEach(sl => { if (stageIds.has(sl.stage_id) && sl.start_date) dates.push(new Date(sl.start_date)); });
+    stages.forEach(s => { if (s.project_id === proj.id && s.start_date) dates.push(new Date(s.start_date)); });
+    if (dates.length) return new Date(Math.min(...dates.map(d => d.getTime())));
+    return proj.start_date ? new Date(proj.start_date) : null;
+  };
+  const isProjectStarted = proj => {
+    const es = projectEarliestStart(proj);
+    return !es || es <= now;
+  };
+  const currentlyActiveProjects = activeProjects.filter(isProjectStarted);
+  const upcomingProjects        = activeProjects.filter(p => !isProjectStarted(p));
+
   // Een geaccepteerde offerte waarvan het gekoppelde project al "Afgerond" is, is al
   // geleverd (en vrijwel zeker al gefactureerd) — die hoort niet meer in de orderport-
   // efeuille (toekomstige, nog te factureren omzet). Koppeling via project_name/naam,
@@ -6216,6 +6329,39 @@ async function computeBusinessSnapshot() {
     const proj = findLinkedProject(q);
     (proj && proj.status === 'done' ? fulfilledQuotes : acceptedQuotes).push(q);
   });
+
+  // Kosten per project, via Moneybird's eigen Project-koppeling op inkoopfactuur-
+  // regels (purchase_invoice.details[].project_id) — matcht op projectnaam met onze
+  // eigen projects-tabel, zelfde aanpak als findLinkedProject hierboven voor offertes.
+  // Moneybird-projecten zonder match (bv. naam wijkt af) worden apart getoond i.p.v.
+  // stilletjes genegeerd, zodat een naamsverschil opvalt in plaats van data te verliezen.
+  const costsError = purchaseInvoices === null || mbProjects === null;
+  const mbProjectNameById = new Map((mbProjects || []).map(p => [p.id, p.name]));
+  const costByMbProjectId = new Map(); // mbProjectId -> { name, cost }
+  (purchaseInvoices || []).forEach(inv => {
+    (inv.details || []).forEach(d => {
+      if (!d.project_id) return;
+      const projName = mbProjectNameById.get(d.project_id);
+      if (!projName) return;
+      const amount = Number(d.total_price_excl_tax_with_discount) || 0;
+      const entry = costByMbProjectId.get(d.project_id) || { name: projName, cost: 0 };
+      entry.cost += amount;
+      costByMbProjectId.set(d.project_id, entry);
+    });
+  });
+  const costsByProject = [];
+  const unmatchedProjectCosts = [];
+  costByMbProjectId.forEach((entry, mbId) => {
+    // Eerst de handmatige koppeling (moneybird_project_id) checken — die wint altijd
+    // over naam-matching, zodat een eerder gelegde koppeling niet weer "verdwijnt"
+    // zodra iemand de naam in Moneybird of deze app wijzigt.
+    const linked = projects.find(p => p.moneybird_project_id && String(p.moneybird_project_id) === String(mbId));
+    const localMatch = linked || projects.find(p => p.name.trim().toLowerCase() === entry.name.trim().toLowerCase());
+    if (localMatch) costsByProject.push({ name: localMatch.name, cost: entry.cost });
+    else unmatchedProjectCosts.push({ name: entry.name, cost: entry.cost, mbProjectId: mbId });
+  });
+  costsByProject.sort((a, b) => b.cost - a.cost);
+  unmatchedProjectCosts.sort((a, b) => b.cost - a.cost);
 
   const sumPrice = list => list.reduce((s, q) => s + (Number(q.total_price) || 0), 0);
   const openQuotesValue     = sumPrice(openQuotes);
@@ -6284,7 +6430,9 @@ async function computeBusinessSnapshot() {
     moneybirdError,
     thisMonthRevenue, lastMonthRevenue, revenueTrend6mo, avgMonthlyRevenue3mo,
     outstanding, outstandingLastMonth, overdueCount,
+    costsError, costsByProject, unmatchedProjectCosts,
     activeProjects, longRunningProjects,
+    currentlyActiveProjects, upcomingProjects,
     openQuotes, openQuotesValue,
     acceptedQuotes, orderportefeuille,
     fulfilledQuotes, fulfilledQuotesValue,
@@ -6340,8 +6488,10 @@ function computeBusinessScore(snap) {
   // Facturen: punten aftrek per te-laat-factuur
   const facturenScore = snap.moneybirdError ? 5 : Math.max(0, 10 - snap.overdueCount * 2);
 
-  // Projectbelasting: ideaal binnen [min,max], daarbuiten aftrek per project
-  const n = snap.activeProjects.length;
+  // Projectbelasting: ideaal binnen [min,max], daarbuiten aftrek per project.
+  // Telt alleen projecten die volgens de Gantt-planning al gestart zijn —
+  // werk dat pas over een paar maanden begint, drukt nu nog niet op de capaciteit.
+  const n = snap.currentlyActiveProjects.length;
   const { idealActiveProjectsMin: lo, idealActiveProjectsMax: hi } = BIZ_THRESHOLDS;
   const projectScore = (n >= lo && n <= hi) ? 10 : Math.max(0, 10 - Math.abs(n < lo ? lo - n : n - hi) * 1.5);
 
@@ -6398,8 +6548,17 @@ function buildSnapshotContextText(snap) {
   lines.push(`Datum: ${toDateStr(new Date(snap.generatedAt))}`);
   lines.push(`Aantal klanten: ${snap.clientCount}`);
   lines.push(`Lopende projecten: ${snap.activeProjects.length}${snap.longRunningProjects.length ? ` (waarvan ${snap.longRunningProjects.length} al langer dan ${BIZ_THRESHOLDS.longRunningProjectDays} dagen actief: ${snap.longRunningProjects.map(p => p.name).join(', ')})` : ''}`);
+  if (snap.upcomingProjects.length) {
+    lines.push(`Daarvan staat ${snap.upcomingProjects.length} pas in de toekomst ingepland in de Gantt-planning (telt nog niet als capaciteitsbelasting): ${snap.upcomingProjects.map(p => p.name).join(', ')}`);
+  }
   lines.push(`Openstaande offertes: ${snap.openQuotes.length} stuks, totale waarde ${fmtEur(snap.openQuotesValue)}`);
   lines.push(`Orderportefeuille (geaccepteerde offertes, nog te factureren): ${fmtEur(snap.orderportefeuille)} (${snap.acceptedQuotes.length} offertes)`);
+  if (!snap.costsError && (snap.costsByProject.length || snap.unmatchedProjectCosts.length)) {
+    lines.push(`Kosten per project (via Moneybird-Project-koppeling op inkoopfacturen, excl. BTW): ${snap.costsByProject.map(c => `${c.name}: ${fmtEur(c.cost)}`).join(', ')}`);
+    if (snap.unmatchedProjectCosts.length) {
+      lines.push(`Kosten op Moneybird-projecten zonder match in deze app (naam wijkt mogelijk af): ${snap.unmatchedProjectCosts.map(c => `${c.name}: ${fmtEur(c.cost)}`).join(', ')}`);
+    }
+  }
   if (snap.fulfilledQuotes.length) {
     lines.push(`Afgerond en al geleverd (project afgerond, bewust niet meegeteld in orderportefeuille): ${snap.fulfilledQuotes.length} offertes, ${fmtEur(snap.fulfilledQuotesValue)}`);
   }

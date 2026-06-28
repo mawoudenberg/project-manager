@@ -2490,7 +2490,7 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
   grid-template-columns: minmax(220px, 1fr) 2fr;
   gap: 12px;
 }
-.biz-score-card, .biz-warnings-card, .biz-reminders-card, .biz-trend-card, .biz-insights-card, .biz-chat-card {
+.biz-score-card, .biz-warnings-card, .biz-reminders-card, .biz-trend-card, .biz-costs-card, .biz-insights-card, .biz-chat-card {
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -2523,6 +2523,21 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .biz-snooze-date { font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg2); color: var(--text); }
 .biz-warnings-list li { line-height: 1.4; }
 .biz-empty-sub { font-size: 13px; color: var(--text2); }
+
+.biz-costs-list { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.biz-costs-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.biz-costs-list .biz-costs-name { color: var(--text); flex: 1; min-width: 120px; }
+.biz-costs-list .biz-costs-amount { font-weight: 600; flex-shrink: 0; }
+.biz-costs-list li.biz-costs-unmatched .biz-costs-name { color: var(--text2); font-style: italic; }
+.biz-costs-list .biz-costs-link { flex-shrink: 0; }
+.biz-link-mb-project {
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg2);
+  color: var(--text);
+}
 
 .biz-trend-bars {
   display: flex;
