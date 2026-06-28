@@ -287,9 +287,15 @@ async function changeQuoteStatus(quote, newStatus) {
   if (newStatus === 'rejected') moveProjectFolder(linkName, 'rejected');
 }
 
-async function snoozeQuoteReminder(quoteId) {
-  const until = new Date();
-  until.setMonth(until.getMonth() + 1);
+function computeSnoozeUntil(preset) {
+  const d = new Date();
+  if (preset === '1d') d.setDate(d.getDate() + 1);
+  else if (preset === '1w') d.setDate(d.getDate() + 7);
+  else if (preset === '1m') d.setMonth(d.getMonth() + 1);
+  return d;
+}
+
+async function snoozeQuoteReminder(quoteId, until) {
   await remoteQuery({ action: 'update', table: 'quotes', data: { later_snoozed_until: until.toISOString() }, where: { id: quoteId } });
 }
 
@@ -4317,7 +4323,17 @@ function renderBizDashboardContent(snap) {
             const ageDays = Math.floor((Date.now() - since) / 86400000);
             return `<li>
               <span>${escHtml(q.name)} — al ${ageDays} dagen op "later" (${fmtEur(q.total_price)})</span>
-              <button class="btn btn-secondary btn-sm biz-snooze-btn" data-id="${q.id}">😴 Snooze 1 maand</button>
+              <div class="biz-snooze-controls">
+                <select class="biz-snooze-select" data-id="${q.id}">
+                  <option value="" selected disabled>😴 Snooze…</option>
+                  <option value="1d">1 dag</option>
+                  <option value="1w">1 week</option>
+                  <option value="1m">1 maand</option>
+                  <option value="custom">📅 Specifieke datum…</option>
+                </select>
+                <input type="date" class="biz-snooze-date hidden" data-id="${q.id}" />
+                <button class="btn btn-secondary btn-sm biz-snooze-apply hidden" data-id="${q.id}">Snooze</button>
+              </div>
             </li>`;
           }).join('')}</ul>`
         : `<p class="biz-empty-sub">Geen "later"-offertes die langer dan ${BIZ_THRESHOLDS.laterReminderDays} dagen wachten op een follow-up.</p>`}
@@ -4358,12 +4374,29 @@ function renderBizDashboardContent(snap) {
   </div>`;
 
   document.getElementById('biz-refresh-btn').onclick = () => refreshBizInsights(snap);
-  document.querySelectorAll('.biz-snooze-btn').forEach(btn => {
-    btn.onclick = async () => {
-      await snoozeQuoteReminder(parseInt(btn.dataset.id));
-      toast('Herinnering uitgesteld met 1 maand');
-      snap.staleLaterQuotes = snap.staleLaterQuotes.filter(q => q.id != btn.dataset.id);
-      renderBizDashboardContent(snap);
+
+  const applySnooze = async (quoteId, until, label) => {
+    await snoozeQuoteReminder(quoteId, until);
+    toast(`Herinnering uitgesteld tot ${label}`);
+    snap.staleLaterQuotes = snap.staleLaterQuotes.filter(q => q.id != quoteId);
+    renderBizDashboardContent(snap);
+  };
+  document.querySelectorAll('.biz-snooze-select').forEach(sel => {
+    const id = parseInt(sel.dataset.id);
+    const dateInput = document.querySelector(`.biz-snooze-date[data-id="${sel.dataset.id}"]`);
+    const applyBtn  = document.querySelector(`.biz-snooze-apply[data-id="${sel.dataset.id}"]`);
+    sel.onchange = async () => {
+      if (sel.value === 'custom') {
+        dateInput.classList.remove('hidden');
+        applyBtn.classList.remove('hidden');
+        return;
+      }
+      const labels = { '1d': '1 dag', '1w': '1 week', '1m': '1 maand' };
+      await applySnooze(id, computeSnoozeUntil(sel.value), labels[sel.value]);
+    };
+    applyBtn.onclick = async () => {
+      if (!dateInput.value) { shake(dateInput); return; }
+      await applySnooze(id, new Date(dateInput.value), dateInput.value);
     };
   });
   renderBizChatMessages();

@@ -2511,6 +2511,16 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 
 .biz-reminders-list { list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
 .biz-reminders-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.biz-snooze-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.biz-snooze-select {
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg2);
+  color: var(--text);
+}
+.biz-snooze-date { font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg2); color: var(--text); }
 .biz-warnings-list li { line-height: 1.4; }
 .biz-empty-sub { font-size: 13px; color: var(--text2); }
 
