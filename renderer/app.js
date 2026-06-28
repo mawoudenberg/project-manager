@@ -4267,7 +4267,7 @@ function renderBizDashboardContent(snap) {
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📅 Orderportefeuille</div>
         <div class="biz-kpi-value">${fmtEur(snap.orderportefeuille)}</div>
-        <div class="biz-kpi-sub">${snap.acceptedQuotes.length} geaccepteerde offertes</div>
+        <div class="biz-kpi-sub">${snap.acceptedQuotes.length} geaccepteerde offertes${snap.fulfilledQuotes.length ? `<br>+ ${snap.fulfilledQuotes.length} afgerond (${fmtEur(snap.fulfilledQuotesValue)}, al geleverd, niet meegeteld)` : ''}</div>
       </div>
     </div>
 
@@ -6072,7 +6072,6 @@ async function computeBusinessSnapshot() {
 
   // ── Lokale data: offertes & projecten ──
   const openQuotes     = quotes.filter(q => q.status === 'draft' || q.status === 'sent');
-  const acceptedQuotes = quotes.filter(q => q.status === 'accepted');
   // "later"-offertes (nog niet relevant, bv. seizoensgebonden) horen niet bij de actieve
   // pijplijn — ze tellen niet mee in openQuotesValue/orderportefeuille, maar worden wel
   // los getoond zodat ze niet uit het zicht verdwijnen.
@@ -6081,10 +6080,28 @@ async function computeBusinessSnapshot() {
   // ze blijven gewoon 'active' (zichtbaar in Gantt/kalender), maar tellen hier niet mee.
   const activeProjects = projects.filter(p => p.status === 'active' && !p.exclude_from_analysis);
 
+  // Een geaccepteerde offerte waarvan het gekoppelde project al "Afgerond" is, is al
+  // geleverd (en vrijwel zeker al gefactureerd) — die hoort niet meer in de orderport-
+  // efeuille (toekomstige, nog te factureren omzet). Koppeling via project_name/naam,
+  // zelfde matching als createProjectFromQuote elders in dit bestand.
+  const findLinkedProject = q => {
+    const linkName = (q.project_name || q.name || '').trim().toLowerCase();
+    if (!linkName) return null;
+    return projects.find(p => p.name.trim().toLowerCase() === linkName) || null;
+  };
+  const allAcceptedQuotes = quotes.filter(q => q.status === 'accepted');
+  const acceptedQuotes = [];       // nog te factureren -> telt mee in orderportefeuille
+  const fulfilledQuotes = [];      // project al afgerond -> al geleverd, niet meetellen
+  allAcceptedQuotes.forEach(q => {
+    const proj = findLinkedProject(q);
+    (proj && proj.status === 'done' ? fulfilledQuotes : acceptedQuotes).push(q);
+  });
+
   const sumPrice = list => list.reduce((s, q) => s + (Number(q.total_price) || 0), 0);
   const openQuotesValue     = sumPrice(openQuotes);
   const orderportefeuille   = sumPrice(acceptedQuotes);
   const laterQuotesValue    = sumPrice(laterQuotes);
+  const fulfilledQuotesValue = sumPrice(fulfilledQuotes);
 
   const daysAgo = n => new Date(now.getTime() - n * 86400000);
   const quoteCreated = q => new Date(q.created_at || q.quote_date);
@@ -6145,6 +6162,7 @@ async function computeBusinessSnapshot() {
     activeProjects, longRunningProjects,
     openQuotes, openQuotesValue,
     acceptedQuotes, orderportefeuille,
+    fulfilledQuotes, fulfilledQuotesValue,
     laterQuotes, laterQuotesValue,
     newQuotes30d, newQuotesPrev30d,
     clientCount: state.clients?.length || 0,
@@ -6256,6 +6274,9 @@ function buildSnapshotContextText(snap) {
   lines.push(`Lopende projecten: ${snap.activeProjects.length}${snap.longRunningProjects.length ? ` (waarvan ${snap.longRunningProjects.length} al langer dan ${BIZ_THRESHOLDS.longRunningProjectDays} dagen actief: ${snap.longRunningProjects.map(p => p.name).join(', ')})` : ''}`);
   lines.push(`Openstaande offertes: ${snap.openQuotes.length} stuks, totale waarde ${fmtEur(snap.openQuotesValue)}`);
   lines.push(`Orderportefeuille (geaccepteerde offertes, nog te factureren): ${fmtEur(snap.orderportefeuille)} (${snap.acceptedQuotes.length} offertes)`);
+  if (snap.fulfilledQuotes.length) {
+    lines.push(`Afgerond en al geleverd (project afgerond, bewust niet meegeteld in orderportefeuille): ${snap.fulfilledQuotes.length} offertes, ${fmtEur(snap.fulfilledQuotesValue)}`);
+  }
   if (snap.laterQuotes.length) {
     lines.push(`Uitgesteld/later (bewust niet meegeteld in de actieve pijplijn, bv. seizoensgebonden): ${snap.laterQuotes.length} offertes, ${fmtEur(snap.laterQuotesValue)} — ${snap.laterQuotes.map(q => q.name).join(', ')}`);
   }
