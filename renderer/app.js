@@ -246,13 +246,34 @@ async function linkQuoteToProject(name) {
   const projectName = (name || '').trim();
   if (!projectName) return;
   qe.project_name = projectName;
-  if (qe.id) {
-    try {
-      await remoteQuery({ action: 'update', table: 'quotes', data: { project_name: projectName }, where: { id: qe.id } });
-    } catch (e) {
-      console.warn('linkQuoteToProject failed:', e);
-    }
+  await persistQuoteProjectLink(qe.id, projectName);
+}
+
+async function persistQuoteProjectLink(quoteId, projectName) {
+  if (!quoteId || !projectName) return;
+  try {
+    await remoteQuery({ action: 'update', table: 'quotes', data: { project_name: projectName }, where: { id: quoteId } });
+  } catch (e) {
+    console.warn('persistQuoteProjectLink failed:', e);
   }
+}
+
+// Gedeelde status-wijzigingslogica voor offertes — gebruikt door zowel de offerte-editor
+// als de inline dropdown in het offerteoverzicht, zodat project/map-koppeling overal
+// hetzelfde gedrag heeft. `quote` moet minstens {id, name, project_name, status} hebben;
+// wordt in-place gemuteerd (zelfde object teruggeven aan de aanroeper is dan niet nodig).
+async function changeQuoteStatus(quote, newStatus) {
+  quote.status = newStatus;
+  if (!quote.id) return;
+  await remoteQuery({ action: 'update', table: 'quotes', data: { status: newStatus }, where: { id: quote.id } });
+  const linkName = (quote.project_name || quote.name || '').trim();
+  if (!linkName) return;
+  if (newStatus === 'sent' || newStatus === 'accepted') {
+    createProjectFromQuote(linkName, true);
+    quote.project_name = linkName;
+    await persistQuoteProjectLink(quote.id, linkName);
+  }
+  if (newStatus === 'rejected') moveProjectFolder(linkName, 'rejected');
 }
 
 async function createProjectFolder(name) {
@@ -4239,7 +4260,7 @@ function renderBizDashboardContent(snap) {
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📋 Openstaande offertes</div>
         <div class="biz-kpi-value">${fmtEur(snap.openQuotesValue)}</div>
-        <div class="biz-kpi-sub">${snap.openQuotes.length} offertes</div>
+        <div class="biz-kpi-sub">${snap.openQuotes.length} offertes${snap.laterQuotes.length ? `<br>+ ${snap.laterQuotes.length} op "later" (${fmtEur(snap.laterQuotesValue)}, niet meegeteld)` : ''}</div>
       </div>
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📅 Orderportefeuille</div>
@@ -4438,7 +4459,7 @@ async function renderQuoteList() {
   const quotes = await remoteQuery({
     action: 'select',
     table: 'quotes',
-    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status'],
+    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'project_name'],
   });
 
   if (!Array.isArray(quotes) || quotes.length === 0) {
@@ -4465,12 +4486,28 @@ async function renderQuoteList() {
       <td>${escHtml(q.client)}</td>
       <td>${q.quote_date || '—'}</td>
       <td class="amount qt-total${hasTotal ? '' : ' loading'}" id="qt-total-${q.id}">${hasTotal ? fmtEur(q.total_price) : '…'}</td>
-      <td><span class="badge badge-${q.status}">${fmtQuoteStatus(q.status)}</span></td>
+      <td>
+        <select class="badge badge-${q.status} quote-status-select" data-id="${q.id}">
+          ${quoteStatusOptionsHtml(q.status)}
+        </select>
+      </td>
       <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
   });
   html += `</tbody></table>`;
   document.getElementById('content').innerHTML = html;
+
+  document.querySelectorAll('.quote-status-select').forEach(select => {
+    select.onclick = e => e.stopPropagation(); // niet de offerte openen
+    select.onchange = async (e) => {
+      const quote = quotes.find(q => q.id == select.dataset.id);
+      if (!quote) return;
+      const newStatus = e.target.value;
+      await changeQuoteStatus(quote, newStatus);
+      select.className = `badge badge-${newStatus} quote-status-select`;
+      toast('Status bijgewerkt');
+    };
+  });
 
   document.querySelectorAll('.quote-row').forEach(row => {
     row.onclick = async () => {
@@ -4776,10 +4813,7 @@ function renderQuoteEditorView() {
         <input class="qi-input qe-name"   id="qe-name"   value="${escHtml(qe.name)}"       placeholder="Projectnaam *" />
         <input class="qi-input qe-date"   id="qe-date"   type="date" value="${qe.quote_date}" />
         <select class="qi-input qe-status" id="qe-status">
-          <option value="draft"    ${qe.status==='draft'    ?'selected':''}>Concept</option>
-          <option value="sent"     ${qe.status==='sent'     ?'selected':''}>Verzonden</option>
-          <option value="accepted" ${qe.status==='accepted' ?'selected':''}>Geaccepteerd</option>
-          <option value="rejected" ${qe.status==='rejected' ?'selected':''}>Afgewezen</option>
+          ${quoteStatusOptionsHtml(qe.status)}
         </select>
       </div>
     </div>
@@ -5029,17 +5063,11 @@ function renderQuoteEditorView() {
   };
   document.getElementById('qe-date').addEventListener('change',   e => { qe.quote_date = e.target.value; markQEDirty(); });
   document.getElementById('qe-status').addEventListener('change', async e => {
-    qe.status = e.target.value;
     if (qe.id) {
-      await remoteQuery({ action: 'update', table: 'quotes', data: { status: qe.status }, where: { id: qe.id } });
+      await changeQuoteStatus(qe, e.target.value);
       toast('Status opgeslagen');
-      const linkName = quoteProjectName();
-      if (qe.status === 'sent' || qe.status === 'accepted') {
-        createProjectFromQuote(linkName, true);
-        await linkQuoteToProject(linkName);
-      }
-      if (qe.status === 'rejected') moveProjectFolder(linkName, 'rejected'); // no-op if no folder exists yet
     } else {
+      qe.status = e.target.value;
       markQEDirty();
     }
   });
@@ -6043,11 +6071,16 @@ async function computeBusinessSnapshot() {
   // ── Lokale data: offertes & projecten ──
   const openQuotes     = quotes.filter(q => q.status === 'draft' || q.status === 'sent');
   const acceptedQuotes = quotes.filter(q => q.status === 'accepted');
+  // "later"-offertes (nog niet relevant, bv. seizoensgebonden) horen niet bij de actieve
+  // pijplijn — ze tellen niet mee in openQuotesValue/orderportefeuille, maar worden wel
+  // los getoond zodat ze niet uit het zicht verdwijnen.
+  const laterQuotes    = quotes.filter(q => q.status === 'later');
   const activeProjects = projects.filter(p => p.status === 'active');
 
   const sumPrice = list => list.reduce((s, q) => s + (Number(q.total_price) || 0), 0);
   const openQuotesValue     = sumPrice(openQuotes);
   const orderportefeuille   = sumPrice(acceptedQuotes);
+  const laterQuotesValue    = sumPrice(laterQuotes);
 
   const daysAgo = n => new Date(now.getTime() - n * 86400000);
   const quoteCreated = q => new Date(q.created_at || q.quote_date);
@@ -6108,6 +6141,7 @@ async function computeBusinessSnapshot() {
     activeProjects, longRunningProjects,
     openQuotes, openQuotesValue,
     acceptedQuotes, orderportefeuille,
+    laterQuotes, laterQuotesValue,
     newQuotes30d, newQuotesPrev30d,
     clientCount: state.clients?.length || 0,
   };
@@ -6218,6 +6252,9 @@ function buildSnapshotContextText(snap) {
   lines.push(`Lopende projecten: ${snap.activeProjects.length}${snap.longRunningProjects.length ? ` (waarvan ${snap.longRunningProjects.length} al langer dan ${BIZ_THRESHOLDS.longRunningProjectDays} dagen actief: ${snap.longRunningProjects.map(p => p.name).join(', ')})` : ''}`);
   lines.push(`Openstaande offertes: ${snap.openQuotes.length} stuks, totale waarde ${fmtEur(snap.openQuotesValue)}`);
   lines.push(`Orderportefeuille (geaccepteerde offertes, nog te factureren): ${fmtEur(snap.orderportefeuille)} (${snap.acceptedQuotes.length} offertes)`);
+  if (snap.laterQuotes.length) {
+    lines.push(`Uitgesteld/later (bewust niet meegeteld in de actieve pijplijn, bv. seizoensgebonden): ${snap.laterQuotes.length} offertes, ${fmtEur(snap.laterQuotesValue)} — ${snap.laterQuotes.map(q => q.name).join(', ')}`);
+  }
   lines.push(`Nieuwe offertes laatste 30 dagen: ${snap.newQuotes30d} (voorgaande 30 dagen: ${snap.newQuotesPrev30d})`);
   if (snap.moneybirdError) {
     lines.push(`Moneybird-factuurdata kon niet worden opgehaald — geen omzet-/factuurcijfers beschikbaar.`);
@@ -6810,7 +6847,13 @@ function fmtEur(n) {
 }
 
 function fmtQuoteStatus(s) {
-  return { draft: 'Concept', sent: 'Verzonden', accepted: 'Geaccepteerd', rejected: 'Afgewezen' }[s] || s;
+  return { draft: 'Concept', sent: 'Verzonden', accepted: 'Geaccepteerd', rejected: 'Afgewezen', later: 'Later' }[s] || s;
+}
+
+const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'later'];
+
+function quoteStatusOptionsHtml(selected) {
+  return QUOTE_STATUSES.map(s => `<option value="${s}" ${s === selected ? 'selected' : ''}>${fmtQuoteStatus(s)}</option>`).join('');
 }
 
 /* ─── Team Members ───────────────────────────────────────────────────────────── */
