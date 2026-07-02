@@ -242,6 +242,28 @@ function quoteProjectName() {
   return (qe.project_name || qe.name || '').trim();
 }
 
+// Een lokaal project kan aan MEERDERE Moneybird-projecten gekoppeld zijn (zelfde
+// klus staat soms onder verschillende namen/tags in Moneybird). Daarom is
+// moneybird_project_id een kommagescheiden lijst van Moneybird-project-ID's.
+function mbIdsOf(proj) {
+  return String((proj && proj.moneybird_project_id) || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+}
+
+// Het project waar een offerte bij hoort (zelfde naam-koppeling als elders).
+function quoteLinkedProject(q) {
+  const linkName = (q.project_name || q.name || '').trim().toLowerCase();
+  if (!linkName) return null;
+  return state.projects.find(p => p.name.trim().toLowerCase() === linkName) || null;
+}
+// Afgeleid: een geaccepteerde offerte waarvan het gekoppelde project 'done' is,
+// geldt als afgerond (al geleverd). Puur visueel — verandert de status niet.
+function isQuoteFulfilled(q) {
+  if (q.status !== 'accepted') return false;
+  const p = quoteLinkedProject(q);
+  return !!(p && p.status === 'done');
+}
+
 async function linkQuoteToProject(name) {
   const projectName = (name || '').trim();
   if (!projectName) return;
@@ -2544,7 +2566,7 @@ function closeProjectModal() {
 function wireProjectModal() {
   document.getElementById('proj-cancel').onclick = closeProjectModal;
 
-  document.getElementById('project-modal').addEventListener('click', e => {
+  document.getElementById('project-modal').addEventListener('mousedown', e => {
     if (e.target === document.getElementById('project-modal')) closeProjectModal();
   });
 
@@ -2756,7 +2778,7 @@ function buildStageColorSwatches(selected) {
 
 function wireStageModal() {
   document.getElementById('stage-cancel').onclick = closeStageModal;
-  document.getElementById('stage-modal').addEventListener('click', e => {
+  document.getElementById('stage-modal').addEventListener('mousedown', e => {
     if (e.target === document.getElementById('stage-modal')) closeStageModal();
   });
 
@@ -3461,7 +3483,7 @@ function wireTaskModal() {
   };
 
   // Close on overlay click
-  document.getElementById('task-modal').addEventListener('click', e => {
+  document.getElementById('task-modal').addEventListener('mousedown', e => {
     if (e.target === document.getElementById('task-modal')) closeTaskModal();
   });
 }
@@ -3515,7 +3537,7 @@ function wireListModal() {
     toast('Lijst verwijderd');
   };
 
-  document.getElementById('list-modal').addEventListener('click', e => {
+  document.getElementById('list-modal').addEventListener('mousedown', e => {
     if (e.target === document.getElementById('list-modal')) closeListModal();
   });
 }
@@ -3788,7 +3810,7 @@ function wireSettings() {
     toast('Instellingen opgeslagen');
   };
 
-  document.getElementById('settings-modal').addEventListener('click', e => {
+  document.getElementById('settings-modal').addEventListener('mousedown', e => {
     if (e.target === document.getElementById('settings-modal'))
       document.getElementById('settings-modal').classList.add('hidden');
   });
@@ -4310,7 +4332,8 @@ function renderBizDashboardContent(snap) {
   const warnings = computeWarnings(snap);
   const score = computeBusinessScore(snap);
 
-  const revChangePct = pctChange(snap.thisMonthRevenue, snap.lastMonthRevenue);
+  const dayOfMonth = new Date().getDate();
+  const revChangePct = dayOfMonth <= 7 ? null : pctChange(snap.thisMonthRevenue, snap.lastMonthRevenue);
   // Voor openstaande facturen is een dáling juist positief, dus het teken omdraaien.
   const outChangePct = pctChange(snap.outstanding.sum, snap.outstandingLastMonth.sum);
 
@@ -4348,7 +4371,7 @@ function renderBizDashboardContent(snap) {
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📂 Lopende projecten</div>
         <div class="biz-kpi-value">${snap.activeProjects.length}</div>
-        <div class="biz-kpi-sub">${snap.upcomingProjects.length ? `waarvan ${snap.upcomingProjects.length} nog ingepland (telt nog niet als belasting)` : ''}</div>
+        <div class="biz-kpi-sub">${snap.unplannedProjects.length ? `waarvan ${snap.unplannedProjects.length} nog niet ingepland` : ''}</div>
       </div>
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📋 Openstaande offertes</div>
@@ -4359,6 +4382,13 @@ function renderBizDashboardContent(snap) {
         <div class="biz-kpi-label">📅 Orderportefeuille</div>
         <div class="biz-kpi-value">${fmtEur(snap.orderportefeuille)}</div>
         <div class="biz-kpi-sub">${snap.acceptedQuotes.length} geaccepteerde offertes${snap.fulfilledQuotes.length ? `<br>+ ${snap.fulfilledQuotes.length} afgerond (${fmtEur(snap.fulfilledQuotesValue)}, al geleverd, niet meegeteld)` : ''}</div>
+      </div>
+      <div class="biz-kpi-card">
+        <div class="biz-kpi-label">⏱️ Effectief uurloon (dit jaar)</div>
+        <div class="biz-kpi-value">${snap.effectiveHourlyRate != null ? fmtEur(snap.effectiveHourlyRate) + '/u' : '—'}</div>
+        <div class="biz-kpi-sub">${snap.effectiveHourlyRate != null
+          ? `${fmtEur(snap.profitYTD)} winst ÷ ${Math.round(snap.hoursYTD)} u (2 man, t/m nu)`
+          : (snap.moneybirdError ? 'Moneybird niet bereikbaar' : 'Geen kostendata beschikbaar')}</div>
       </div>
     </div>
 
@@ -4408,20 +4438,111 @@ function renderBizDashboardContent(snap) {
           </div>`}
     </div>
 
+    <div class="biz-trend-card">
+      <div class="biz-card-title">⏱️ Uurloon trend (laatste 6 maanden)</div>
+      ${snap.moneybirdError || !snap.hourlyRateTrend6mo.length
+        ? `<p class="biz-empty-sub">Moneybird-data niet beschikbaar.</p>`
+        : (() => {
+            const rates = snap.hourlyRateTrend6mo.map(m => m.rate);
+            const avgs  = snap.hourlyRateTrend6mo.map(m => m.avg3mo);
+            const maxVal = Math.max(1, ...rates.map(Math.abs), ...avgs.map(Math.abs));
+            const toH = v => Math.max(2, (Math.abs(v) / maxVal) * 100);
+            return `<div class="biz-trend-bars">
+              ${snap.hourlyRateTrend6mo.map(m => `
+                <div class="biz-trend-col">
+                  <div class="biz-trend-bar-track biz-trend-bar-track--dual">
+                    <div class="biz-trend-bar${m.rate < 0 ? ' biz-trend-bar--neg' : ''}" style="height:${toH(m.rate)}%" title="${fmtEur(m.rate)}/u"></div>
+                    <div class="biz-trend-avg-line" style="bottom:${toH(m.avg3mo)}%" title="3mnd gem: ${fmtEur(m.avg3mo)}/u"></div>
+                  </div>
+                  <div class="biz-trend-label">${m.label}</div>
+                  <div class="biz-trend-val${m.rate < 0 ? ' biz-trend-val--neg' : ''}">${fmtEur(m.rate)}</div>
+                </div>`).join('')}
+            </div>
+            <div class="biz-trend-legend"><span class="biz-trend-legend-avg">— 3 mnd gemiddelde</span></div>`;
+          })()}
+    </div>
+
     <div class="biz-costs-card">
-      <div class="biz-card-title">💸 Kosten per project</div>
+      <div class="biz-card-title">📊 Winst per project: prognose vs. daadwerkelijk</div>
+      <p class="biz-empty-sub">Alleen afgesloten projecten — bij een lopend project kunnen nog kosten bijkomen of moet de eindfactuur nog verstuurd worden.</p>
       ${snap.costsError
         ? `<p class="biz-empty-sub">Moneybird-kosten/projectdata niet beschikbaar.</p>`
-        : (snap.costsByProject.length || snap.unmatchedProjectCosts.length)
-          ? `<ul class="biz-costs-list">
-              ${snap.costsByProject.map(c => `<li><span class="biz-costs-name">${escHtml(c.name)}</span><span class="biz-costs-amount">${fmtEur(c.cost)}</span></li>`).join('')}
-              ${snap.unmatchedProjectCosts.map(c => `<li class="biz-costs-unmatched">
-                  <span class="biz-costs-name">${escHtml(c.name)} (geen match in deze app)</span>
-                  <span class="biz-costs-link">${unmatchedCostLinkHtml(c)}</span>
-                  <span class="biz-costs-amount">${fmtEur(c.cost)}</span>
-                </li>`).join('')}
-            </ul>`
-          : `<p class="biz-empty-sub">Geen kosten gevonden die in Moneybird aan een Project zijn gekoppeld.</p>`}
+        : (snap.projectMargins.length || snap.unmatchedProjectCosts.length || snap.explicitMbLinks.length)
+          ? `<div class="pm-table">
+              <div class="pm-row pm-hdr">
+                <span></span>
+                <span>Prognose winst</span>
+                <span>Daadwerkelijke winst</span>
+                <span></span>
+              </div>
+              ${snap.projectMargins.map(m => {
+                const delta = m.profitRatioPct === null ? null : m.profitRatioPct - 100;
+                // Percentage kleur: drempel op delta (t.o.v. prognose)
+                const pctClass = delta === null ? '' : delta < -50 ? 'biz-margin-bad' : delta < -10 ? 'biz-margin-warn' : 'biz-margin-good';
+                // Winstbedrag: altijd groen tenzij verlies (negatief)
+                const profitClass = m.actualProfit < 0 ? 'biz-margin-bad' : 'biz-margin-good';
+                let col2, col3, col4;
+                if (m.hasQuote) {
+                  col2 = `${fmtEur(m.estimatedProfit)}${m.revenueIsActual ? '' : ' <span class="biz-margin-note" title="Nog geen omzet getagd in Moneybird">*</span>'}`;
+                  col3 = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
+                  col4 = m.profitRatioPct !== null ? `<span class="pm-pct ${pctClass}">${fmtProfitDelta(m.profitRatioPct)}</span>` : '';
+                } else if (m.revenueIsActual) {
+                  col2 = `<span class="biz-margin-note">Gef. ${fmtEur(m.actualRevenue)}</span>`;
+                  col3 = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
+                  col4 = '';
+                } else {
+                  col2 = '';
+                  col3 = `<span class="biz-margin-note">Kosten: ${fmtEur(m.cost)}</span>`;
+                  col4 = '';
+                }
+                return `<div class="pm-row">
+                  <span class="pm-name">${escHtml(m.name)}</span>
+                  <span class="pm-col-est">${col2}</span>
+                  <span class="pm-col-actual">${col3}</span>
+                  <span class="pm-col-pct">${col4}</span>
+                </div>`;
+              }).join('')}
+              ${(() => {
+                const hidden = new Set(JSON.parse(localStorage.getItem('pm_hidden_mb_projects') || '[]'));
+                const visible = snap.unmatchedProjectCosts.filter(c => !hidden.has(c.name.toLowerCase()));
+                const hiddenItems = snap.unmatchedProjectCosts.filter(c => hidden.has(c.name.toLowerCase()));
+                if (!snap.unmatchedProjectCosts.length) return '';
+                const sec = 'unmatched';
+                const collapsed = localStorage.getItem(`pm_sec_${sec}`) === '1';
+                return `<div class="pm-section-hdr${collapsed ? ' pm-sec-collapsed' : ''}" data-sec="${sec}">
+                    <span class="pm-sec-arrow">${collapsed ? '▶' : '▾'}</span> Niet gekoppeld aan project in deze app
+                  </div>
+                  <div class="pm-section-body${collapsed ? ' hidden' : ''}" id="pm-sec-body-${sec}">
+                    ${visible.map(c => `<div class="pm-row pm-row-unmatched">
+                      <span class="pm-name">${escHtml(c.name)}</span>
+                      <span class="pm-col-est biz-margin-note">Kosten: ${fmtEur(c.cost)}</span>
+                      <span class="pm-col-link">
+                        ${unmatchedCostLinkHtml(c)}
+                        <button class="pm-hide-btn" data-hide="${escHtml(c.name)}" title="Verberg uit overzicht">Verberg</button>
+                      </span>
+                    </div>`).join('')}
+                    ${hiddenItems.length ? `<div class="pm-show-hidden">
+                      ${hiddenItems.length} verborgen — <button class="pm-link-btn" id="pm-show-hidden-btn">Toon verborgen</button>
+                    </div>` : ''}
+                  </div>`;
+              })()}
+              ${snap.explicitMbLinks.length ? (() => {
+                const sec = 'explicit';
+                const collapsed = localStorage.getItem(`pm_sec_${sec}`) === '1';
+                return `<div class="pm-section-hdr${collapsed ? ' pm-sec-collapsed' : ''}" data-sec="${sec}">
+                    <span class="pm-sec-arrow">${collapsed ? '▶' : '▾'}</span> Handmatig gekoppelde Moneybird-projecten
+                  </div>
+                  <div class="pm-section-body${collapsed ? ' hidden' : ''}" id="pm-sec-body-${sec}">
+                    ${snap.explicitMbLinks.map(l => `<div class="pm-row pm-row-unmatched">
+                      <span class="pm-name">${escHtml(l.mbName)} <span style="opacity:.55">→ ${escHtml(l.projectName)}</span></span>
+                      <span class="pm-col-link">
+                        <button class="pm-unlink-btn" data-project="${l.projectId}" data-mb="${escHtml(l.mbId)}" title="Koppeling weghalen">✕ ontkoppel</button>
+                      </span>
+                    </div>`).join('')}
+                  </div>`;
+              })() : ''}
+            </div>`
+          : `<p class="biz-empty-sub">Geen afgesloten projecten met Moneybird-kosten/omzet gevonden.</p>`}
     </div>
 
     <div class="biz-insights-card">
@@ -4478,14 +4599,61 @@ function renderBizDashboardContent(snap) {
     sel.onchange = async () => {
       const localProjectId = Number(sel.value);
       if (!localProjectId) return;
-      const mbProjectId = sel.dataset.mbId;
-      await remoteQuery({ action: 'update', table: 'projects', data: { moneybird_project_id: mbProjectId }, where: { id: localProjectId } });
+      const mbProjectId = String(sel.dataset.mbId);
       const proj = state.projects.find(p => p.id === localProjectId);
-      if (proj) proj.moneybird_project_id = mbProjectId;
+      // Voeg toe aan de bestaande koppelingen i.p.v. overschrijven, zodat meerdere
+      // Moneybird-projecten aan hetzelfde lokale project kunnen hangen.
+      const ids = proj ? mbIdsOf(proj) : [];
+      if (!ids.includes(mbProjectId)) ids.push(mbProjectId);
+      const newVal = ids.join(',');
+      await remoteQuery({ action: 'update', table: 'projects', data: { moneybird_project_id: newVal }, where: { id: localProjectId } });
+      if (proj) proj.moneybird_project_id = newVal;
       toast('Project gekoppeld');
       await renderBedrijfsanalyse();
     };
   });
+  // Collapsible secties (niet-gekoppeld / handmatig-gekoppeld)
+  document.querySelectorAll('.pm-section-hdr').forEach(hdr => {
+    hdr.onclick = () => {
+      const sec = hdr.dataset.sec;
+      const body = document.getElementById(`pm-sec-body-${sec}`);
+      const nowCollapsed = !hdr.classList.contains('pm-sec-collapsed');
+      hdr.classList.toggle('pm-sec-collapsed', nowCollapsed);
+      hdr.querySelector('.pm-sec-arrow').textContent = nowCollapsed ? '▶' : '▾';
+      body?.classList.toggle('hidden', nowCollapsed);
+      localStorage.setItem(`pm_sec_${sec}`, nowCollapsed ? '1' : '0');
+    };
+  });
+
+  // Verberg / toon verborgen ongematchte projecten
+  document.querySelectorAll('.pm-hide-btn').forEach(btn => {
+    btn.onclick = () => {
+      const name = btn.dataset.hide.toLowerCase();
+      const hidden = new Set(JSON.parse(localStorage.getItem('pm_hidden_mb_projects') || '[]'));
+      hidden.add(name);
+      localStorage.setItem('pm_hidden_mb_projects', JSON.stringify([...hidden]));
+      renderBizDashboardContent(snap);
+    };
+  });
+  document.getElementById('pm-show-hidden-btn')?.addEventListener('click', () => {
+    localStorage.removeItem('pm_hidden_mb_projects');
+    renderBizDashboardContent(snap);
+  });
+  // Moneybird-project ontkoppelen (uit de kommagescheiden lijst halen)
+  document.querySelectorAll('.pm-unlink-btn').forEach(btn => {
+    btn.onclick = async () => {
+      const projectId = Number(btn.dataset.project);
+      const mbId = String(btn.dataset.mb);
+      const proj = state.projects.find(p => p.id === projectId);
+      if (!proj) return;
+      const newVal = mbIdsOf(proj).filter(x => x !== mbId).join(',');
+      await remoteQuery({ action: 'update', table: 'projects', data: { moneybird_project_id: newVal }, where: { id: projectId } });
+      proj.moneybird_project_id = newVal;
+      toast('Koppeling weggehaald');
+      await renderBedrijfsanalyse();
+    };
+  });
+
   renderBizChatMessages();
   wireBizChatPanel();
 }
@@ -4562,6 +4730,15 @@ let qe = null;
 let _qeDirty = false;
 function markQEDirty() { _qeDirty = true; }
 
+// Vaste-stuksprijs-regels uit extras_json, met terugval op het oude formaat (één
+// fixed_price/fixed_qty) voor offertes die zijn opgeslagen vóórdat meerdere regels
+// (bv. 3x groot blok, 2x klein, 8x middel) mogelijk werden.
+function getQuoteFixedItems(extras) {
+  if (Array.isArray(extras.fixed_items)) return extras.fixed_items;
+  if (extras.fixed_price != null) return [{ name: '', quantity: extras.fixed_qty ?? 1, unit_price: extras.fixed_price }];
+  return [];
+}
+
 function freshQE(quote) {
   // Prefer DB-stored extras_json (synced across devices); fall back to localStorage for legacy quotes
   let stored = {};
@@ -4583,8 +4760,10 @@ function freshQE(quote) {
     quote_date: quote?.quote_date ?? toDateStr(new Date()),
     margin:     quote?.margin     ?? 20,
     outsource_margin: stored.outsource_margin ?? 15,
-    fixed_price: stored.fixed_price ?? null,   // null = marge-modus; getal = vaste stuksprijs
-    fixed_qty:   stored.fixed_qty   ?? 1,
+    // Vaste-stuksprijs-modus: meerdere regels met eigen aantal × stuksprijs
+    // (bv. 3x groot blok, 2x klein, 8x middel) i.p.v. één vaste prijs voor de hele offerte.
+    fixed_items:   getQuoteFixedItems(stored),
+    fixed_enabled: getQuoteFixedItems(stored).length > 0,
     status:     quote?.status     ?? 'draft',
     notes:      quote?.notes      ?? '',
     image_data:     quote?.image_data || (quote?.id ? localStorage.getItem('qimg_' + quote.id) : '') || '',
@@ -4608,41 +4787,48 @@ function freshQE(quote) {
 
 // ─── Quote List View ──────────────────────────────────────────────────────────
 
-async function renderQuoteList() {
-  const ctrl = document.getElementById('toolbar-controls');
-  const content = document.getElementById('content');
-  ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-quote-btn">+ Nieuwe offerte</button>`;
-  document.getElementById('new-quote-btn').onclick = () => openQuoteWizard();
-  content.innerHTML = '';
+let _quotesFilter  = new Set(); // leeg = alle statussen
+let _quotesSort    = { field: 'date', dir: 'desc' };
+let _allQuotes     = []; // cached for client-side filter/sort
+let _selectedQuoteIds = new Set(); // voor samenvoegen
 
-  // Alleen lichte kolommen ophalen — image_data/extras_json (foto's, JSON-blobs) zijn
-  // groot en worden pas geladen zodra je een specifieke offerte opent.
-  const quotes = await remoteQuery({
-    action: 'select',
-    table: 'quotes',
-    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'project_name'],
+function _renderQuoteTable() {
+  let list = _allQuotes.slice();
+
+  // Filter
+  if (_quotesFilter.size) list = list.filter(q => _quotesFilter.has(q.status));
+
+  // Sort
+  list.sort((a, b) => {
+    let va, vb;
+    if (_quotesSort.field === 'price') {
+      va = a.total_price ?? -Infinity;
+      vb = b.total_price ?? -Infinity;
+    } else {
+      va = a.quote_date || '';
+      vb = b.quote_date || '';
+    }
+    return _quotesSort.dir === 'asc' ? (va > vb ? 1 : va < vb ? -1 : 0) : (va < vb ? 1 : va > vb ? -1 : 0);
   });
 
-  if (!Array.isArray(quotes) || quotes.length === 0) {
-    document.getElementById('content').innerHTML =
-      `<div class="empty"><div class="empty-icon">💶</div><p>Nog geen offertes. Klik op "+ Nieuwe offerte" om te beginnen.</p></div>`;
+  if (!list.length) {
+    document.getElementById('ql-table-wrap').innerHTML =
+      `<div class="empty" style="margin-top:40px"><div class="empty-icon">🔍</div><p>Geen offertes voor dit filter.</p></div>`;
     return;
   }
 
-  // Meest recente bovenaan
-  quotes.sort((a, b) => (b.quote_date || '').localeCompare(a.quote_date || ''));
-
-  // ── Eén request: alleen de quotes-tabel. Prijs staat al in total_price ──
-  // (geen quote_items nodig — die worden alleen geladen zodra je een offerte opent)
   let html = `<table class="quotes-table">
     <thead><tr>
+      <th class="ql-cb-col"></th>
       <th>Project</th><th>Klant</th><th>Datum</th>
       <th style="text-align:right">Totaal excl. BTW</th><th>Status</th><th></th>
     </tr></thead><tbody>`;
-
-  quotes.forEach(q => {
+  list.forEach(q => {
     const hasTotal = q.total_price != null;
-    html += `<tr class="quote-row" data-id="${q.id}">
+    const checked = _selectedQuoteIds.has(q.id);
+    const fulfilled = q.project_name && state.projects?.find(p => p.name.trim().toLowerCase() === q.project_name.trim().toLowerCase() && p.status === 'done');
+    html += `<tr class="quote-row${checked ? ' ql-row-selected' : ''}" data-id="${q.id}">
+      <td class="ql-cb-col"><input type="checkbox" class="ql-cb" data-id="${q.id}"${checked ? ' checked' : ''} /></td>
       <td><strong>${escHtml(q.name)}</strong></td>
       <td>${escHtml(q.client)}</td>
       <td>${q.quote_date || '—'}</td>
@@ -4650,29 +4836,42 @@ async function renderQuoteList() {
       <td>
         <select class="badge badge-${q.status} quote-status-select" data-id="${q.id}">
           ${quoteStatusOptionsHtml(q.status)}
-        </select>
+        </select>${fulfilled ? ` <span title="Gekoppeld project is afgerond — al geleverd" style="display:inline-block;margin-left:8px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:#1e7a3a;color:#fff">✓ afgerond</span>` : ''}
       </td>
       <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
   });
   html += `</tbody></table>`;
-  document.getElementById('content').innerHTML = html;
+  document.getElementById('ql-table-wrap').innerHTML = html;
+
+  // Checkbox wiring
+  document.querySelectorAll('.ql-cb').forEach(cb => {
+    cb.onclick = e => e.stopPropagation();
+    cb.onchange = () => {
+      const id = parseInt(cb.dataset.id);
+      if (cb.checked) _selectedQuoteIds.add(id); else _selectedQuoteIds.delete(id);
+      cb.closest('tr').classList.toggle('ql-row-selected', cb.checked);
+      _updateMergeButton();
+    };
+  });
 
   document.querySelectorAll('.quote-status-select').forEach(select => {
-    select.onclick = e => e.stopPropagation(); // niet de offerte openen
+    select.onclick = e => e.stopPropagation();
     select.onchange = async (e) => {
-      const quote = quotes.find(q => q.id == select.dataset.id);
+      const quote = _allQuotes.find(q => q.id == select.dataset.id);
       if (!quote) return;
       const newStatus = e.target.value;
       await changeQuoteStatus(quote, newStatus);
+      quote.status = newStatus;
       select.className = `badge badge-${newStatus} quote-status-select`;
       toast('Status bijgewerkt');
+      _renderQuoteTable();
     };
   });
 
   document.querySelectorAll('.quote-row').forEach(row => {
-    row.onclick = async () => {
-      // Lijst bevat alleen lichte kolommen — volledige rij (foto, extras_json) pas ophalen bij openen.
+    row.onclick = async (e) => {
+      if (e.target.closest('.ql-cb-col, .quote-delete-btn, .quote-status-select')) return;
       const [full] = await remoteQuery({ action: 'select', table: 'quotes', where: { id: row.dataset.id } });
       if (full) openQuoteEditor(full);
     };
@@ -4681,18 +4880,175 @@ async function renderQuoteList() {
   document.querySelectorAll('.quote-delete-btn').forEach(btn => {
     btn.onclick = async (e) => {
       e.stopPropagation();
-      const quote = quotes.find(q => q.id == btn.dataset.id);
+      const quote = _allQuotes.find(q => q.id == btn.dataset.id);
       if (!quote) return;
       if (!confirm(`Verwijder offerte "${quote.name}"?`)) return;
       await remoteQuery({ action: 'delete', table: 'quotes', where: { id: quote.id } });
+      _allQuotes = _allQuotes.filter(q => q.id !== quote.id);
+      _selectedQuoteIds.delete(quote.id);
       toast(`Offerte "${quote.name}" verwijderd`);
-      renderQuoteList();
+      _renderQuoteTable();
     };
+  });
+}
+
+function _updateMergeButton() {
+  const n = _selectedQuoteIds.size;
+  let btn = document.getElementById('ql-merge-btn');
+  if (n >= 2) {
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'ql-merge-btn';
+      btn.className = 'btn btn-secondary btn-sm';
+      btn.onclick = mergeSelectedQuotes;
+      document.getElementById('toolbar-controls').appendChild(btn);
+    }
+    btn.textContent = `Samenvoegen (${n})`;
+  } else {
+    btn?.remove();
+  }
+}
+
+async function mergeSelectedQuotes() {
+  if (_selectedQuoteIds.size < 2) return;
+  const ids = [..._selectedQuoteIds];
+
+  // Haal volledige data op voor alle geselecteerde offertes
+  toast('Offertes samenvoegen…', 'info', 6000);
+  const [fullQuotes, allItems] = await Promise.all([
+    Promise.all(ids.map(id => remoteQuery({ action: 'select', table: 'quotes', where: { id } }).then(r => r[0]))),
+    Promise.all(ids.map(id => remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: id } }))),
+  ]);
+
+  // Gebruik de nieuwste offerte als basis voor metadata
+  const base = fullQuotes.slice().sort((a, b) => (b.quote_date || '').localeCompare(a.quote_date || ''))[0];
+
+  // Combineer alle items (materialen + diensten + exclusies), gegroepeerd per bronofferte
+  const mergedItems = [];
+  allItems.forEach((items, idx) => {
+    const label = fullQuotes[idx]?.name || `Onderdeel ${idx + 1}`;
+    (items || []).forEach(it => mergedItems.push({ ...it, id: undefined, quote_id: undefined, section_label: label }));
+  });
+
+  // Combineer fixed_items uit alle offertes
+  const allFixedItems = fullQuotes.flatMap(q => {
+    try { return getQuoteFixedItems(JSON.parse(q.extras_json || '{}') || {}); } catch { return []; }
+  });
+
+  // Bouw de samengevoegde extras_json op basis van de basisofferte
+  let baseExtras = {};
+  try { baseExtras = JSON.parse(base.extras_json || '{}') || {}; } catch {}
+  const mergedExtras = { ...baseExtras, fixed_items: allFixedItems };
+
+  const names = fullQuotes.map(q => q.name).join(' + ');
+  const mergedName = names.length > 80 ? base.name + ' (samengevoegd)' : names;
+
+  // Sla de nieuwe, samengevoegde offerte op
+  const newQuote = await remoteQuery({ action: 'insert', table: 'quotes', data: {
+    name: mergedName,
+    client: base.client || '',
+    quote_date: base.quote_date || '',
+    margin: base.margin,
+    status: 'draft',
+    notes: fullQuotes.map(q => q.notes).filter(Boolean).join('\n\n---\n\n'),
+    project_name: base.project_name || '',
+    created_by: state.config?.name || '',
+    image_data: base.image_data || '',
+    extras_json: JSON.stringify(mergedExtras),
+    total_price: null,
+  }});
+
+  for (const item of mergedItems) {
+    await remoteQuery({ action: 'insert', table: 'quote_items', data: { ...item, quote_id: newQuote.id } });
+  }
+
+  _selectedQuoteIds.clear();
+  toast(`Samengevoegd tot "${mergedName}" — originelen blijven bewaard`, 'success', 5000);
+
+  // Open de nieuwe offerte meteen in de editor
+  const [full] = await remoteQuery({ action: 'select', table: 'quotes', where: { id: newQuote.id } });
+  if (full) openQuoteEditor(full);
+}
+
+function _renderQuoteFilterBar() {
+  const FILTERS = [
+    { key: null,       label: 'Alle' },
+    { key: 'draft',    label: 'Concept' },
+    { key: 'sent',     label: 'Verzonden' },
+    { key: 'later',    label: 'Later' },
+    { key: 'accepted', label: 'Geaccepteerd' },
+    { key: 'rejected', label: 'Afgewezen' },
+  ];
+  const sortIcon = (field) => {
+    if (_quotesSort.field !== field) return '↕';
+    return _quotesSort.dir === 'desc' ? '↓' : '↑';
+  };
+  return `<div class="ql-controls-bar">
+    <div class="ql-filters">
+      ${FILTERS.map(f => {
+        const isAll = f.key === null;
+        const active = isAll ? _quotesFilter.size === 0 : _quotesFilter.has(f.key);
+        return `<button class="ql-chip${f.key ? ' badge-' + f.key : ''}${active ? ' ql-chip-active' : ''}" data-filter="${f.key ?? ''}">${f.label}</button>`;
+      }).join('')}
+    </div>
+    <div class="ql-sorts">
+      <button class="ql-sort-btn${_quotesSort.field === 'date'  ? ' active' : ''}" data-sort="date">Datum ${sortIcon('date')}</button>
+      <button class="ql-sort-btn${_quotesSort.field === 'price' ? ' active' : ''}" data-sort="price">Prijs ${sortIcon('price')}</button>
+    </div>
+  </div>`;
+}
+
+async function renderQuoteList() {
+  const ctrl = document.getElementById('toolbar-controls');
+  const content = document.getElementById('content');
+  ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-quote-btn">+ Nieuwe offerte</button>`;
+  document.getElementById('new-quote-btn').onclick = () => openQuoteWizard();
+
+  // Alleen lichte kolommen ophalen — image_data/extras_json (foto's, JSON-blobs) zijn
+  // groot en worden pas geladen zodra je een specifieke offerte opent.
+  _allQuotes = await remoteQuery({
+    action: 'select',
+    table: 'quotes',
+    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'project_name'],
+  });
+
+  if (!Array.isArray(_allQuotes) || _allQuotes.length === 0) {
+    content.innerHTML =
+      `<div class="empty"><div class="empty-icon">💶</div><p>Nog geen offertes. Klik op "+ Nieuwe offerte" om te beginnen.</p></div>`;
+    return;
+  }
+
+  content.innerHTML = `<div id="ql-bar-wrap">${_renderQuoteFilterBar()}</div><div id="ql-table-wrap"></div>`;
+  _renderQuoteTable();
+
+  // Event delegation: filter chips and sort buttons bubble up to content
+  content.addEventListener('click', e => {
+    const chip    = e.target.closest('.ql-chip');
+    const sortBtn = e.target.closest('.ql-sort-btn');
+    if (chip) {
+      const key = chip.dataset.filter || null;
+      if (!key) {
+        _quotesFilter.clear(); // "Alle" reset
+      } else if (_quotesFilter.has(key)) {
+        _quotesFilter.delete(key);
+      } else {
+        _quotesFilter.add(key);
+      }
+      document.getElementById('ql-bar-wrap').innerHTML = _renderQuoteFilterBar();
+      _renderQuoteTable();
+    } else if (sortBtn) {
+      const field = sortBtn.dataset.sort;
+      _quotesSort = _quotesSort.field === field
+        ? { field, dir: _quotesSort.dir === 'desc' ? 'asc' : 'desc' }
+        : { field, dir: 'desc' };
+      document.getElementById('ql-bar-wrap').innerHTML = _renderQuoteFilterBar();
+      _renderQuoteTable();
+    }
   });
 
   // ── Eenmalige achtergrond-backfill: alleen offertes zonder opgeslagen total_price ──
   // (legacy offertes van vóór de total_price-kolom — na deze keer staat 'ie vast)
-  const legacyQuotes = quotes.filter(q => q.total_price == null);
+  const legacyQuotes = _allQuotes.filter(q => q.total_price == null);
   for (const q of legacyQuotes) {
     const [items, [fullQ]] = await Promise.all([
       remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: q.id } }),
@@ -4902,8 +5258,8 @@ async function openQuoteEditor(quote) {
   // Load existing items if editing
   if (qe.id) {
     const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: qe.id } });
-    qe.materials  = items.filter(i => i.type === 'material').map(i => ({ ...i }));
-    qe.services   = items.filter(i => i.type === 'service').map(i => ({ ...i }));
+    qe.materials  = items.filter(i => i.type === 'material').map(i => ({ ...i, section_label: i.section_label || null }));
+    qe.services   = items.filter(i => i.type === 'service').map(i => ({ ...i, section_label: i.section_label || null }));
     qe.exclusions = items.filter(i => i.type === 'exclusion').map(i => i.name);
   }
 
@@ -4977,6 +5333,19 @@ function renderQuoteEditorView() {
           ${quoteStatusOptionsHtml(qe.status)}
         </select>
       </div>
+    </div>
+
+    <!-- Project link row -->
+    <div class="qe-project-link-row">
+      <span class="qe-project-link-label">Project</span>
+      <div class="qe-project-link-wrap">
+        <input class="qi-input" id="qe-project-link"
+               placeholder="Offertenaam wordt gebruikt als projectnaam"
+               autocomplete="off"
+               value="${escHtml(qe.project_name || '')}" />
+        <div class="qe-project-suggestions hidden" id="qe-project-suggestions"></div>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="qe-project-link-clear" title="Koppeling wissen" style="${qe.project_name ? '' : 'visibility:hidden'}">✕</button>
     </div>
 
     <!-- Client details (collapsible) -->
@@ -5117,21 +5486,24 @@ function renderQuoteEditorView() {
     <div class="qe-section qe-fixed-section">
       <div class="qe-section-header">
         <label class="qe-fixed-toggle-label">
-          <input type="checkbox" id="qe-fixed-enabled" ${qe.fixed_price != null ? 'checked' : ''} />
+          <input type="checkbox" id="qe-fixed-enabled" ${qe.fixed_enabled ? 'checked' : ''} />
           <span class="qe-section-title">Vaste stuksprijs</span>
         </label>
-        <span class="qe-fixed-hint">Zelf bepalen wat je vraagt; eigen verdiensten = verkoopprijs − inkoop materialen</span>
+        <span class="qe-fixed-hint">Zelf bepalen wat je per stuk vraagt (bv. 3× groot blok, 2× klein, 8× middel); eigen verdiensten = verkoopprijs − inkoop materialen</span>
       </div>
-      <div class="qe-fixed-body ${qe.fixed_price == null ? 'hidden' : ''}">
-        <div class="qe-fixed-row">
-          <span class="qe-fixed-lbl">Aantal</span>
-          <input class="qe-fixed-input" type="number" id="qe-fixed-qty" value="${qe.fixed_qty ?? 1}" min="1" step="1" />
-          <span class="qe-fixed-sep">×</span>
-          <span class="qe-fixed-lbl">Stuksprijs</span>
-          <input class="qe-fixed-input" type="number" id="qe-fixed-price" value="${qe.fixed_price ?? ''}" min="0" step="any" placeholder="0.00" />
-          <span class="qe-fixed-eq">=</span>
-          <span class="qe-fixed-total" id="qe-fixed-total">${qe.fixed_price != null ? fmtEur((qe.fixed_qty ?? 1) * qe.fixed_price) : '—'}</span>
-        </div>
+      <div class="qe-fixed-body ${qe.fixed_enabled ? '' : 'hidden'}">
+        <table class="qi-table">
+          <thead><tr>
+            <th style="width:46%">Omschrijving</th>
+            <th style="width:16%">Aantal</th>
+            <th class="num" style="width:17%">Stuksprijs</th>
+            <th class="num" style="width:17%">Totaal</th>
+            <th style="width:4%"></th>
+          </tr></thead>
+          <tbody id="fixed-tbody"></tbody>
+        </table>
+        <button class="qe-add-btn" id="fixed-add-btn" type="button">＋ Regel toevoegen</button>
+        <div class="qe-mat-subtotals" id="qe-fixed-total-row"></div>
       </div>
     </div>
 
@@ -5222,6 +5594,50 @@ function renderQuoteEditorView() {
       console.error('save-as-client error:', err);
     }
   };
+  // Project link autocomplete
+  (function wireProjectLink() {
+    const projInput = document.getElementById('qe-project-link');
+    const projSugg  = document.getElementById('qe-project-suggestions');
+    const projClear = document.getElementById('qe-project-link-clear');
+    if (!projInput) return;
+
+    function buildSuggestions(filter) {
+      const q = (filter || '').trim().toLowerCase();
+      const matches = state.projects.filter(p => !q || p.name.toLowerCase().includes(q)).slice(0, 10);
+      if (!matches.length) { projSugg.classList.add('hidden'); return; }
+      projSugg.innerHTML = matches.map(p =>
+        `<div class="qe-project-suggestion-item" data-name="${escHtml(p.name)}">${escHtml(p.name)}</div>`
+      ).join('');
+      projSugg.classList.remove('hidden');
+    }
+
+    projInput.addEventListener('focus', () => buildSuggestions(projInput.value));
+    projInput.addEventListener('input', e => {
+      qe.project_name = e.target.value.trim();
+      projClear.style.visibility = qe.project_name ? '' : 'hidden';
+      buildSuggestions(e.target.value);
+      markQEDirty();
+    });
+    projInput.addEventListener('blur', () => setTimeout(() => projSugg.classList.add('hidden'), 150));
+    projInput.addEventListener('keydown', e => { if (e.key === 'Escape') projSugg.classList.add('hidden'); });
+    projSugg.addEventListener('mousedown', e => {
+      const item = e.target.closest('[data-name]');
+      if (!item) return;
+      projInput.value = item.dataset.name;
+      qe.project_name = item.dataset.name;
+      projClear.style.visibility = '';
+      projSugg.classList.add('hidden');
+      markQEDirty();
+    });
+    projClear.onclick = () => {
+      projInput.value = '';
+      qe.project_name = '';
+      projClear.style.visibility = 'hidden';
+      projSugg.classList.add('hidden');
+      markQEDirty();
+    };
+  })();
+
   document.getElementById('qe-date').addEventListener('change',   e => { qe.quote_date = e.target.value; markQEDirty(); });
   document.getElementById('qe-status').addEventListener('change', async e => {
     if (qe.id) {
@@ -5255,44 +5671,26 @@ function renderQuoteEditorView() {
   // Vaste stuksprijs wiring
   const fixedEnabled = document.getElementById('qe-fixed-enabled');
   const fixedBody    = document.querySelector('.qe-fixed-body');
-  const fixedQtyEl   = document.getElementById('qe-fixed-qty');
-  const fixedPriceEl = document.getElementById('qe-fixed-price');
-  const fixedTotalEl = document.getElementById('qe-fixed-total');
-
-  function _updateFixedTotal() {
-    if (qe.fixed_price == null) return;
-    const total = (qe.fixed_qty ?? 1) * (qe.fixed_price ?? 0);
-    if (fixedTotalEl) fixedTotalEl.textContent = fmtEur(total);
-  }
+  const fixedAddBtn   = document.getElementById('fixed-add-btn');
 
   if (fixedEnabled) {
     fixedEnabled.addEventListener('change', e => {
+      qe.fixed_enabled = e.target.checked;
       if (e.target.checked) {
-        qe.fixed_price = parseFloat(fixedPriceEl?.value) || 0;
-        qe.fixed_qty   = parseFloat(fixedQtyEl?.value)   || 1;
+        if (!qe.fixed_items.length) qe.fixed_items.push({ name: '', quantity: 1, unit_price: 0 });
         fixedBody?.classList.remove('hidden');
+        renderFixedTable();
       } else {
-        qe.fixed_price = null;
         fixedBody?.classList.add('hidden');
       }
       updateTotals();
       markQEDirty();
     });
   }
-  if (fixedQtyEl) {
-    fixedQtyEl.addEventListener('focus', () => fixedQtyEl.select());
-    fixedQtyEl.addEventListener('input', e => {
-      qe.fixed_qty = parseFloat(e.target.value) || 1;
-      _updateFixedTotal();
-      updateTotals();
-      markQEDirty();
-    });
-  }
-  if (fixedPriceEl) {
-    fixedPriceEl.addEventListener('focus', () => fixedPriceEl.select());
-    fixedPriceEl.addEventListener('input', e => {
-      qe.fixed_price = parseFloat(e.target.value) || 0;
-      _updateFixedTotal();
+  if (fixedAddBtn) {
+    fixedAddBtn.addEventListener('click', () => {
+      qe.fixed_items.push({ name: '', quantity: 1, unit_price: 0 });
+      renderFixedTable();
       updateTotals();
       markQEDirty();
     });
@@ -5342,6 +5740,7 @@ function renderQuoteEditorView() {
 
   renderMatTable();
   renderSvcTable();
+  renderFixedTable();
   wireExclusions();
   updateTotals();
   updateChecklistBadge();
@@ -5353,7 +5752,14 @@ function renderMatTable() {
   const tbody = document.getElementById('mat-tbody');
   if (!tbody) return;
 
-  tbody.innerHTML = qe.materials.map((m, i) => `
+  let _lastMatSection = null;
+  tbody.innerHTML = qe.materials.map((m, i) => {
+    let header = '';
+    if (m.section_label && m.section_label !== _lastMatSection) {
+      header = `<tr class="qi-section-hdr"><td colspan="9">${escHtml(m.section_label)}</td></tr>`;
+      _lastMatSection = m.section_label;
+    }
+    return header + `
     <tr draggable="true" data-idx="${i}" class="${m.enabled === 0 ? 'qi-row-disabled' : ''}">
       <td class="drag-handle" title="Versleep">⠿</td>
       <td style="text-align:center"><input type="checkbox" class="qi-check qi-enabled" data-t="mat" data-i="${i}" data-f="enabled" ${m.enabled !== 0 ? 'checked' : ''} title="Post aan/uit" /></td>
@@ -5364,7 +5770,8 @@ function renderMatTable() {
       <td><input class="qi-input num" data-t="mat" data-i="${i}" data-f="unit_price" value="${m.unit_price ?? 0}" type="number" min="0" step="any" /></td>
       <td class="num" id="mat-row-total-${i}">${m.enabled !== 0 ? fmtEur((m.quantity ?? 1) * (m.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="mat" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
+    </tr>`;
+  }).join('') || `<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('mat');
   wireDragDrop('mat');
@@ -5375,7 +5782,14 @@ function renderSvcTable() {
   const tbody = document.getElementById('svc-tbody');
   if (!tbody) return;
 
-  tbody.innerHTML = qe.services.map((s, i) => `
+  let _lastSvcSection = null;
+  tbody.innerHTML = qe.services.map((s, i) => {
+    let header = '';
+    if (s.section_label && s.section_label !== _lastSvcSection) {
+      header = `<tr class="qi-section-hdr"><td colspan="10">${escHtml(s.section_label)}</td></tr>`;
+      _lastSvcSection = s.section_label;
+    }
+    return header + `
     <tr draggable="true" data-idx="${i}" class="${s.is_outsourced ? 'svc-row-outsourced' : ''}${s.enabled === 0 ? ' qi-row-disabled' : ''}">
       <td class="drag-handle" title="Versleep">⠿</td>
       <td style="text-align:center"><input type="checkbox" class="qi-check qi-enabled" data-t="svc" data-i="${i}" data-f="enabled" ${s.enabled !== 0 ? 'checked' : ''} title="Post aan/uit" /></td>
@@ -5390,11 +5804,66 @@ function renderSvcTable() {
       <td class="num"><input class="qi-input num" data-t="svc" data-i="${i}" data-f="unit_price" value="${s.unit_price ?? 0}" type="number" min="0" step="any" /></td>
       <td class="num" id="svc-row-total-${i}">${s.enabled !== 0 ? fmtEur((s.quantity ?? 1) * (s.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
-    </tr>`).join('') || `<tr><td colspan="10" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
+    </tr>`;
+  }).join('') || `<tr><td colspan="10" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('svc');
   wireDragDrop('svc');
   updateSvcSubtotals();
+}
+
+function renderFixedTable() {
+  const tbody = document.getElementById('fixed-tbody');
+  if (!tbody) return;
+
+  tbody.innerHTML = qe.fixed_items.map((it, i) => `
+    <tr>
+      <td><input class="qi-input" data-i="${i}" data-f="name" value="${escHtml(it.name || '')}" placeholder="bv. Groot blok" /></td>
+      <td><input class="qi-input num" data-i="${i}" data-f="quantity" value="${it.quantity ?? 1}" type="number" min="0" step="any" /></td>
+      <td><input class="qi-input num" data-i="${i}" data-f="unit_price" value="${it.unit_price ?? 0}" type="number" min="0" step="any" /></td>
+      <td class="num" id="fixed-row-total-${i}">${fmtEur((it.quantity ?? 1) * (it.unit_price ?? 0))}</td>
+      <td><button class="qi-del" data-i="${i}">✕</button></td>
+    </tr>`).join('') || `<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik "Regel toevoegen" om een stuksprijs-regel toe te voegen</td></tr>`;
+
+  wireFixedTableInputs();
+  updateFixedTotalRow();
+}
+
+function updateFixedTotalRow() {
+  const el = document.getElementById('qe-fixed-total-row');
+  if (!el) return;
+  const total = qe.fixed_items.reduce((s, it) => s + (it.quantity ?? 1) * (it.unit_price ?? 0), 0);
+  el.innerHTML = `<div class="row bold"><span>Totaal vaste stuksprijs</span><span>${fmtEur(total)}</span></div>`;
+}
+
+function wireFixedTableInputs() {
+  const tbody = document.getElementById('fixed-tbody');
+  if (!tbody) return;
+
+  tbody.querySelectorAll('.qi-input').forEach(inp => {
+    if (inp.type === 'number') inp.addEventListener('focus', () => inp.select());
+    inp.addEventListener('input', () => {
+      const i = parseInt(inp.dataset.i);
+      const field = inp.dataset.f;
+      if (!qe.fixed_items[i]) return;
+      qe.fixed_items[i][field] = field === 'name' ? inp.value : (parseFloat(inp.value) || 0);
+      const rowTotal = document.getElementById(`fixed-row-total-${i}`);
+      if (rowTotal) rowTotal.textContent = fmtEur((qe.fixed_items[i].quantity ?? 1) * (qe.fixed_items[i].unit_price ?? 0));
+      updateFixedTotalRow();
+      updateTotals();
+      markQEDirty();
+    });
+  });
+
+  tbody.querySelectorAll('.qi-del').forEach(btn => {
+    btn.onclick = () => {
+      const i = parseInt(btn.dataset.i);
+      qe.fixed_items.splice(i, 1);
+      renderFixedTable();
+      updateTotals();
+      markQEDirty();
+    };
+  });
 }
 
 function wireTableInputs(type) {
@@ -5730,18 +6199,37 @@ function calcQuoteTotals(items, globalMargin, outsourceMargin) {
 function computeLegacyQuoteSubtotal(quote, items) {
   let extras = {};
   try { extras = JSON.parse(quote.extras_json || '{}') || {}; } catch (_) {}
-  if (extras.fixed_price != null) {
-    return (extras.fixed_qty ?? 1) * extras.fixed_price;
+  const fixedItems = getQuoteFixedItems(extras);
+  if (fixedItems.length) {
+    return fixedItems.reduce((s, it) => s + (it.quantity ?? 1) * (it.unit_price ?? 0), 0);
   }
   return calcQuoteTotals(items, quote.margin, extras.outsource_margin ?? 0).subtotal;
 }
 
+// Berekent de geoffreerde "eigen verdiensten" (de winst die in de offerte was
+// ingecalculeerd: eigen-arbeidsomzet + marge op materiaal/uitbesteed werk, dus
+// exclusief de cost-passthrough) — voor vergelijking met de daadwerkelijke winst
+// (offertebedrag minus werkelijke Moneybird-kosten) in de Bedrijfsanalyse.
+function computeQuoteProfit(quote, items) {
+  let extras = {};
+  try { extras = JSON.parse(quote.extras_json || '{}') || {}; } catch (_) {}
+  const fixedItems = getQuoteFixedItems(extras);
+  if (fixedItems.length) {
+    const matInkoop = items.filter(i => i.enabled !== 0 && i.type === 'material')
+      .reduce((s, i) => s + (i.quantity ?? 1) * (i.unit_price ?? 0), 0);
+    const revenue = fixedItems.reduce((s, it) => s + (it.quantity ?? 1) * (it.unit_price ?? 0), 0);
+    return revenue - matInkoop;
+  }
+  return calcQuoteTotals(items, quote.margin, extras.outsource_margin ?? 0).profit;
+}
+
 function calcQETotals() {
-  // Vaste stuksprijs modus: verkoopprijs is handmatig bepaald
-  if (qe.fixed_price != null) {
+  // Vaste stuksprijs modus: verkoopprijs per stuk is handmatig bepaald, met meerdere
+  // regels mogelijk (bv. 3x groot blok, 2x klein, 8x middel, elk met eigen stuksprijs).
+  if (qe.fixed_enabled && qe.fixed_items?.length) {
     const matInkoop  = qe.materials.filter(m => m.enabled !== 0)
       .reduce((s, m) => s + (m.quantity ?? 1) * (m.unit_price ?? 0), 0);
-    const revenue    = (qe.fixed_qty ?? 1) * (qe.fixed_price ?? 0);
+    const revenue    = qe.fixed_items.reduce((s, it) => s + (it.quantity ?? 1) * (it.unit_price ?? 0), 0);
     const profit     = revenue - matInkoop;
     const subtotal   = revenue;
     const btw        = subtotal * 0.21;
@@ -5751,7 +6239,7 @@ function calcQETotals() {
       subtotal, btw, grandTotal: subtotal + btw,
       marginPct: 0, outsourceMarginPct: qe.outsource_margin,
       profit,
-      isFixedPrice: true, fixedRevenue: revenue, fixedQty: qe.fixed_qty ?? 1, fixedPrice: qe.fixed_price ?? 0,
+      isFixedPrice: true, fixedRevenue: revenue, fixedItems: qe.fixed_items,
     };
   }
   // Standaard marge-modus
@@ -5812,7 +6300,7 @@ function updateTotals() {
     el.innerHTML = `
       <div class="qt-row"><span class="qt-label">Inkoop materialen</span><span class="qt-val">${fmtEur(t.matEx)}</span></div>
       <div class="qt-divider"></div>
-      <div class="qt-row"><span class="qt-label">Verkoopprijs (${t.fixedQty} × ${fmtEur(t.fixedPrice)})</span><span class="qt-val">${fmtEur(t.fixedRevenue)}</span></div>
+      <div class="qt-row"><span class="qt-label">Totaal verkoopprijs</span><span class="qt-val">${fmtEur(t.fixedRevenue)}</span></div>
       <div class="qt-row"><span class="qt-label">BTW (21%)</span><span class="qt-val">+ ${fmtEur(t.btw)}</span></div>
       <div class="qt-row final"><span class="qt-label">TOTAAL excl. BTW</span><span class="qt-val">${fmtEur(t.subtotal)}</span></div>
       <div class="qt-row incl-note"><span class="qt-label">Incl. BTW</span><span class="qt-val">${fmtEur(t.grandTotal)}</span></div>
@@ -5923,8 +6411,7 @@ async function performSave() {
     extra_images: qe.extra_images,
     pdf_opts: qe.pdf_opts,
     outsource_margin: qe.outsource_margin,
-    fixed_price: qe.fixed_price,
-    fixed_qty:   qe.fixed_qty,
+    fixed_items: qe.fixed_enabled ? qe.fixed_items : [],
   });
   const quoteData = {
     name: qe.name.trim(), client: qe.client.trim(), quote_date: qe.quote_date,
@@ -5954,8 +6441,8 @@ async function performSave() {
     }
 
     const allItems = [
-      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0, enabled: m.enabled !== 0 ? 1 : 0 })),
-      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0, enabled: s.enabled !== 0 ? 1 : 0 })),
+      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0, enabled: m.enabled !== 0 ? 1 : 0, ...(m.section_label ? { section_label: m.section_label } : {}) })),
+      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0, enabled: s.enabled !== 0 ? 1 : 0, ...(s.section_label ? { section_label: s.section_label } : {}) })),
       ...qe.exclusions.map((ex, i) => ({ quote_id: quoteId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0, enabled: 1 })),
     ];
     for (const item of allItems) {
@@ -6006,8 +6493,7 @@ async function duplicateQuote() {
       extra_images:    qe.extra_images,
       pdf_opts:        qe.pdf_opts,
       outsource_margin: qe.outsource_margin,
-      fixed_price: qe.fixed_price,
-      fixed_qty:   qe.fixed_qty,
+      fixed_items: qe.fixed_enabled ? qe.fixed_items : [],
     });
     const newQuoteData = {
       name:       qe.name + ' (kopie)',
@@ -6250,12 +6736,17 @@ async function computeBusinessSnapshot() {
   const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const endOfLastMonth    = new Date(startOfThisMonth.getTime() - 1);
+  const yearStart         = new Date(now.getFullYear(), 0, 1);
+  const dayOfYear         = Math.ceil((now - yearStart) / 86400000);
+  const ANNUAL_HOURS      = 2 * 40 * 46; // 3680 uur/jaar (2 man × 40u × 46 weken)
+  const hoursYTD          = ANNUAL_HOURS * (dayOfYear / 365);
 
-  const [quotes, invoices, purchaseInvoices, mbProjects] = await Promise.all([
-    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until'] }),
+  const [quotes, invoices, purchaseInvoices, mbProjects, quoteItemsAll] = await Promise.all([
+    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until', 'margin', 'extras_json'] }),
     fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
     fetchAllMoneybirdPurchaseInvoices().catch(e => { console.warn('Moneybird kosten-snapshot fout:', e); return null; }),
     fetchAllMoneybirdProjects().catch(e => { console.warn('Moneybird projecten-snapshot fout:', e); return null; }),
+    remoteQuery({ action: 'select', table: 'quote_items' }),
   ]);
   const projects = state.projects?.length ? state.projects : await remoteQuery({ action: 'select', table: 'projects' });
   const stages    = state.stages?.length    ? state.stages    : await remoteQuery({ action: 'select', table: 'project_stages' });
@@ -6312,6 +6803,10 @@ async function computeBusinessSnapshot() {
   };
   const currentlyActiveProjects = activeProjects.filter(isProjectStarted);
   const upcomingProjects        = activeProjects.filter(p => !isProjectStarted(p));
+  // Echt nog niet ingepland = geen enkele planning bekend (geen stage_slot,
+  // geen stage-startdatum, geen project-startdatum). Zodra je het inplant,
+  // krijgt het een startdatum en valt het hier weg — de teller dáált dan.
+  const unplannedProjects       = activeProjects.filter(p => projectEarliestStart(p) === null);
 
   // Een geaccepteerde offerte waarvan het gekoppelde project al "Afgerond" is, is al
   // geleverd (en vrijwel zeker al gefactureerd) — die hoort niet meer in de orderport-
@@ -6355,13 +6850,125 @@ async function computeBusinessSnapshot() {
     // Eerst de handmatige koppeling (moneybird_project_id) checken — die wint altijd
     // over naam-matching, zodat een eerder gelegde koppeling niet weer "verdwijnt"
     // zodra iemand de naam in Moneybird of deze app wijzigt.
-    const linked = projects.find(p => p.moneybird_project_id && String(p.moneybird_project_id) === String(mbId));
+    const linked = projects.find(p => mbIdsOf(p).includes(String(mbId)));
     const localMatch = linked || projects.find(p => p.name.trim().toLowerCase() === entry.name.trim().toLowerCase());
+    // Verzamelprojecten (bv. "Algemeen") zijn met exclude_from_analysis bewust uit de
+    // analyse gehouden — die mogen niet via de kostenkant alsnog binnensluipen.
+    if (localMatch && localMatch.exclude_from_analysis) return;
     if (localMatch) costsByProject.push({ name: localMatch.name, cost: entry.cost });
     else unmatchedProjectCosts.push({ name: entry.name, cost: entry.cost, mbProjectId: mbId });
   });
   costsByProject.sort((a, b) => b.cost - a.cost);
   unmatchedProjectCosts.sort((a, b) => b.cost - a.cost);
+
+  let costsYTD = null;
+  if (Array.isArray(purchaseInvoices)) {
+    costsYTD = purchaseInvoices.reduce((s, inv) => {
+      if (!inv.date || new Date(inv.date) < yearStart) return s;
+      return s + (Number(inv.total_price_excl_tax) || 0);
+    }, 0);
+  }
+
+  // Overzicht van de handmatig gelegde Moneybird-koppelingen (voor het ontkoppelen).
+  const explicitMbLinks = [];
+  projects.forEach(p => {
+    mbIdsOf(p).forEach(mbId => {
+      explicitMbLinks.push({
+        projectId: p.id, projectName: p.name, mbId: String(mbId),
+        mbName: mbProjectNameById.get(mbId) || mbProjectNameById.get(String(mbId)) || `Moneybird-project ${mbId}`,
+      });
+    });
+  });
+
+  // Omzet per project, via dezelfde Moneybird-Project-koppeling maar dan op verkoop-
+  // factuurregels (sales_invoice.details[].project_id). Moneybird's eigen "netto
+  // resultaat per project" (Omzet/Kosten per project-rapport) is gebaseerd op wat er
+  // daadwerkelijk geboekt/gefactureerd én aan het project getagd is — niet op het
+  // (mogelijk afwijkende) offertebedrag. Daarom hier apart bijhouden i.p.v. te
+  // vertrouwen op quotes.total_price, anders wijkt onze "werkelijke winst" af van
+  // wat in Moneybird zelf te zien is.
+  const revenueByMbProjectId = new Map(); // mbProjectId -> omzet
+  (invoices || []).forEach(inv => {
+    if (MB_EXCLUDED_REVENUE_STATES.includes(inv.state)) return;
+    (inv.details || []).forEach(d => {
+      if (!d.project_id) return;
+      const amount = Number(d.total_price_excl_tax_with_discount) || 0;
+      revenueByMbProjectId.set(d.project_id, (revenueByMbProjectId.get(d.project_id) || 0) + amount);
+    });
+  });
+  const actualRevenueByProjectName = new Map(); // lowercased lokale naam -> omzet
+  revenueByMbProjectId.forEach((amount, mbId) => {
+    const linked = projects.find(p => mbIdsOf(p).includes(String(mbId)));
+    const mbName = mbProjectNameById.get(mbId);
+    const localMatch = linked || (mbName && projects.find(p => p.name.trim().toLowerCase() === mbName.trim().toLowerCase()));
+    if (!localMatch || localMatch.exclude_from_analysis) return;
+    const key = localMatch.name.trim().toLowerCase();
+    actualRevenueByProjectName.set(key, (actualRevenueByProjectName.get(key) || 0) + amount);
+  });
+
+  // Marge per project: vergelijk de geoffreerde "eigen verdiensten" (de winst die
+  // bij het maken van de offerte was ingecalculeerd — dus ná aftrek van de cost-
+  // passthrough van materiaal/uitbesteed werk, niet het volledige offertebedrag)
+  // met de daadwerkelijke winst. Voor die laatste gebruiken we, zodra beschikbaar,
+  // de omzet die in Moneybird zelf aan het project getagd is (zelfde basis als
+  // Moneybird's eigen netto-resultaat-rapport); zolang er nog niets is gefactureerd/
+  // getagd vallen we terug op de offertewaarde als voorlopige inschatting.
+  const quoteItemsByQuoteId = new Map();
+  (quoteItemsAll || []).forEach(it => {
+    const arr = quoteItemsByQuoteId.get(it.quote_id) || [];
+    arr.push(it);
+    quoteItemsByQuoteId.set(it.quote_id, arr);
+  });
+  const quoteValueByProjectName = new Map(); // lowercased naam -> { name, quoteValue, quoteCount, estimatedProfit }
+  allAcceptedQuotes.forEach(q => {
+    const linkName = (q.project_name || q.name || '').trim();
+    if (!linkName) return;
+    const linkedProj = findLinkedProject(q);
+    if (linkedProj && linkedProj.exclude_from_analysis) return;
+    const key = linkName.toLowerCase();
+    const entry = quoteValueByProjectName.get(key) || { name: linkName, quoteValue: 0, quoteCount: 0, estimatedProfit: 0 };
+    entry.quoteValue += Number(q.total_price) || 0;
+    entry.quoteCount += 1;
+    entry.estimatedProfit += computeQuoteProfit(q, quoteItemsByQuoteId.get(q.id) || []);
+    quoteValueByProjectName.set(key, entry);
+  });
+  const costByProjectName = new Map(costsByProject.map(c => [c.name.toLowerCase(), c.cost]));
+  const marginProjectKeys = new Set([...quoteValueByProjectName.keys(), ...costByProjectName.keys(), ...actualRevenueByProjectName.keys()]);
+  const projectMargins = [];
+  marginProjectKeys.forEach(key => {
+    // Alleen afgesloten projecten scoren: bij een nog actief project kunnen nog
+    // kosten bijkomen en/of moet de eindfactuur nog verstuurd worden, waardoor een
+    // winstoordeel op dat moment niet betrouwbaar (en vaak te negatief) zou zijn.
+    const localProj = projects.find(p => p.name.trim().toLowerCase() === key);
+    if (!localProj || localProj.status !== 'done') return;
+    const q = quoteValueByProjectName.get(key);
+    const cost = costByProjectName.get(key) || 0;
+    const quoteValue = q ? q.quoteValue : 0;
+    const estimatedProfit = q ? q.estimatedProfit : null;
+    const name = q ? q.name
+      : costsByProject.find(c => c.name.toLowerCase() === key)?.name
+      || projects.find(p => p.name.trim().toLowerCase() === key)?.name
+      || key;
+    const taggedRevenue = actualRevenueByProjectName.get(key) || 0;
+    // Pas terugvallen op de offertewaarde als er in Moneybird nog niets aan dit
+    // project getagd is gefactureerd — anders altijd de echte, getagde omzet.
+    const revenueIsActual = taggedRevenue > 0;
+    const actualRevenue = revenueIsActual ? taggedRevenue : quoteValue;
+    const actualProfit = actualRevenue - cost;
+    // % van de geoffreerde eigen verdiensten die ook echt gerealiseerd is — alleen
+    // betekenisvol als er een positieve ingecalculeerde winst was om tegen af te zetten.
+    const profitRatioPct = (estimatedProfit != null && estimatedProfit > 0) ? (actualProfit / estimatedProfit) * 100 : null;
+    projectMargins.push({ name, quoteValue, cost, estimatedProfit, actualRevenue, actualProfit, profitRatioPct, revenueIsActual, hasQuote: !!q, hasCost: costByProjectName.has(key) });
+  });
+  // Sterkste presteerders (t.o.v. de eigen geoffreerde inschatting) eerst; projecten
+  // zonder bruikbare ratio (geen offerte, of offerte zonder ingecalculeerde winst)
+  // onderaan, want daarvoor is geen winstgevendheidsoordeel te trekken.
+  projectMargins.sort((a, b) => {
+    if (a.profitRatioPct === null && b.profitRatioPct === null) return b.cost - a.cost;
+    if (a.profitRatioPct === null) return 1;
+    if (b.profitRatioPct === null) return -1;
+    return b.profitRatioPct - a.profitRatioPct;
+  });
 
   const sumPrice = list => list.reduce((s, q) => s + (Number(q.total_price) || 0), 0);
   const openQuotesValue     = sumPrice(openQuotes);
@@ -6380,7 +6987,7 @@ async function computeBusinessSnapshot() {
   });
 
   // ── Moneybird data: omzet, trend, openstaande facturen ──
-  let thisMonthRevenue = null, lastMonthRevenue = null, revenueTrend6mo = [];
+  let thisMonthRevenue = null, lastMonthRevenue = null, revenueTrend6mo = [], revenueYTD = null, hourlyRateTrend6mo = [];
   let outstanding = { count: 0, sum: 0 }, outstandingLastMonth = { count: 0, sum: 0 };
   let overdueCount = 0;
   let moneybirdError = invoices === null;
@@ -6400,6 +7007,31 @@ async function computeBusinessSnapshot() {
       const total = sumWhere(counted, inv => inv.invoice_date && new Date(inv.invoice_date) >= m && new Date(inv.invoice_date) < next, revenueOf);
       return { label: monthLabel(m), total };
     });
+
+    revenueYTD = sumWhere(counted, inv => inv.invoice_date && new Date(inv.invoice_date) >= yearStart, revenueOf);
+
+    // Uurloon-trend: winst per maand (omzet - kosten) ÷ maandelijkse uren-capaciteit
+    if (Array.isArray(purchaseInvoices)) {
+      const MONTHLY_HOURS = ANNUAL_HOURS / 12;
+      const trendMonths = [];
+      for (let i = 5; i >= 0; i--) trendMonths.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
+      const raw = trendMonths.map(m => {
+        const next = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+        const rev  = sumWhere(counted, inv => inv.invoice_date && new Date(inv.invoice_date) >= m && new Date(inv.invoice_date) < next, revenueOf);
+        const cost = purchaseInvoices.reduce((s, inv) => {
+          if (!inv.date) return s;
+          const d = new Date(inv.date);
+          return (d >= m && d < next) ? s + (Number(inv.total_price_excl_tax) || 0) : s;
+        }, 0);
+        return { label: monthLabel(m), rate: (rev - cost) / MONTHLY_HOURS };
+      });
+      // 3-maands voortschrijdend gemiddelde
+      hourlyRateTrend6mo = raw.map((m, i, arr) => {
+        const window = arr.slice(Math.max(0, i - 2), i + 1);
+        const avg3mo = window.reduce((s, x) => s + x.rate, 0) / window.length;
+        return { ...m, avg3mo };
+      });
+    }
 
     // Moneybirds "Te ontvangen": incl. BTW, en houdt rekening met al ontvangen
     // deelbetalingen — vandaar total_unpaid (restbedrag) i.p.v. het volledige
@@ -6425,14 +7057,19 @@ async function computeBusinessSnapshot() {
     ? revenueTrend6mo.slice(-3).reduce((s, m) => s + m.total, 0) / 3
     : null;
 
+  const profitYTD = (revenueYTD !== null && costsYTD !== null) ? revenueYTD - costsYTD : null;
+  const effectiveHourlyRate = profitYTD !== null ? profitYTD / hoursYTD : null;
+
   return {
     generatedAt: now.toISOString(),
     moneybirdError,
     thisMonthRevenue, lastMonthRevenue, revenueTrend6mo, avgMonthlyRevenue3mo,
+    revenueYTD, costsYTD, profitYTD, effectiveHourlyRate, hoursYTD,
+    hourlyRateTrend6mo,
     outstanding, outstandingLastMonth, overdueCount,
-    costsError, costsByProject, unmatchedProjectCosts,
+    costsError, costsByProject, unmatchedProjectCosts, projectMargins,
     activeProjects, longRunningProjects,
-    currentlyActiveProjects, upcomingProjects,
+    currentlyActiveProjects, upcomingProjects, unplannedProjects, explicitMbLinks,
     openQuotes, openQuotesValue,
     acceptedQuotes, orderportefeuille,
     fulfilledQuotes, fulfilledQuotesValue,
@@ -6559,6 +7196,16 @@ function buildSnapshotContextText(snap) {
       lines.push(`Kosten op Moneybird-projecten zonder match in deze app (naam wijkt mogelijk af): ${snap.unmatchedProjectCosts.map(c => `${c.name}: ${fmtEur(c.cost)}`).join(', ')}`);
     }
   }
+  if (snap.projectMargins.length) {
+    const withQuote = snap.projectMargins.filter(m => m.hasQuote);
+    if (withQuote.length) {
+      lines.push(`Eigen verdiensten per afgesloten project (alleen projecten met status "Afgerond" — bij lopende projecten is dit nog niet betrouwbaar) — prognose winst uit de offerte vs. daadwerkelijke winst (omzet die in Moneybird aan het project getagd is, of bij gebrek daaraan de offertewaarde, minus werkelijke Moneybird-kosten, excl. BTW), met de afwijking t.o.v. de prognose (+ = beter dan verwacht, - = slechter), gesorteerd sterkste presteerders eerst: ${withQuote.map(m => `${m.name}: prognose ${fmtEur(m.estimatedProfit)}, daadwerkelijk ${fmtEur(m.actualProfit)}${m.profitRatioPct !== null ? ` (${fmtProfitDelta(m.profitRatioPct)})` : ''}${m.revenueIsActual ? '' : ' [nog gebaseerd op offertewaarde, nog geen omzet getagd in Moneybird]'}`).join('; ')}`);
+    }
+    const costOnly = snap.projectMargins.filter(m => !m.hasQuote);
+    if (costOnly.length) {
+      lines.push(`Projecten met Moneybird-kosten maar zonder bekende geaccepteerde offertewaarde (winst niet te vergelijken): ${costOnly.map(m => `${m.name}: ${fmtEur(m.cost)}`).join(', ')}`);
+    }
+  }
   if (snap.fulfilledQuotes.length) {
     lines.push(`Afgerond en al geleverd (project afgerond, bewust niet meegeteld in orderportefeuille): ${snap.fulfilledQuotes.length} offertes, ${fmtEur(snap.fulfilledQuotesValue)}`);
   }
@@ -6608,7 +7255,7 @@ Antwoord ALLEEN met geldige JSON in exact dit formaat, zonder markdown-codeblok 
 
   const requestBody = {
     model: 'claude-opus-4-8',
-    max_tokens: 1024,
+    max_tokens: 2048,
     system: buildCoachSystemPrompt(),
     messages: [{ role: 'user', content: prompt }],
   };
@@ -6650,7 +7297,7 @@ async function sendBizChatMessage(userText, priorHistory) {
     `Sluit je antwoord af met een losse regel die begint met "Mijn advies:" gevolgd door één concrete actie.`;
   const messages = [...priorHistory, { role: 'user', content: userText }]
     .map(m => ({ role: m.role, content: m.content }));
-  const requestBody = { model: 'claude-opus-4-8', max_tokens: 1024, system, messages };
+  const requestBody = { model: 'claude-opus-4-8', max_tokens: 2048, system, messages };
   return _sendClaudeRequest(token, requestBody);
 }
 
@@ -6692,16 +7339,28 @@ async function findOrCreateMoneybirdContact() {
   return newContact.id;
 }
 
+async function findOrCreateMoneybirdProject(name) {
+  // Search in first 100 projects (enough for most administrations)
+  const all = await moneybirdFetch('GET', 'projects.json?filter=state:all&per_page=100');
+  if (Array.isArray(all)) {
+    const found = all.find(p => p.name.trim().toLowerCase() === name.trim().toLowerCase());
+    if (found) return found.id;
+  }
+  const created = await moneybirdFetch('POST', 'projects.json', { project: { name } });
+  return created.id;
+}
+
 async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
   if (!qe.id) { toast('Sla de offerte eerst op', 'warn'); return; }
   try {
     toast('Factuur aanmaken in Moneybird…', 'info', 8000);
 
-    const taxRateId = await getMoneybirdTaxRateId();
-    const contactId = await findOrCreateMoneybirdContact();
-    const totals    = calcQETotals();
-    const globalMgn = parseFloat(qe.margin || 20);
-    const outMgn    = parseFloat(qe.outsource_margin || 15);
+    const taxRateId  = await getMoneybirdTaxRateId();
+    const contactId  = await findOrCreateMoneybirdContact();
+    const projectId  = await findOrCreateMoneybirdProject(quoteProjectName());
+    const totals     = calcQETotals();
+    const globalMgn  = parseFloat(qe.margin || 20);
+    const outMgn     = parseFloat(qe.outsource_margin || 15);
 
     let details;
     if (mode === 'totaal') {
@@ -6710,6 +7369,7 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
         price:       totals.subtotal.toFixed(2),
         amount:      '1 stuks',
         tax_rate_id: taxRateId,
+        project_id:  projectId,
       }];
     } else {
       // One line per enabled material + service
@@ -6720,6 +7380,7 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
           price:       (m.unit_price * (1 + pct / 100)).toFixed(2),
           amount:      `${m.quantity}${m.unit ? ' ' + m.unit : ''}`.trim() || '1',
           tax_rate_id: taxRateId,
+          project_id:  projectId,
         };
       });
       const svcLines = qe.services.filter(s => s.enabled !== 0).map(s => {
@@ -6731,6 +7392,7 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
           price:       price.toFixed(2),
           amount:      `${s.quantity} uur`,
           tax_rate_id: taxRateId,
+          project_id:  projectId,
         };
       });
       details = [...matLines, ...svcLines];
@@ -6743,6 +7405,20 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
         details_attributes: details,
       },
     });
+
+    // Persist the Moneybird project ID on the local project so the analysis can match by ID.
+    // Toevoegen aan de lijst (niet alleen als 'ie leeg is), zodat extra Moneybird-projecten
+    // die bij dezelfde klus horen er ook bij komen.
+    const localProj = state.projects.find(p => p.name.trim().toLowerCase() === quoteProjectName().toLowerCase());
+    if (localProj) {
+      const ids = mbIdsOf(localProj);
+      if (!ids.includes(String(projectId))) {
+        ids.push(String(projectId));
+        const newVal = ids.join(',');
+        await remoteQuery({ action: 'update', table: 'projects', data: { moneybird_project_id: newVal }, where: { id: localProj.id } });
+        localProj.moneybird_project_id = newVal;
+      }
+    }
 
     toast('Factuur aangemaakt! Opening in Moneybird…', 'success', 4000);
     const mbUrl = `https://moneybird.com/${_moneybirdAdminId}/sales_invoices/${invoice.id}`;
@@ -7079,13 +7755,26 @@ ${opts.show_title_page ? `
       <tbody>${svcRows}</tbody>
     </table>` : ''}
 
+    ${t.isFixedPrice && t.fixedItems?.length > 0 ? `
+    <h3>Vaste stuksprijs</h3>
+    <table class="content-table">
+      <thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Stuksprijs</th><th class="r" style="width:17%">Totaal</th></tr></thead>
+      <tbody>${t.fixedItems.map(it => `
+      <tr>
+        <td>${escHtml(it.name || '—')}</td>
+        <td class="r">${it.quantity ?? 1}</td>
+        <td class="r">${fmtEur(it.unit_price)}</td>
+        <td class="r">${fmtEur((it.quantity ?? 1) * (it.unit_price ?? 0))}</td>
+      </tr>`).join('')}</tbody>
+    </table>` : ''}
+
     <div class="totals-box">
       <table class="content-table">
         <thead><tr><th colspan="2">Totaaloverzicht</th></tr></thead>
         <tbody>
           ${t.isFixedPrice ? `
             ${matRowsEnabled.length > 0 ? `<tr><td>Inkoop materialen</td><td class="r">${fmtEur(t.matEx)}</td></tr>` : ''}
-            <tr><td>Verkoopprijs (${t.fixedQty} × ${fmtEur(t.fixedPrice)})</td><td class="r">${fmtEur(t.fixedRevenue)}</td></tr>
+            <tr><td>Totaal verkoopprijs</td><td class="r">${fmtEur(t.fixedRevenue)}</td></tr>
             <tr><td><em>Eigen verdiensten</em></td><td class="r"><em>${fmtEur(t.profit)}</em></td></tr>
           ` : `
             ${matRowsEnabled.length > 0 ? `<tr><td>Totaal materialen</td><td class="r">${fmtEur(t.matTotal)}</td></tr>` : ''}
@@ -7162,6 +7851,15 @@ function fmtEur(n) {
   return '€\u00a0' + Number(n || 0).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Toont profitRatioPct (% van de geoffreerde winst dat gerealiseerd is) als een
+// duidelijker afwijking t.o.v. de prognose: 100% (precies op prognose) -> "+0%",
+// 129% -> "+29%", 82% -> "-18%".
+function fmtProfitDelta(profitRatioPct) {
+  if (profitRatioPct === null) return '—';
+  const delta = profitRatioPct - 100;
+  return `${delta >= 0 ? '+' : ''}${delta.toFixed(0)}%`;
+}
+
 function fmtQuoteStatus(s) {
   return { draft: 'Concept', sent: 'Verzonden', accepted: 'Geaccepteerd', rejected: 'Afgewezen', later: 'Later' }[s] || s;
 }
@@ -7180,7 +7878,7 @@ function wireTeam() {
   document.getElementById('team-btn').onclick = () => openTeamModal();
   document.getElementById('team-close').onclick = () =>
     document.getElementById('team-modal').classList.add('hidden');
-  document.getElementById('team-modal').addEventListener('click', e => {
+  document.getElementById('team-modal').addEventListener('mousedown', e => {
     if (e.target === document.getElementById('team-modal'))
       document.getElementById('team-modal').classList.add('hidden');
   });

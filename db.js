@@ -195,9 +195,10 @@ function migrateSchema() {
   if (!projCols.includes('moneybird_project_id')) db.exec("ALTER TABLE projects ADD COLUMN moneybird_project_id TEXT DEFAULT ''");
 
   const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
-  if (!qiCols.includes('is_outsourced')) db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced INTEGER DEFAULT 0");
-  if (!qiCols.includes('margin'))        db.exec("ALTER TABLE quote_items ADD COLUMN margin        REAL    DEFAULT NULL");
-  if (!qiCols.includes('enabled'))       db.exec("ALTER TABLE quote_items ADD COLUMN enabled       INTEGER DEFAULT 1");
+  if (!qiCols.includes('is_outsourced'))  db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced  INTEGER DEFAULT 0");
+  if (!qiCols.includes('margin'))         db.exec("ALTER TABLE quote_items ADD COLUMN margin         REAL    DEFAULT NULL");
+  if (!qiCols.includes('enabled'))        db.exec("ALTER TABLE quote_items ADD COLUMN enabled        INTEGER DEFAULT 1");
+  if (!qiCols.includes('section_label'))  db.exec("ALTER TABLE quote_items ADD COLUMN section_label  TEXT    DEFAULT NULL");
 
   // One-time migration: consolidate duplicate stages by (project_id, name) and
   // move their date ranges into the new stage_slots table.

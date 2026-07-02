@@ -197,6 +197,8 @@ def init_db():
         db.execute("ALTER TABLE quote_items ADD COLUMN margin REAL DEFAULT NULL")
     if 'enabled' not in qicols:
         db.execute("ALTER TABLE quote_items ADD COLUMN enabled INTEGER DEFAULT 1")
+    if 'section_label' not in qicols:
+        db.execute("ALTER TABLE quote_items ADD COLUMN section_label TEXT DEFAULT NULL")
     pcols = [r[1] for r in db.execute("PRAGMA table_info(projects)").fetchall()]
     if 'client' not in pcols:
         db.execute("ALTER TABLE projects ADD COLUMN client TEXT DEFAULT ''")
