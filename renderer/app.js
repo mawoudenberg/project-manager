@@ -1225,11 +1225,16 @@ function renderWeekly() {
   const content = document.getElementById('content');
   const ctrl = document.getElementById('toolbar-controls');
 
-  // Find Monday of the week
+  // Find Monday of the week. On Sunday (day=0) the ISO week is almost over,
+  // so show the upcoming week instead — feels more useful than "last 6 days."
   const d = new Date(state.cursor);
   const day = d.getDay();
   const monday = new Date(d);
-  monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+  if (day === 0) {
+    monday.setDate(d.getDate() + 1); // Sunday → next Monday
+  } else {
+    monday.setDate(d.getDate() - (day - 1));
+  }
 
   const weekDates = Array.from({length: 7}, (_, i) => {
     const dd = new Date(monday);

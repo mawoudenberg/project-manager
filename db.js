@@ -190,6 +190,8 @@ function migrateSchema() {
   // de actieve pijplijn — uitsluiten van de Bedrijfsanalyse-cijfers zonder hun status
   // (en daarmee Gantt/kalender-zichtbaarheid) aan te raken.
   if (!projCols.includes('exclude_from_analysis')) db.exec("ALTER TABLE projects ADD COLUMN exclude_from_analysis INTEGER DEFAULT 0");
+  // Auto-mark projects literally named "Algemeen" as excluded; one-time migration.
+  db.exec("UPDATE projects SET exclude_from_analysis = 1 WHERE name = 'Algemeen' AND exclude_from_analysis = 0");
   // Handmatige koppeling met een Moneybird-Project (id), voor wanneer de naam in
   // Moneybird afwijkt van de projectnaam in deze app en automatisch matchen faalt.
   if (!projCols.includes('moneybird_project_id')) db.exec("ALTER TABLE projects ADD COLUMN moneybird_project_id TEXT DEFAULT ''");
