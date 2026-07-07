@@ -4831,7 +4831,8 @@ function _renderQuoteTable() {
   list.forEach(q => {
     const hasTotal = q.total_price != null;
     const checked = _selectedQuoteIds.has(q.id);
-    const fulfilled = q.project_name && state.projects?.find(p => p.name.trim().toLowerCase() === q.project_name.trim().toLowerCase() && p.status === 'done');
+    const linkName = (q.project_name || q.name || '').trim().toLowerCase();
+    const fulfilled = linkName && state.projects?.find(p => p.name.trim().toLowerCase() === linkName && p.status === 'done');
     html += `<tr class="quote-row${checked ? ' ql-row-selected' : ''}" data-id="${q.id}">
       <td class="ql-cb-col"><input type="checkbox" class="ql-cb" data-id="${q.id}"${checked ? ' checked' : ''} /></td>
       <td><strong>${escHtml(q.name)}</strong></td>
