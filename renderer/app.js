@@ -4842,7 +4842,7 @@ function _renderQuoteTable() {
       <td>
         <select class="badge badge-${q.status} quote-status-select" data-id="${q.id}">
           ${quoteStatusOptionsHtml(q.status)}
-        </select>${fulfilled ? ` <span title="Gekoppeld project is afgerond — al geleverd" style="display:inline-block;margin-left:8px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:#1e7a3a;color:#fff">✓ afgerond</span>` : ''}
+        </select>${fulfilled ? ` <span title="Gekoppeld project is afgerond — al geleverd" style="margin-left:6px;font-size:10px;color:var(--text2);opacity:0.7">✓ geleverd</span>` : ''}
       </td>
       <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
