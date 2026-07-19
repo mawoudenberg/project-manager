@@ -4839,11 +4839,11 @@ function _renderQuoteTable() {
       <td>${escHtml(q.client)}</td>
       <td>${q.quote_date || '—'}</td>
       <td class="amount qt-total${hasTotal ? '' : ' loading'}" id="qt-total-${q.id}">${hasTotal ? fmtEur(q.total_price) : '…'}</td>
-      <td>
+      <td><div style="display:flex;align-items:center;gap:6px;white-space:nowrap">
         <select class="badge badge-${q.status} quote-status-select" data-id="${q.id}">
           ${quoteStatusOptionsHtml(q.status)}
-        </select>${fulfilled ? ` <span title="Gekoppeld project is afgerond — al geleverd" style="margin-left:6px;font-size:10px;color:var(--text2);opacity:0.7">✓ geleverd</span>` : ''}
-      </td>
+        </select>${fulfilled ? `<span title="Gekoppeld project is afgerond — al geleverd" style="font-size:10px;color:var(--text2);opacity:0.7">✓ geleverd</span>` : ''}
+      </div></td>
       <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
   });
