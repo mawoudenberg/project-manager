@@ -7050,7 +7050,12 @@ async function computeBusinessSnapshot() {
 
     const outstandingInvoices = invoices.filter(inv => MB_OUTSTANDING_STATES.includes(inv.state));
     outstanding = { count: outstandingInvoices.length, sum: sumWhere(outstandingInvoices, () => true, unpaidOf) };
-    overdueCount = invoices.filter(inv => inv.state === 'late').length;
+    // Eigen definitie: openstaand én factuur ouder dan 30 dagen (niet Moneybird's vervaldatum)
+    const thirtyDaysAgo = new Date(now - 30 * 86400000);
+    overdueCount = invoices.filter(inv =>
+      MB_OUTSTANDING_STATES.includes(inv.state) &&
+      inv.invoice_date && new Date(inv.invoice_date) < thirtyDaysAgo
+    ).length;
 
     // Benadering van "openstaand op het einde van vorige maand": gefactureerd
     // vóór die datum, en op dat moment nog niet (volledig) betaald.
@@ -7127,13 +7132,13 @@ function computeBusinessScore(snap) {
   const coverageMonths = snap.avgMonthlyRevenue3mo > 0 ? snap.orderportefeuille / snap.avgMonthlyRevenue3mo : null;
   const orderScore = coverageMonths == null ? 5 : Math.max(0, Math.min(10, (coverageMonths / 2) * 10));
 
-  // Cashflow: openstaand bedrag t.o.v. gemiddelde maandomzet — 0 openstaand = 10
+  // Cashflow: 1× maandomzet openstaand = 7 (normaal), minder = hoger, meer = lager
   const outstandingRatio = (!snap.moneybirdError && snap.avgMonthlyRevenue3mo > 0)
     ? snap.outstanding.sum / snap.avgMonthlyRevenue3mo : null;
-  const cashflowScore = outstandingRatio == null ? 5 : Math.max(0, 10 - outstandingRatio * 5);
+  const cashflowScore = outstandingRatio == null ? 5 : Math.max(0, 10 - outstandingRatio * 3);
 
-  // Facturen: punten aftrek per te-laat-factuur
-  const facturenScore = snap.moneybirdError ? 5 : Math.max(0, 10 - snap.overdueCount * 2);
+  // Facturen: 1 punt aftrek per factuur ouder dan 30 dagen nog onbetaald
+  const facturenScore = snap.moneybirdError ? 5 : Math.max(0, 10 - snap.overdueCount * 1);
 
   // Projectbelasting: ideaal binnen [min,max], daarbuiten aftrek per project.
   // Telt alleen projecten die volgens de Gantt-planning al gestart zijn —
