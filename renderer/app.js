@@ -7123,9 +7123,9 @@ function computeWarnings(snap) {
 }
 
 function computeBusinessScore(snap) {
-  // Orderportefeuille: dekking in maanden, 0 mnd = 0, 3+ mnd = 10
+  // Orderportefeuille: dekking in maanden, 0 mnd = 0, 2+ mnd = 10
   const coverageMonths = snap.avgMonthlyRevenue3mo > 0 ? snap.orderportefeuille / snap.avgMonthlyRevenue3mo : null;
-  const orderScore = coverageMonths == null ? 5 : Math.max(0, Math.min(10, (coverageMonths / 3) * 10));
+  const orderScore = coverageMonths == null ? 5 : Math.max(0, Math.min(10, (coverageMonths / 2) * 10));
 
   // Cashflow: openstaand bedrag t.o.v. gemiddelde maandomzet — 0 openstaand = 10
   const outstandingRatio = (!snap.moneybirdError && snap.avgMonthlyRevenue3mo > 0)
