@@ -6221,10 +6221,12 @@ function computeQuoteProfit(quote, items) {
   try { extras = JSON.parse(quote.extras_json || '{}') || {}; } catch (_) {}
   const fixedItems = getQuoteFixedItems(extras);
   if (fixedItems.length) {
-    const matInkoop = items.filter(i => i.enabled !== 0 && i.type === 'material')
+    const matInkoop    = items.filter(i => i.enabled !== 0 && i.type === 'material')
+      .reduce((s, i) => s + (i.quantity ?? 1) * (i.unit_price ?? 0), 0);
+    const svcOutInkoop = items.filter(i => i.enabled !== 0 && i.type === 'service' && i.is_outsourced)
       .reduce((s, i) => s + (i.quantity ?? 1) * (i.unit_price ?? 0), 0);
     const revenue = fixedItems.reduce((s, it) => s + (it.quantity ?? 1) * (it.unit_price ?? 0), 0);
-    return revenue - matInkoop;
+    return revenue - matInkoop - svcOutInkoop;
   }
   return calcQuoteTotals(items, quote.margin, extras.outsource_margin ?? 0).profit;
 }
@@ -6233,10 +6235,12 @@ function calcQETotals() {
   // Vaste stuksprijs modus: verkoopprijs per stuk is handmatig bepaald, met meerdere
   // regels mogelijk (bv. 3x groot blok, 2x klein, 8x middel, elk met eigen stuksprijs).
   if (qe.fixed_enabled && qe.fixed_items?.length) {
-    const matInkoop  = qe.materials.filter(m => m.enabled !== 0)
+    const matInkoop     = qe.materials.filter(m => m.enabled !== 0)
       .reduce((s, m) => s + (m.quantity ?? 1) * (m.unit_price ?? 0), 0);
+    const svcOutInkoop  = qe.services.filter(s => s.enabled !== 0 && s.is_outsourced)
+      .reduce((s, sv) => s + (sv.quantity ?? 1) * (sv.unit_price ?? 0), 0);
     const revenue    = qe.fixed_items.reduce((s, it) => s + (it.quantity ?? 1) * (it.unit_price ?? 0), 0);
-    const profit     = revenue - matInkoop;
+    const profit     = revenue - matInkoop - svcOutInkoop;
     const subtotal   = revenue;
     const btw        = subtotal * 0.21;
     return {
