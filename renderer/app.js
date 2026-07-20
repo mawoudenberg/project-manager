@@ -4337,8 +4337,12 @@ function renderBizDashboardContent(snap) {
   const warnings = computeWarnings(snap);
   const score = computeBusinessScore(snap);
 
-  const dayOfMonth = new Date().getDate();
-  const revChangePct = dayOfMonth <= 7 ? null : pctChange(snap.thisMonthRevenue, snap.lastMonthRevenue);
+  const now = new Date();
+  const dayOfMonth = now.getDate();
+  // Vergelijk met een evenredig deel van vorige maand zodat dag 10 eerlijk is t.o.v. dag 10
+  const daysInLastMonth = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+  const lastMonthProrated = snap.lastMonthRevenue * (dayOfMonth / daysInLastMonth);
+  const revChangePct = dayOfMonth <= 3 ? null : pctChange(snap.thisMonthRevenue, lastMonthProrated);
   // Voor openstaande facturen is een dáling juist positief, dus het teken omdraaien.
   const outChangePct = pctChange(snap.outstanding.sum, snap.outstandingLastMonth.sum);
 
