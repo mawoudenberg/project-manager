@@ -2612,9 +2612,10 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 
 /* Project-margin grid table */
 .pm-table { display: flex; flex-direction: column; font-size: 13px; margin-top: 4px; }
+.pm-toolbar { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text2); padding: 4px 0 8px; }
 .pm-row {
   display: grid;
-  grid-template-columns: 1fr 130px 140px 52px;
+  grid-template-columns: 1fr 120px 130px 56px 60px;
   align-items: center;
   padding: 7px 0;
   border-bottom: 1px solid var(--border);
@@ -2633,9 +2634,10 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .pm-hdr span { text-align: right; }
 .pm-hdr span:first-child { text-align: left; }
 .pm-name { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pm-col-est  { text-align: right; color: var(--text2); font-size: 12px; }
+.pm-col-est    { text-align: right; color: var(--text2); font-size: 12px; }
 .pm-col-actual { text-align: right; }
-.pm-col-pct  { text-align: right; }
+.pm-col-marge  { text-align: right; font-size: 12px; }
+.pm-col-pct    { text-align: right; }
 .pm-actual { font-size: 14px; font-weight: 700; color: var(--text); }
 .pm-pct    { font-size: 14px; font-weight: 700; }
 .pm-actual.biz-margin-good, .pm-pct.biz-margin-good { color: #2e9e5b; }

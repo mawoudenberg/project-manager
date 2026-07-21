@@ -4503,24 +4503,26 @@ function renderBizDashboardContent(snap) {
         ? `<p class="biz-empty-sub">Moneybird-kosten/projectdata niet beschikbaar.</p>`
         : (snap.projectMargins.length || snap.activeProjectMargins.length || snap.unmatchedProjectCosts.length || snap.explicitMbLinks.length)
           ? `<div class="pm-table">
+              <div class="pm-toolbar">
+                Sorteren:
+                ${['margin','name','date'].map(s => {
+                  const cur = localStorage.getItem('pm_sort') || 'margin';
+                  const labels = {margin:'Marge',name:'Naam',date:'Datum'};
+                  return `<button class="pm-sort-btn${cur===s?' pm-sort-active':''}" data-sort="${s}">${labels[s]}</button>`;
+                }).join('')}
+              </div>
               <div class="pm-row pm-hdr">
                 <span></span>
                 <span>Prognose winst</span>
                 <span>Daadwerkelijke winst</span>
-                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end">
-                  ${['margin','name','date'].map(s => {
-                    const cur = localStorage.getItem('pm_sort') || 'margin';
-                    const labels = {margin:'Marge',name:'Naam',date:'Datum'};
-                    return `<button class="pm-sort-btn${cur===s?' pm-sort-active':''}" data-sort="${s}">${labels[s]}</button>`;
-                  }).join('')}
-                </span>
+                <span>Marge %</span>
+                <span>vs. prognose</span>
               </div>
               ${(() => {
                 const sortKey = localStorage.getItem('pm_sort') || 'margin';
                 const sortFn = (a, b) => {
                   if (sortKey === 'name') return a.name.localeCompare(b.name, 'nl');
                   if (sortKey === 'date') return (b.startDate || '').localeCompare(a.startDate || '');
-                  // margin: profitRatioPct desc, nulls last
                   if (a.profitRatioPct === null && b.profitRatioPct === null) return b.cost - a.cost;
                   if (a.profitRatioPct === null) return 1;
                   if (b.profitRatioPct === null) return -1;
@@ -4528,29 +4530,31 @@ function renderBizDashboardContent(snap) {
                 };
                 return [...snap.projectMargins].sort(sortFn).map(m => {
                 const delta = m.profitRatioPct === null ? null : m.profitRatioPct - 100;
-                // Percentage kleur: drempel op delta (t.o.v. prognose)
                 const pctClass = delta === null ? '' : delta < -50 ? 'biz-margin-bad' : delta < -10 ? 'biz-margin-warn' : 'biz-margin-good';
-                // Winstbedrag: altijd groen tenzij verlies (negatief)
                 const profitClass = m.actualProfit < 0 ? 'biz-margin-bad' : 'biz-margin-good';
-                let col2, col3, col4;
+                const revenueMargePct = m.actualRevenue > 0 ? (m.actualProfit / m.actualRevenue) * 100 : null;
+                const margeClass = revenueMargePct === null ? '' : revenueMargePct < 0 ? 'biz-margin-bad' : revenueMargePct < 20 ? 'biz-margin-warn' : 'biz-margin-good';
+                let col2, col3, col4, col5;
                 if (m.hasQuote) {
                   col2 = `${fmtEur(m.estimatedProfit)}${m.revenueIsActual ? '' : ' <span class="biz-margin-note" title="Nog geen omzet getagd in Moneybird">*</span>'}`;
                   col3 = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
-                  col4 = m.profitRatioPct !== null ? `<span class="pm-pct ${pctClass}">${fmtProfitDelta(m.profitRatioPct)}</span>` : '';
+                  col4 = revenueMargePct !== null ? `<span class="${margeClass}">${revenueMargePct.toFixed(0)}%</span>` : '';
+                  col5 = m.profitRatioPct !== null ? `<span class="pm-pct ${pctClass}">${fmtProfitDelta(m.profitRatioPct)}</span>` : '';
                 } else if (m.revenueIsActual) {
                   col2 = `<span class="biz-margin-note">Gef. ${fmtEur(m.actualRevenue)}</span>`;
                   col3 = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
-                  col4 = '';
+                  col4 = revenueMargePct !== null ? `<span class="${margeClass}">${revenueMargePct.toFixed(0)}%</span>` : '';
+                  col5 = '';
                 } else {
-                  col2 = '';
-                  col3 = `<span class="biz-margin-note">Kosten: ${fmtEur(m.cost)}</span>`;
-                  col4 = '';
+                  col2 = ''; col3 = `<span class="biz-margin-note">Kosten: ${fmtEur(m.cost)}</span>`;
+                  col4 = ''; col5 = '';
                 }
                 return `<div class="pm-row">
                   <span class="pm-name">${escHtml(m.name)}</span>
                   <span class="pm-col-est">${col2}</span>
                   <span class="pm-col-actual">${col3}</span>
-                  <span class="pm-col-pct">${col4}</span>
+                  <span class="pm-col-marge">${col4}</span>
+                  <span class="pm-col-pct">${col5}</span>
                 </div>`;
               }).join('')
               })()}
