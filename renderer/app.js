@@ -4505,24 +4505,36 @@ function renderBizDashboardContent(snap) {
           ? `<div class="pm-table">
               <div class="pm-toolbar">
                 Sorteren:
-                ${['margin','name','date'].map(s => {
-                  const cur = localStorage.getItem('pm_sort') || 'margin';
-                  const labels = {margin:'Marge',name:'Naam',date:'Datum'};
+                ${['prognose','gefactureerd','marge','vsprognose','winst','name','date'].map(s => {
+                  const cur = localStorage.getItem('pm_sort') || 'winst';
+                  const labels = {prognose:'Prognose',gefactureerd:'Gefactureerd',marge:'Marge %',vsprognose:'vs. prognose',winst:'Winst',name:'Naam',date:'Datum'};
                   return `<button class="pm-sort-btn${cur===s?' pm-sort-active':''}" data-sort="${s}">${labels[s]}</button>`;
                 }).join('')}
               </div>
               <div class="pm-row pm-hdr">
                 <span></span>
-                <span>Prognose winst</span>
-                <span>Daadwerkelijke winst</span>
+                <span>Prognose</span>
+                <span>Gefactureerd</span>
                 <span>Marge %</span>
                 <span>vs. prognose</span>
+                <span>Winst</span>
               </div>
               ${(() => {
-                const sortKey = localStorage.getItem('pm_sort') || 'margin';
+                const sortKey = localStorage.getItem('pm_sort') || 'winst';
                 const sortFn = (a, b) => {
                   if (sortKey === 'name') return a.name.localeCompare(b.name, 'nl');
                   if (sortKey === 'date') return (b.startDate || '').localeCompare(a.startDate || '');
+                  if (sortKey === 'prognose') return (b.estimatedProfit || 0) - (a.estimatedProfit || 0);
+                  if (sortKey === 'gefactureerd') return (b.actualRevenue || 0) - (a.actualRevenue || 0);
+                  if (sortKey === 'marge') {
+                    const ma = a.actualRevenue > 0 ? a.actualProfit / a.actualRevenue : null;
+                    const mb2 = b.actualRevenue > 0 ? b.actualProfit / b.actualRevenue : null;
+                    if (ma === null && mb2 === null) return 0;
+                    if (ma === null) return 1; if (mb2 === null) return -1;
+                    return mb2 - ma;
+                  }
+                  if (sortKey === 'winst') return (b.actualProfit || 0) - (a.actualProfit || 0);
+                  // vsprognose (en legacy 'margin')
                   if (a.profitRatioPct === null && b.profitRatioPct === null) return b.cost - a.cost;
                   if (a.profitRatioPct === null) return 1;
                   if (b.profitRatioPct === null) return -1;
@@ -4534,35 +4546,29 @@ function renderBizDashboardContent(snap) {
                 const profitClass = m.actualProfit < 0 ? 'biz-margin-bad' : 'biz-margin-good';
                 const revenueMargePct = m.actualRevenue > 0 ? (m.actualProfit / m.actualRevenue) * 100 : null;
                 const margeClass = revenueMargePct === null ? '' : revenueMargePct < 0 ? 'biz-margin-bad' : revenueMargePct < 20 ? 'biz-margin-warn' : 'biz-margin-good';
-                let col2, col3, col4, col5;
-                if (m.hasQuote) {
-                  col2 = `${fmtEur(m.estimatedProfit)}${m.revenueIsActual ? '' : ' <span class="biz-margin-note" title="Nog geen omzet getagd in Moneybird">*</span>'}`;
-                  col3 = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
-                  col4 = revenueMargePct !== null ? `<span class="${margeClass}">${revenueMargePct.toFixed(0)}%</span>` : '';
-                  col5 = m.profitRatioPct !== null ? `<span class="pm-pct ${pctClass}">${fmtProfitDelta(m.profitRatioPct)}</span>` : '';
-                } else if (m.revenueIsActual) {
-                  col2 = `<span class="biz-margin-note">Gef. ${fmtEur(m.actualRevenue)}</span>`;
-                  col3 = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
-                  col4 = revenueMargePct !== null ? `<span class="${margeClass}">${revenueMargePct.toFixed(0)}%</span>` : '';
-                  col5 = '';
-                } else {
-                  col2 = ''; col3 = `<span class="biz-margin-note">Kosten: ${fmtEur(m.cost)}</span>`;
-                  col4 = ''; col5 = '';
-                }
+                const notActual = !m.revenueIsActual ? ' <span class="biz-margin-note" title="Nog geen omzet getagd in Moneybird — offertebedrag als schatting">*</span>' : '';
+                const colEst  = m.hasQuote ? fmtEur(m.estimatedProfit) : '—';
+                const colGef  = `${fmtEur(m.actualRevenue)}${notActual}`;
+                const colMrg  = revenueMargePct !== null ? `<span class="${margeClass}">${revenueMargePct.toFixed(0)}%</span>` : '—';
+                const colVsPr = m.profitRatioPct !== null ? `<span class="pm-pct ${pctClass}">${fmtProfitDelta(m.profitRatioPct)}</span>` : '—';
+                const colWst  = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
                 return `<div class="pm-row">
                   <span class="pm-name">${escHtml(m.name)}</span>
-                  <span class="pm-col-est">${col2}</span>
-                  <span class="pm-col-actual">${col3}</span>
-                  <span class="pm-col-marge">${col4}</span>
-                  <span class="pm-col-pct">${col5}</span>
+                  <span class="pm-col-est">${colEst}</span>
+                  <span class="pm-col-gef">${colGef}</span>
+                  <span class="pm-col-marge">${colMrg}</span>
+                  <span class="pm-col-pct">${colVsPr}</span>
+                  <span class="pm-col-winst">${colWst}</span>
                 </div>`;
               }).join('')
               })()}
               ${snap.activeProjectMargins.length ? (() => {
-                const sortKey = localStorage.getItem('pm_sort') || 'margin';
+                const sortKey = localStorage.getItem('pm_sort') || 'winst';
                 const sortFn = (a, b) => {
                   if (sortKey === 'name') return a.name.localeCompare(b.name, 'nl');
                   if (sortKey === 'date') return (b.startDate || '').localeCompare(a.startDate || '');
+                  if (sortKey === 'prognose' || sortKey === 'winst') return (b.estimatedProfit || 0) - (a.estimatedProfit || 0);
+                  if (sortKey === 'gefactureerd') return (b.quoteValue || 0) - (a.quoteValue || 0);
                   return (b.estimatedProfit || 0) - (a.estimatedProfit || 0);
                 };
                 const sec = 'active_projects';
@@ -4574,8 +4580,10 @@ function renderBizDashboardContent(snap) {
                     ${[...snap.activeProjectMargins].sort(sortFn).map(m => `<div class="pm-row pm-row-active">
                       <span class="pm-name">${escHtml(m.name)}</span>
                       <span class="pm-col-est">${m.estimatedProfit != null ? fmtEur(m.estimatedProfit) : '—'}</span>
-                      <span class="pm-col-actual" style="color:var(--text2);font-size:11px">nog lopend</span>
+                      <span class="pm-col-gef" style="color:var(--text2);font-size:11px">${m.quoteValue ? fmtEur(m.quoteValue) : '—'}</span>
+                      <span class="pm-col-marge"></span>
                       <span class="pm-col-pct"></span>
+                      <span class="pm-col-winst" style="color:var(--text2);font-size:11px">nog lopend</span>
                     </div>`).join('')}
                   </div>`;
               })() : ''}
@@ -4592,8 +4600,8 @@ function renderBizDashboardContent(snap) {
                   <div class="pm-section-body${collapsed ? ' hidden' : ''}" id="pm-sec-body-${sec}">
                     ${visible.map(c => `<div class="pm-row pm-row-unmatched">
                       <span class="pm-name">${escHtml(c.name)}</span>
-                      <span class="pm-col-est biz-margin-note">Kosten: ${fmtEur(c.cost)}</span>
-                      <span class="pm-col-link">
+                      <span class="pm-col-gef biz-margin-note">Kosten: ${fmtEur(c.cost)}</span>
+                      <span class="pm-col-link" style="grid-column:3/-1">
                         ${unmatchedCostLinkHtml(c)}
                         <button class="pm-hide-btn" data-hide="${escHtml(c.name)}" title="Verberg uit overzicht">Verberg</button>
                       </span>
@@ -4612,7 +4620,7 @@ function renderBizDashboardContent(snap) {
                   <div class="pm-section-body${collapsed ? ' hidden' : ''}" id="pm-sec-body-${sec}">
                     ${snap.explicitMbLinks.map(l => `<div class="pm-row pm-row-unmatched">
                       <span class="pm-name">${escHtml(l.mbName)} <span style="opacity:.55">→ ${escHtml(l.projectName)}</span></span>
-                      <span class="pm-col-link">
+                      <span class="pm-col-link" style="grid-column:2/-1">
                         <button class="pm-unlink-btn" data-project="${l.projectId}" data-mb="${escHtml(l.mbId)}" title="Koppeling weghalen">✕ ontkoppel</button>
                       </span>
                     </div>`).join('')}
@@ -6804,6 +6812,20 @@ async function fetchAllMoneybirdPurchaseInvoices() {
   return all;
 }
 
+// Bonnetjes (receipts) zijn een apart Moneybird-documenttype naast leveranciers-
+// facturen — ze worden op dezelfde manier aan een project gekoppeld maar staan
+// onder een andere endpoint. Combineer ze met purchase invoices voor kosten per project.
+async function fetchAllMoneybirdReceipts() {
+  let all = [];
+  for (let page = 1; page <= 20; page++) {
+    const batch = await moneybirdFetch('GET', `documents/receipts.json?per_page=100&page=${page}`);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    all = all.concat(batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
 // Alle Moneybird-Projecten (state:all, dus ook gearchiveerde — anders mist een
 // gearchiveerd project zijn kosten in het overzicht zodra het project klaar is).
 async function fetchAllMoneybirdProjects() {
@@ -6830,13 +6852,19 @@ async function computeBusinessSnapshot() {
   const ANNUAL_HOURS      = 2 * 40 * 46; // 3680 uur/jaar (2 man × 40u × 46 weken)
   const hoursYTD          = ANNUAL_HOURS * (dayOfYear / 365);
 
-  const [quotes, invoices, purchaseInvoices, mbProjects, quoteItemsAll] = await Promise.all([
+  const [quotes, invoices, rawPurchaseInvoices, receipts, mbProjects, quoteItemsAll] = await Promise.all([
     remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until', 'margin', 'extras_json'] }),
     fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
     fetchAllMoneybirdPurchaseInvoices().catch(e => { console.warn('Moneybird kosten-snapshot fout:', e); return null; }),
+    fetchAllMoneybirdReceipts().catch(e => { console.warn('Moneybird bonnetjes-snapshot fout:', e); return null; }),
     fetchAllMoneybirdProjects().catch(e => { console.warn('Moneybird projecten-snapshot fout:', e); return null; }),
     remoteQuery({ action: 'select', table: 'quote_items' }),
   ]);
+  // Combineer leveranciersfacturen en bonnetjes — beide hebben dezelfde structuur
+  // (details[].project_id, total_price_excl_tax). Alleen null als BEIDE falen (→ costsError).
+  const purchaseInvoices = (rawPurchaseInvoices === null && receipts === null)
+    ? null
+    : [...(rawPurchaseInvoices || []), ...(receipts || [])];
   const projects = state.projects?.length ? state.projects : await remoteQuery({ action: 'select', table: 'projects' });
   const stages    = state.stages?.length    ? state.stages    : await remoteQuery({ action: 'select', table: 'project_stages' });
   const stageSlots = state.stageSlots?.length ? state.stageSlots : await remoteQuery({ action: 'select', table: 'stage_slots' });
