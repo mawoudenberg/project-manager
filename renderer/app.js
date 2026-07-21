@@ -4399,6 +4399,17 @@ function renderBizDashboardContent(snap) {
           ? `${fmtEur(snap.profitYTD)} winst ÷ ${Math.round(snap.hoursYTD)} u (2 man, t/m nu)`
           : (snap.moneybirdError ? 'Moneybird niet bereikbaar' : 'Geen kostendata beschikbaar')}</div>
       </div>
+      <div class="biz-kpi-tile">
+        <div class="biz-kpi-label">📊 Winstmarge (dit jaar)</div>
+        ${(() => {
+          const margin = (snap.revenueYTD && snap.costsYTD != null && snap.revenueYTD > 0)
+            ? (snap.profitYTD / snap.revenueYTD) * 100 : null;
+          return `<div class="biz-kpi-value">${margin != null ? margin.toFixed(1) + '%' : '—'}</div>
+          <div class="biz-kpi-sub">${margin != null
+            ? `${fmtEur(snap.profitYTD)} winst op ${fmtEur(snap.revenueYTD)} omzet`
+            : (snap.moneybirdError ? 'Moneybird niet bereikbaar' : 'Geen kostendata beschikbaar')}</div>`;
+        })()}
+      </div>
     </div>
 
     <div class="biz-secondary-grid">
@@ -4406,12 +4417,27 @@ function renderBizDashboardContent(snap) {
         <div class="biz-card-title">🎯 Bedrijfsscore</div>
         <div class="biz-score-value">${score.total.toFixed(1)}<span class="biz-score-max">/10</span></div>
         <div class="biz-score-breakdown">
-          ${Object.entries(score.breakdown).map(([k, v]) => `
-            <div class="biz-score-row">
-              <span class="biz-score-row-label">${BIZ_SCORE_LABELS[k] || k}</span>
+          ${Object.entries(score.breakdown).map(([k, v]) => {
+            let sub = '';
+            if (k === 'cashflow' && !snap.moneybirdError && snap.avgMonthlyRevenue3mo > 0) {
+              const ratio = snap.outstanding.sum / snap.avgMonthlyRevenue3mo;
+              sub = `<span class="biz-score-row-sub">${fmtEur(snap.outstanding.sum)} openstaand = ${ratio.toFixed(1)}× maandomzet</span>`;
+            }
+            if (k === 'facturen' && !snap.moneybirdError) {
+              sub = snap.overdueCount > 0
+                ? `<span class="biz-score-row-sub">${snap.overdueCount} factuur${snap.overdueCount !== 1 ? 'en' : ''} ouder dan 30 dagen onbetaald</span>`
+                : `<span class="biz-score-row-sub">Alle facturen binnen 30 dagen</span>`;
+            }
+            if (k === 'orderportefeuille' && snap.avgMonthlyRevenue3mo > 0) {
+              const months = snap.orderportefeuille / snap.avgMonthlyRevenue3mo;
+              sub = `<span class="biz-score-row-sub">${fmtEur(snap.orderportefeuille)} = ${months.toFixed(1)} maand dekking</span>`;
+            }
+            return `<div class="biz-score-row">
+              <span class="biz-score-row-label">${BIZ_SCORE_LABELS[k] || k}${sub}</span>
               <div class="biz-score-bar"><div class="biz-score-bar-fill" style="width:${v * 10}%"></div></div>
               <span class="biz-score-row-val">${v.toFixed(1)}</span>
-            </div>`).join('')}
+            </div>`;
+          }).join('')}
         </div>
       </div>
       <div class="biz-warnings-card">
@@ -7185,24 +7211,16 @@ function computeBusinessScore(snap) {
     ? snap.outstanding.sum / snap.avgMonthlyRevenue3mo : null;
   const cashflowScore = outstandingRatio == null ? 5 : Math.max(0, 10 - outstandingRatio * 3);
 
-  // Facturen: 1 punt aftrek per factuur ouder dan 30 dagen nog onbetaald
-  const facturenScore = snap.moneybirdError ? 5 : Math.max(0, 10 - snap.overdueCount * 1);
+  // Facturen: 1,5 punt aftrek per factuur ouder dan 30 dagen nog onbetaald
+  const facturenScore = snap.moneybirdError ? 5 : Math.max(0, 10 - snap.overdueCount * 1.5);
 
-  // Projectbelasting: ideaal binnen [min,max], daarbuiten aftrek per project.
-  // Telt alleen projecten die volgens de Gantt-planning al gestart zijn —
-  // werk dat pas over een paar maanden begint, drukt nu nog niet op de capaciteit.
-  const n = snap.currentlyActiveProjects.length;
-  const { idealActiveProjectsMin: lo, idealActiveProjectsMax: hi } = BIZ_THRESHOLDS;
-  const projectScore = (n >= lo && n <= hi) ? 10 : Math.max(0, 10 - Math.abs(n < lo ? lo - n : n - hi) * 1.5);
-
-  const total = (orderScore + cashflowScore + facturenScore + projectScore) / 4;
+  const total = (orderScore + cashflowScore + facturenScore) / 3;
   return {
     total: Math.round(total * 10) / 10,
     breakdown: {
       orderportefeuille: Math.round(orderScore * 10) / 10,
       cashflow:          Math.round(cashflowScore * 10) / 10,
       facturen:          Math.round(facturenScore * 10) / 10,
-      projectbelasting:  Math.round(projectScore * 10) / 10,
     },
   };
 }
@@ -7211,7 +7229,6 @@ const BIZ_SCORE_LABELS = {
   orderportefeuille: 'Orderportefeuille',
   cashflow:          'Cashflow',
   facturen:          'Facturen',
-  projectbelasting:  'Projectbelasting',
 };
 
 const BIZ_QUICK_QUESTIONS = [
