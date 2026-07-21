@@ -2615,7 +2615,7 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .pm-toolbar { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text2); padding: 4px 0 8px; }
 .pm-row {
   display: grid;
-  grid-template-columns: 1fr 90px 108px 62px 92px 96px;
+  grid-template-columns: 1fr 90px 108px 70px 100px 96px;
   align-items: center;
   padding: 7px 0;
   border-bottom: 1px solid var(--border);

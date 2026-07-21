@@ -4505,7 +4505,12 @@ function renderBizDashboardContent(snap) {
           ? `<div class="pm-table">
               ${(() => {
                 const cur = localStorage.getItem('pm_sort') || 'winst';
-                const hdr = (s, label) => `<button class="pm-hdr-btn pm-sort-btn${cur===s?' pm-sort-active':''}" data-sort="${s}">${label}${cur===s?' ▼':''}</button>`;
+                const dir = localStorage.getItem('pm_sort_dir') || 'desc';
+                const hdr = (s, label) => {
+                  const active = cur === s;
+                  const arrow = active ? (dir === 'asc' ? ' ↑' : ' ↓') : '';
+                  return `<button class="pm-hdr-btn pm-sort-btn${active?' pm-sort-active':''}" data-sort="${s}">${label}${arrow}</button>`;
+                };
                 return `<div class="pm-row pm-hdr">
                 <span></span>
                 <span>${hdr('prognose','Prognose')}</span>
@@ -4517,24 +4522,26 @@ function renderBizDashboardContent(snap) {
               })()}
               ${(() => {
                 const sortKey = localStorage.getItem('pm_sort') || 'winst';
+                const sortDir = localStorage.getItem('pm_sort_dir') || 'desc';
+                const d = sortDir === 'asc' ? -1 : 1;
                 const sortFn = (a, b) => {
-                  if (sortKey === 'name') return a.name.localeCompare(b.name, 'nl');
-                  if (sortKey === 'date') return (b.startDate || '').localeCompare(a.startDate || '');
-                  if (sortKey === 'prognose') return (b.estimatedProfit || 0) - (a.estimatedProfit || 0);
-                  if (sortKey === 'gefactureerd') return (b.actualRevenue || 0) - (a.actualRevenue || 0);
+                  if (sortKey === 'name') { const r = a.name.localeCompare(b.name, 'nl'); return d * r; }
+                  if (sortKey === 'date') { const r = (a.startDate || '').localeCompare(b.startDate || ''); return d * r; }
+                  if (sortKey === 'prognose') return d * ((b.estimatedProfit || 0) - (a.estimatedProfit || 0));
+                  if (sortKey === 'gefactureerd') return d * ((b.actualRevenue || 0) - (a.actualRevenue || 0));
                   if (sortKey === 'marge') {
                     const ma = a.actualRevenue > 0 ? a.actualProfit / a.actualRevenue : null;
                     const mb2 = b.actualRevenue > 0 ? b.actualProfit / b.actualRevenue : null;
                     if (ma === null && mb2 === null) return 0;
                     if (ma === null) return 1; if (mb2 === null) return -1;
-                    return mb2 - ma;
+                    return d * (mb2 - ma);
                   }
-                  if (sortKey === 'winst') return (b.actualProfit || 0) - (a.actualProfit || 0);
-                  // vsprognose (en legacy 'margin')
-                  if (a.profitRatioPct === null && b.profitRatioPct === null) return b.cost - a.cost;
+                  if (sortKey === 'winst') return d * ((b.actualProfit || 0) - (a.actualProfit || 0));
+                  // vsprognose (en legacy 'margin') — nulls altijd onderaan
+                  if (a.profitRatioPct === null && b.profitRatioPct === null) return 0;
                   if (a.profitRatioPct === null) return 1;
                   if (b.profitRatioPct === null) return -1;
-                  return b.profitRatioPct - a.profitRatioPct;
+                  return d * (b.profitRatioPct - a.profitRatioPct);
                 };
                 return [...snap.projectMargins].sort(sortFn).map(m => {
                 const delta = m.profitRatioPct === null ? null : m.profitRatioPct - 100;
@@ -4560,12 +4567,13 @@ function renderBizDashboardContent(snap) {
               })()}
               ${snap.activeProjectMargins.length ? (() => {
                 const sortKey = localStorage.getItem('pm_sort') || 'winst';
+                const sortDir = localStorage.getItem('pm_sort_dir') || 'desc';
+                const d = sortDir === 'asc' ? -1 : 1;
                 const sortFn = (a, b) => {
-                  if (sortKey === 'name') return a.name.localeCompare(b.name, 'nl');
-                  if (sortKey === 'date') return (b.startDate || '').localeCompare(a.startDate || '');
-                  if (sortKey === 'prognose' || sortKey === 'winst') return (b.estimatedProfit || 0) - (a.estimatedProfit || 0);
-                  if (sortKey === 'gefactureerd') return (b.quoteValue || 0) - (a.quoteValue || 0);
-                  return (b.estimatedProfit || 0) - (a.estimatedProfit || 0);
+                  if (sortKey === 'name') return d * a.name.localeCompare(b.name, 'nl');
+                  if (sortKey === 'date') return d * (a.startDate || '').localeCompare(b.startDate || '');
+                  if (sortKey === 'gefactureerd') return d * ((b.quoteValue || 0) - (a.quoteValue || 0));
+                  return d * ((b.estimatedProfit || 0) - (a.estimatedProfit || 0));
                 };
                 const sec = 'active_projects';
                 const collapsed = localStorage.getItem(`pm_sec_${sec}`) === '1';
@@ -4696,7 +4704,14 @@ function renderBizDashboardContent(snap) {
   // Sorteerknopjes project marges
   document.querySelectorAll('.pm-sort-btn').forEach(btn => {
     btn.onclick = () => {
-      localStorage.setItem('pm_sort', btn.dataset.sort);
+      const cur = localStorage.getItem('pm_sort') || 'winst';
+      if (btn.dataset.sort === cur) {
+        const dir = localStorage.getItem('pm_sort_dir') || 'desc';
+        localStorage.setItem('pm_sort_dir', dir === 'desc' ? 'asc' : 'desc');
+      } else {
+        localStorage.setItem('pm_sort', btn.dataset.sort);
+        localStorage.setItem('pm_sort_dir', 'desc');
+      }
       renderBizDashboardContent(_bizSnapshot);
     };
   });
