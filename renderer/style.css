@@ -2648,8 +2648,15 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .pm-section-hdr:hover { color: var(--text); }
 .pm-sec-arrow { font-size: 10px; }
 .pm-section-body.hidden { display: none; }
+.pm-sort-btn {
+  background: none; border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text2); font-size: 11px; padding: 2px 7px; cursor: pointer;
+}
+.pm-sort-btn:hover { border-color: var(--accent); color: var(--accent); }
+.pm-sort-active { border-color: var(--accent) !important; color: var(--accent) !important; font-weight: 600; }
 .pm-row-unmatched { grid-template-columns: 1fr 130px auto; }
 .pm-row-unmatched .pm-name { color: var(--text2); font-style: italic; }
+.pm-row-active .pm-name { color: var(--text2); }
 .pm-col-link { text-align: right; white-space: nowrap; display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
 .pm-hide-btn {
   background: none; border: 1px solid var(--border); border-radius: var(--radius);

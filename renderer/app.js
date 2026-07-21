@@ -4473,18 +4473,34 @@ function renderBizDashboardContent(snap) {
 
     <div class="biz-costs-card">
       <div class="biz-card-title">📊 Winst per project: prognose vs. daadwerkelijk</div>
-      <p class="biz-empty-sub">Alleen afgesloten projecten — bij een lopend project kunnen nog kosten bijkomen of moet de eindfactuur nog verstuurd worden.</p>
       ${snap.costsError
         ? `<p class="biz-empty-sub">Moneybird-kosten/projectdata niet beschikbaar.</p>`
-        : (snap.projectMargins.length || snap.unmatchedProjectCosts.length || snap.explicitMbLinks.length)
+        : (snap.projectMargins.length || snap.activeProjectMargins.length || snap.unmatchedProjectCosts.length || snap.explicitMbLinks.length)
           ? `<div class="pm-table">
               <div class="pm-row pm-hdr">
                 <span></span>
                 <span>Prognose winst</span>
                 <span>Daadwerkelijke winst</span>
-                <span></span>
+                <span style="display:flex;align-items:center;gap:4px;justify-content:flex-end">
+                  ${['margin','name','date'].map(s => {
+                    const cur = localStorage.getItem('pm_sort') || 'margin';
+                    const labels = {margin:'Marge',name:'Naam',date:'Datum'};
+                    return `<button class="pm-sort-btn${cur===s?' pm-sort-active':''}" data-sort="${s}">${labels[s]}</button>`;
+                  }).join('')}
+                </span>
               </div>
-              ${snap.projectMargins.map(m => {
+              ${(() => {
+                const sortKey = localStorage.getItem('pm_sort') || 'margin';
+                const sortFn = (a, b) => {
+                  if (sortKey === 'name') return a.name.localeCompare(b.name, 'nl');
+                  if (sortKey === 'date') return (b.startDate || '').localeCompare(a.startDate || '');
+                  // margin: profitRatioPct desc, nulls last
+                  if (a.profitRatioPct === null && b.profitRatioPct === null) return b.cost - a.cost;
+                  if (a.profitRatioPct === null) return 1;
+                  if (b.profitRatioPct === null) return -1;
+                  return b.profitRatioPct - a.profitRatioPct;
+                };
+                return [...snap.projectMargins].sort(sortFn).map(m => {
                 const delta = m.profitRatioPct === null ? null : m.profitRatioPct - 100;
                 // Percentage kleur: drempel op delta (t.o.v. prognose)
                 const pctClass = delta === null ? '' : delta < -50 ? 'biz-margin-bad' : delta < -10 ? 'biz-margin-warn' : 'biz-margin-good';
@@ -4510,7 +4526,29 @@ function renderBizDashboardContent(snap) {
                   <span class="pm-col-actual">${col3}</span>
                   <span class="pm-col-pct">${col4}</span>
                 </div>`;
-              }).join('')}
+              }).join('')
+              })()}
+              ${snap.activeProjectMargins.length ? (() => {
+                const sortKey = localStorage.getItem('pm_sort') || 'margin';
+                const sortFn = (a, b) => {
+                  if (sortKey === 'name') return a.name.localeCompare(b.name, 'nl');
+                  if (sortKey === 'date') return (b.startDate || '').localeCompare(a.startDate || '');
+                  return (b.estimatedProfit || 0) - (a.estimatedProfit || 0);
+                };
+                const sec = 'active_projects';
+                const collapsed = localStorage.getItem(`pm_sec_${sec}`) === '1';
+                return `<div class="pm-section-hdr${collapsed ? ' pm-sec-collapsed' : ''}" data-sec="${sec}">
+                    <span class="pm-sec-arrow">${collapsed ? '▶' : '▾'}</span> Lopende projecten (prognose)
+                  </div>
+                  <div class="pm-section-body${collapsed ? ' hidden' : ''}" id="pm-sec-body-${sec}">
+                    ${[...snap.activeProjectMargins].sort(sortFn).map(m => `<div class="pm-row pm-row-active">
+                      <span class="pm-name">${escHtml(m.name)}</span>
+                      <span class="pm-col-est">${m.estimatedProfit != null ? fmtEur(m.estimatedProfit) : '—'}</span>
+                      <span class="pm-col-actual" style="color:var(--text2);font-size:11px">nog lopend</span>
+                      <span class="pm-col-pct"></span>
+                    </div>`).join('')}
+                  </div>`;
+              })() : ''}
               ${(() => {
                 const hidden = new Set(JSON.parse(localStorage.getItem('pm_hidden_mb_projects') || '[]'));
                 const visible = snap.unmatchedProjectCosts.filter(c => !hidden.has(c.name.toLowerCase()));
@@ -4621,7 +4659,14 @@ function renderBizDashboardContent(snap) {
       await renderBedrijfsanalyse();
     };
   });
-  // Collapsible secties (niet-gekoppeld / handmatig-gekoppeld)
+  // Sorteerknopjes project marges
+  document.querySelectorAll('.pm-sort-btn').forEach(btn => {
+    btn.onclick = () => {
+      localStorage.setItem('pm_sort', btn.dataset.sort);
+      renderBizDashboardContent(_bizSnapshot);
+    };
+  });
+  // Collapsible secties (niet-gekoppeld / handmatig-gekoppeld / lopend)
   document.querySelectorAll('.pm-section-hdr').forEach(hdr => {
     hdr.onclick = () => {
       const sec = hdr.dataset.sec;
@@ -6949,40 +6994,39 @@ async function computeBusinessSnapshot() {
   const costByProjectName = new Map(costsByProject.map(c => [c.name.toLowerCase(), c.cost]));
   const marginProjectKeys = new Set([...quoteValueByProjectName.keys(), ...costByProjectName.keys(), ...actualRevenueByProjectName.keys()]);
   const projectMargins = [];
+  const activeProjectMargins = [];
   marginProjectKeys.forEach(key => {
-    // Alleen afgesloten projecten scoren: bij een nog actief project kunnen nog
-    // kosten bijkomen en/of moet de eindfactuur nog verstuurd worden, waardoor een
-    // winstoordeel op dat moment niet betrouwbaar (en vaak te negatief) zou zijn.
     const localProj = projects.find(p => p.name.trim().toLowerCase() === key);
-    if (!localProj || localProj.status !== 'done') return;
     const q = quoteValueByProjectName.get(key);
     const cost = costByProjectName.get(key) || 0;
     const quoteValue = q ? q.quoteValue : 0;
     const estimatedProfit = q ? q.estimatedProfit : null;
     const name = q ? q.name
       : costsByProject.find(c => c.name.toLowerCase() === key)?.name
-      || projects.find(p => p.name.trim().toLowerCase() === key)?.name
-      || key;
+      || localProj?.name || key;
     const taggedRevenue = actualRevenueByProjectName.get(key) || 0;
-    // Pas terugvallen op de offertewaarde als er in Moneybird nog niets aan dit
-    // project getagd is gefactureerd — anders altijd de echte, getagde omzet.
     const revenueIsActual = taggedRevenue > 0;
     const actualRevenue = revenueIsActual ? taggedRevenue : quoteValue;
     const actualProfit = actualRevenue - cost;
-    // % van de geoffreerde eigen verdiensten die ook echt gerealiseerd is — alleen
-    // betekenisvol als er een positieve ingecalculeerde winst was om tegen af te zetten.
     const profitRatioPct = (estimatedProfit != null && estimatedProfit > 0) ? (actualProfit / estimatedProfit) * 100 : null;
-    projectMargins.push({ name, quoteValue, cost, estimatedProfit, actualRevenue, actualProfit, profitRatioPct, revenueIsActual, hasQuote: !!q, hasCost: costByProjectName.has(key) });
+    const startDate = localProj?.start_date || '';
+    const base = { name, quoteValue, cost, estimatedProfit, actualRevenue, actualProfit, profitRatioPct, revenueIsActual, hasQuote: !!q, hasCost: costByProjectName.has(key), startDate };
+    if (!localProj || localProj.status === 'done') {
+      projectMargins.push(base);
+    } else if (!localProj.exclude_from_analysis && q) {
+      // Lopend project met offerte: toon als prognose onder apart kopje
+      activeProjectMargins.push(base);
+    }
   });
-  // Sterkste presteerders (t.o.v. de eigen geoffreerde inschatting) eerst; projecten
-  // zonder bruikbare ratio (geen offerte, of offerte zonder ingecalculeerde winst)
-  // onderaan, want daarvoor is geen winstgevendheidsoordeel te trekken.
-  projectMargins.sort((a, b) => {
+  // Sterkste presteerders eerst; zonder ratio onderaan.
+  const sortProjectMargins = arr => arr.sort((a, b) => {
     if (a.profitRatioPct === null && b.profitRatioPct === null) return b.cost - a.cost;
     if (a.profitRatioPct === null) return 1;
     if (b.profitRatioPct === null) return -1;
     return b.profitRatioPct - a.profitRatioPct;
   });
+  sortProjectMargins(projectMargins);
+  sortProjectMargins(activeProjectMargins);
 
   const sumPrice = list => list.reduce((s, q) => s + (Number(q.total_price) || 0), 0);
   const openQuotesValue     = sumPrice(openQuotes);
@@ -7086,7 +7130,7 @@ async function computeBusinessSnapshot() {
     revenueYTD, costsYTD, profitYTD, effectiveHourlyRate, hoursYTD,
     hourlyRateTrend6mo,
     outstanding, outstandingLastMonth, overdueCount,
-    costsError, costsByProject, unmatchedProjectCosts, projectMargins,
+    costsError, costsByProject, unmatchedProjectCosts, projectMargins, activeProjectMargins,
     activeProjects, longRunningProjects,
     currentlyActiveProjects, upcomingProjects, unplannedProjects, explicitMbLinks,
     openQuotes, openQuotesValue,
