@@ -4399,7 +4399,7 @@ function renderBizDashboardContent(snap) {
           ? `${fmtEur(snap.profitYTD)} winst ÷ ${Math.round(snap.hoursYTD)} u (2 man, t/m nu)`
           : (snap.moneybirdError ? 'Moneybird niet bereikbaar' : 'Geen kostendata beschikbaar')}</div>
       </div>
-      <div class="biz-kpi-tile">
+      <div class="biz-kpi-card">
         <div class="biz-kpi-label">📊 Winstmarge (dit jaar)</div>
         ${(() => {
           const margin = (snap.revenueYTD && snap.costsYTD != null && snap.revenueYTD > 0)
@@ -4503,22 +4503,18 @@ function renderBizDashboardContent(snap) {
         ? `<p class="biz-empty-sub">Moneybird-kosten/projectdata niet beschikbaar.</p>`
         : (snap.projectMargins.length || snap.activeProjectMargins.length || snap.unmatchedProjectCosts.length || snap.explicitMbLinks.length)
           ? `<div class="pm-table">
-              <div class="pm-toolbar">
-                Sorteren:
-                ${['prognose','gefactureerd','marge','vsprognose','winst','name','date'].map(s => {
-                  const cur = localStorage.getItem('pm_sort') || 'winst';
-                  const labels = {prognose:'Prognose',gefactureerd:'Gefactureerd',marge:'Marge %',vsprognose:'vs. prognose',winst:'Winst',name:'Naam',date:'Datum'};
-                  return `<button class="pm-sort-btn${cur===s?' pm-sort-active':''}" data-sort="${s}">${labels[s]}</button>`;
-                }).join('')}
-              </div>
-              <div class="pm-row pm-hdr">
+              ${(() => {
+                const cur = localStorage.getItem('pm_sort') || 'winst';
+                const hdr = (s, label) => `<button class="pm-hdr-btn pm-sort-btn${cur===s?' pm-sort-active':''}" data-sort="${s}">${label}${cur===s?' ▼':''}</button>`;
+                return `<div class="pm-row pm-hdr">
                 <span></span>
-                <span>Prognose</span>
-                <span>Gefactureerd</span>
-                <span>Marge %</span>
-                <span>vs. prognose</span>
-                <span>Winst</span>
-              </div>
+                <span>${hdr('prognose','Prognose')}</span>
+                <span>${hdr('gefactureerd','Gefactureerd')}</span>
+                <span>${hdr('marge','Marge %')}</span>
+                <span>${hdr('vsprognose','vs. prognose')}</span>
+                <span>${hdr('winst','Winst')}</span>
+              </div>`;
+              })()}
               ${(() => {
                 const sortKey = localStorage.getItem('pm_sort') || 'winst';
                 const sortFn = (a, b) => {

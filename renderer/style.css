@@ -2615,7 +2615,7 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .pm-toolbar { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text2); padding: 4px 0 8px; }
 .pm-row {
   display: grid;
-  grid-template-columns: 1fr 95px 100px 52px 72px 100px;
+  grid-template-columns: 1fr 90px 108px 62px 92px 96px;
   align-items: center;
   padding: 7px 0;
   border-bottom: 1px solid var(--border);
@@ -2652,6 +2652,22 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .pm-section-hdr:hover { color: var(--text); }
 .pm-sec-arrow { font-size: 10px; }
 .pm-section-body.hidden { display: none; }
+.pm-hdr-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text2);
+  text-align: right;
+  width: 100%;
+  padding: 0;
+  white-space: nowrap;
+}
+.pm-hdr-btn:hover { color: var(--accent); }
+.pm-hdr-btn.pm-sort-active { color: var(--accent); }
 .pm-sort-btn {
   background: none; border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text2); font-size: 11px; padding: 2px 7px; cursor: pointer;
