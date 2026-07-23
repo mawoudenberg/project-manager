@@ -5365,6 +5365,8 @@ async function openQuoteEditor(quote) {
     qe.materials  = items.filter(i => i.type === 'material').map(i => ({ ...i, section_label: i.section_label || null }));
     qe.services   = items.filter(i => i.type === 'service').map(i => ({ ...i, section_label: i.section_label || null }));
     qe.exclusions = items.filter(i => i.type === 'exclusion').map(i => i.name);
+    // Bijhouden hoeveel items succesvol geladen zijn, als veiligheidsmarge bij opslaan.
+    qe._originalItemCount = items.length;
   }
 
   renderQuoteEditorView();
@@ -6535,6 +6537,14 @@ async function performSave() {
     let quoteId = qe.id;
     const isNewQuote = !quoteId;
     if (quoteId) {
+      // Veiligheidscheck: als de offerte bij openen items had maar de huidige staat leeg is,
+      // blokkeer dan het opslaan. Dit voorkomt dat een laad- of netwerkfout alle regels wist.
+      const currentItemCount = qe.materials.length + qe.services.length + qe.exclusions.length;
+      if (currentItemCount === 0 && (qe._originalItemCount ?? 0) > 0) {
+        toast('Opslaan geblokkeerd: offerte lijkt leeg terwijl er eerder regels waren. Heropen de offerte en probeer opnieuw.', 'error', 7000);
+        _savingQuote = false;
+        return;
+      }
       await remoteQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
       await remoteQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
     } else {
