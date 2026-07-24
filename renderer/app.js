@@ -314,7 +314,21 @@ async function changeQuoteStatus(quote, newStatus) {
     quote.project_name = linkName;
     await persistQuoteProjectLink(quote.id, linkName);
   }
-  if (newStatus === 'rejected') moveProjectFolder(linkName, 'rejected');
+  if (newStatus === 'rejected') {
+    moveProjectFolder(linkName, 'rejected');
+    const proj = state.projects?.find(p => p.name.trim().toLowerCase() === linkName.toLowerCase());
+    if (proj) {
+      const hasStages = state.stages?.some(s => s.project_id === proj.id);
+      const hasTasks  = state.tasks?.some(t => t.project_id === proj.id);
+      if (!hasStages && !hasTasks) {
+        await remoteQuery({ action: 'delete', table: 'projects', where: { id: proj.id } });
+        if (state.projects) state.projects = state.projects.filter(p => p.id !== proj.id);
+        toast(`Project "${proj.name}" verwijderd — offerte afgewezen en project had nog geen planning`);
+      } else {
+        toast(`📂 Map verplaatst naar Afgewezen offertes. Project heeft nog planning — controleer dit zelf.`, 'info', 5000);
+      }
+    }
+  }
 }
 
 function computeSnoozeUntil(preset) {
