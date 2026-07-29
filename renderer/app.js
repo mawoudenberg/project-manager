@@ -593,7 +593,7 @@ function setView(view) {
   if (state.view === 'quote-editor' && qe && (_qeDirty || !qe.id) && view !== 'quote-editor') {
     _confirmUnsavedQE(result => {
       if (result === 'save') {
-        performSave().then(() => { qe = null; _qeDirty = false; setView(view); });
+        performSave().then(saved => { if (saved) { qe = null; _qeDirty = false; setView(view); } });
       } else if (result === 'discard') {
         _qeDirty = false;
         setView(view);
@@ -6557,7 +6557,7 @@ async function performSave() {
       if (currentItemCount === 0 && (qe._originalItemCount ?? 0) > 0) {
         toast('Opslaan geblokkeerd: offerte lijkt leeg terwijl er eerder regels waren. Heropen de offerte en probeer opnieuw.', 'error', 7000);
         _savingQuote = false;
-        return;
+        return false;
       }
       await remoteQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
       await remoteQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
@@ -6594,9 +6594,11 @@ async function performSave() {
       if (!existing) createProjectFromQuote(linkName, /*silent=*/false);
       await linkQuoteToProject(linkName);
     }
+    return true;
   } catch (err) {
     toast('Opslaan mislukt: ' + (err.message || err), 'error', 4000);
     console.error('saveQuote error:', err);
+    return false;
   } finally {
     _savingQuote = false;
   }
