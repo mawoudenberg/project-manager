@@ -251,6 +251,7 @@ function query({ action, table, data, where, columns }) {
     case 'insert': return insertRow(table, data);
     case 'update': return updateRow(table, data, where);
     case 'delete': return deleteRow(table, where);
+    case 'save_quote': return saveQuote(data);
     default: throw new Error(`Unknown action: ${action}`);
   }
 }
@@ -316,6 +317,58 @@ function deleteRow(table, where) {
   const result = db.prepare(sql).run(...Object.values(where));
   checkpoint();
   return { changes: result.changes };
+}
+
+// Replace a quote and all of its line items as one SQLite transaction.  The
+// quote editor used to update the parent, delete every item, then insert items
+// one-by-one from the renderer.  A crash or a failed write in that gap could
+// permanently leave a quote with missing items.
+function saveQuote(payload) {
+  const { id, quote, items } = payload || {};
+  if (!quote || typeof quote !== 'object' || Array.isArray(quote)) {
+    throw new Error('save_quote requires quote data');
+  }
+  if (!Array.isArray(items)) {
+    throw new Error('save_quote requires an items array');
+  }
+
+  const quoteKeys = Object.keys(quote);
+  if (quoteKeys.length === 0) throw new Error('save_quote requires quote fields');
+  const quotePlaceholders = quoteKeys.map(() => '?').join(', ');
+  const insertQuote = db.prepare(
+    `INSERT INTO quotes (${quoteKeys.join(', ')}) VALUES (${quotePlaceholders})`
+  );
+  const updateQuote = db.prepare(
+    `UPDATE quotes SET ${quoteKeys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`
+  );
+  const deleteItems = db.prepare('DELETE FROM quote_items WHERE quote_id = ?');
+  const itemKeys = ['quote_id', 'type', 'name', 'quantity', 'unit', 'unit_price', 'sort_order', 'margin', 'is_outsourced', 'enabled', 'section_label'];
+  const insertItem = db.prepare(
+    `INSERT INTO quote_items (${itemKeys.join(', ')}) VALUES (${itemKeys.map(() => '?').join(', ')})`
+  );
+
+  const transaction = db.transaction(() => {
+    let quoteId = id;
+    if (quoteId) {
+      const result = updateQuote.run(...quoteKeys.map(k => quote[k]), quoteId);
+      if (result.changes !== 1) throw new Error(`Quote not found: ${quoteId}`);
+      deleteItems.run(quoteId);
+    } else {
+      quoteId = insertQuote.run(...quoteKeys.map(k => quote[k])).lastInsertRowid;
+    }
+
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error('save_quote items must be objects');
+      }
+      insertItem.run(...itemKeys.map(k => k === 'quote_id' ? quoteId : (item[k] ?? null)));
+    }
+    return Number(quoteId);
+  });
+
+  const quoteId = transaction();
+  checkpoint();
+  return { id: quoteId, changes: 1 };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

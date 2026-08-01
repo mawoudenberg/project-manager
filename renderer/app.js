@@ -6549,7 +6549,6 @@ async function performSave() {
 
   try {
     let quoteId = qe.id;
-    const isNewQuote = !quoteId;
     if (quoteId) {
       // Veiligheidscheck: als de offerte bij openen items had maar de huidige staat leeg is,
       // blokkeer dan het opslaan. Dit voorkomt dat een laad- of netwerkfout alle regels wist.
@@ -6559,26 +6558,25 @@ async function performSave() {
         _savingQuote = false;
         return false;
       }
-      await remoteQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
-      await remoteQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
-    } else {
-      const res = await remoteQuery({ action: 'insert', table: 'quotes', data: quoteData });
-      quoteId = res.id;
-      qe.id = quoteId;
     }
+
+    const allItems = [
+      ...qe.materials.map((m, i) => ({ type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0, enabled: m.enabled !== 0 ? 1 : 0, ...(m.section_label ? { section_label: m.section_label } : {}) })),
+      ...qe.services.map((s, i)  => ({ type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0, enabled: s.enabled !== 0 ? 1 : 0, ...(s.section_label ? { section_label: s.section_label } : {}) })),
+      ...qe.exclusions.map((ex, i) => ({ type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0, enabled: 1 })),
+    ];
+    const saved = await remoteQuery({
+      action: 'save_quote',
+      table: 'quotes',
+      data: { id: quoteId, quote: quoteData, items: allItems },
+    });
+    quoteId = saved.id;
+    qe.id = quoteId;
+
     // Cleanup legacy localStorage entries (now stored in DB)
     if (quoteId) {
       localStorage.removeItem('qimg_' + quoteId);
       localStorage.removeItem('qextra_' + quoteId);
-    }
-
-    const allItems = [
-      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0, enabled: m.enabled !== 0 ? 1 : 0, ...(m.section_label ? { section_label: m.section_label } : {}) })),
-      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0, enabled: s.enabled !== 0 ? 1 : 0, ...(s.section_label ? { section_label: s.section_label } : {}) })),
-      ...qe.exclusions.map((ex, i) => ({ quote_id: quoteId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0, enabled: 1 })),
-    ];
-    for (const item of allItems) {
-      await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
     }
 
     const delBtn = document.getElementById('qe-delete-btn');
