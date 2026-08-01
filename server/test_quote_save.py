@@ -78,6 +78,23 @@ class QuoteSaveTests(unittest.TestCase):
         self.assertEqual(failed.status_code, 500)
         self.assertEqual(self.query('quotes').get_json(), [])
 
+    def test_variant_group_is_stored_and_can_be_cleared(self):
+        grouped = quote_data('Variant A')
+        grouped['variant_group'] = 'variants-test-123'
+        created = self.save({'quote': grouped, 'items': [quote_item()]})
+        self.assertEqual(created.status_code, 201)
+        quote_id = created.get_json()['id']
+
+        row = self.query('quotes', {'id': quote_id}).get_json()[0]
+        self.assertEqual(row['variant_group'], 'variants-test-123')
+
+        cleared = self.client.post('/api/query', json={
+            'action': 'update', 'table': 'quotes',
+            'data': {'variant_group': ''}, 'where': {'id': quote_id},
+        })
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(self.query('quotes', {'id': quote_id}).get_json()[0]['variant_group'], '')
+
 
 if __name__ == '__main__':
     unittest.main()

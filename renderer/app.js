@@ -4399,7 +4399,7 @@ function renderBizDashboardContent(snap) {
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📋 Openstaande offertes</div>
         <div class="biz-kpi-value">${fmtEur(snap.openQuotesValue)}</div>
-        <div class="biz-kpi-sub">${snap.openQuotes.length} offertes${snap.laterQuotes.length ? `<br>+ ${snap.laterQuotes.length} op "later" (${fmtEur(snap.laterQuotesValue)}, niet meegeteld)` : ''}</div>
+        <div class="biz-kpi-sub">${snap.openQuotes.length} aanvragen${snap.openQuoteVariantsIgnored ? `<br>${snap.openQuoteVariantsIgnored} variant${snap.openQuoteVariantsIgnored === 1 ? '' : 'en'} niet dubbel geteld` : ''}${snap.laterQuotes.length ? `<br>+ ${snap.laterQuotes.length} op "later" (${fmtEur(snap.laterQuotesValue)}, niet meegeteld)` : ''}</div>
       </div>
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📅 Orderportefeuille</div>
@@ -4868,6 +4868,7 @@ function freshQE(quote) {
     id:         quote?.id         ?? null,
     name:       quote?.name       ?? '',
     project_name: quote?.project_name ?? '',
+    variant_group: quote?.variant_group ?? '',
     client:     quote?.client     ?? '',
     client_contact: stored.client_contact ?? '',
     client_address: stored.client_address ?? '',
@@ -4907,7 +4908,13 @@ function freshQE(quote) {
 let _quotesFilter  = new Set(); // leeg = alle statussen
 let _quotesSort    = { field: 'date', dir: 'desc' };
 let _allQuotes     = []; // cached for client-side filter/sort
-let _selectedQuoteIds = new Set(); // voor samenvoegen
+let _selectedQuoteIds = new Set(); // voor samenvoegen / bundelen
+
+function quoteVariantGroupId() {
+  // Timestamp + random suffix is sufficient here: this is an opaque local grouping
+  // key, not an externally exposed identifier.
+  return `variants-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function _renderQuoteTable() {
   let list = _allQuotes.slice();
@@ -4947,7 +4954,7 @@ function _renderQuoteTable() {
     const fulfilled = q.status === 'accepted' && linkName && state.projects?.find(p => p.name.trim().toLowerCase() === linkName && p.status === 'done');
     html += `<tr class="quote-row${checked ? ' ql-row-selected' : ''}" data-id="${q.id}">
       <td class="ql-cb-col"><input type="checkbox" class="ql-cb" data-id="${q.id}"${checked ? ' checked' : ''} /></td>
-      <td><strong>${escHtml(q.name)}</strong></td>
+      <td><strong>${escHtml(q.name)}</strong>${q.variant_group ? ` <span class="ql-variant-badge" title="Alternatieve offerte binnen dezelfde aanvraag">variant</span>` : ''}</td>
       <td>${escHtml(q.client)}</td>
       <td>${q.quote_date || '—'}</td>
       <td class="amount qt-total${hasTotal ? '' : ' loading'}" id="qt-total-${q.id}">${hasTotal ? fmtEur(q.total_price) : '…'}</td>
@@ -4969,7 +4976,7 @@ function _renderQuoteTable() {
       const id = parseInt(cb.dataset.id);
       if (cb.checked) _selectedQuoteIds.add(id); else _selectedQuoteIds.delete(id);
       cb.closest('tr').classList.toggle('ql-row-selected', cb.checked);
-      _updateMergeButton();
+      _updateQuoteSelectionActions();
     };
   });
 
@@ -5010,21 +5017,55 @@ function _renderQuoteTable() {
   });
 }
 
-function _updateMergeButton() {
+function _updateQuoteSelectionActions() {
   const n = _selectedQuoteIds.size;
-  let btn = document.getElementById('ql-merge-btn');
+  let mergeBtn = document.getElementById('ql-merge-btn');
+  let groupBtn = document.getElementById('ql-group-btn');
   if (n >= 2) {
-    if (!btn) {
-      btn = document.createElement('button');
-      btn.id = 'ql-merge-btn';
-      btn.className = 'btn btn-secondary btn-sm';
-      btn.onclick = mergeSelectedQuotes;
-      document.getElementById('toolbar-controls').appendChild(btn);
+    if (!mergeBtn) {
+      mergeBtn = document.createElement('button');
+      mergeBtn.id = 'ql-merge-btn';
+      mergeBtn.className = 'btn btn-secondary btn-sm';
+      mergeBtn.onclick = mergeSelectedQuotes;
+      document.getElementById('toolbar-controls').appendChild(mergeBtn);
     }
-    btn.textContent = `Samenvoegen (${n})`;
+    if (!groupBtn) {
+      groupBtn = document.createElement('button');
+      groupBtn.id = 'ql-group-btn';
+      groupBtn.className = 'btn btn-secondary btn-sm';
+      groupBtn.onclick = groupSelectedQuotes;
+      document.getElementById('toolbar-controls').appendChild(groupBtn);
+    }
+    mergeBtn.textContent = `Samenvoegen (${n})`;
+    const selected = _allQuotes.filter(q => _selectedQuoteIds.has(q.id));
+    const commonGroup = selected[0]?.variant_group && selected.every(q => q.variant_group === selected[0].variant_group);
+    groupBtn.textContent = commonGroup ? `Bundel opheffen (${n})` : `Bundelen als varianten (${n})`;
+    groupBtn.title = commonGroup
+      ? 'Deze offertes zijn weer losse aanvragen in de bedrijfsanalyse'
+      : 'Tel in openstaande offertes alleen de hoogste variant mee';
   } else {
-    btn?.remove();
+    mergeBtn?.remove();
+    groupBtn?.remove();
   }
+}
+
+async function groupSelectedQuotes() {
+  const selected = _allQuotes.filter(q => _selectedQuoteIds.has(q.id));
+  if (selected.length < 2) return;
+  const commonGroup = selected[0]?.variant_group && selected.every(q => q.variant_group === selected[0].variant_group);
+  const group = commonGroup ? '' : quoteVariantGroupId();
+  const label = commonGroup ? 'de bundel opheffen' : 'deze offertes als varianten van één aanvraag bundelen';
+  if (!confirm(`Wil je ${label}?`)) return;
+  await Promise.all(selected.map(q => remoteQuery({
+    action: 'update', table: 'quotes', data: { variant_group: group }, where: { id: q.id },
+  })));
+  selected.forEach(q => { q.variant_group = group; });
+  _selectedQuoteIds.clear();
+  toast(commonGroup
+    ? 'Offertes zijn weer losse aanvragen'
+    : 'Varianten gebundeld — alleen de hoogste open variant telt mee');
+  _renderQuoteTable();
+  _updateQuoteSelectionActions();
 }
 
 async function mergeSelectedQuotes() {
@@ -5127,7 +5168,7 @@ async function renderQuoteList() {
   _allQuotes = await remoteQuery({
     action: 'select',
     table: 'quotes',
-    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'project_name'],
+    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'project_name', 'variant_group'],
   });
 
   if (!Array.isArray(_allQuotes) || _allQuotes.length === 0) {
@@ -6541,6 +6582,7 @@ async function performSave() {
     name: qe.name.trim(), client: qe.client.trim(), quote_date: qe.quote_date,
     margin: qe.margin, status: qe.status, notes: qe.notes.trim(),
     project_name: qe.project_name || '',
+    variant_group: qe.variant_group || '',
     created_by: state.config?.name || '',
     image_data: qe.image_data || '',
     extras_json: extrasJson,
@@ -6616,6 +6658,13 @@ async function deleteQuote() {
 async function duplicateQuote() {
   if (!qe.id) { toast('Sla de offerte eerst op', 'warn'); return; }
   try {
+    // A duplicate is normally an alternative for the same enquiry. Group the
+    // original and its copy immediately, so the pipeline never double-counts it.
+    const variantGroup = qe.variant_group || quoteVariantGroupId();
+    if (!qe.variant_group) {
+      await remoteQuery({ action: 'update', table: 'quotes', data: { variant_group: variantGroup }, where: { id: qe.id } });
+      qe.variant_group = variantGroup;
+    }
     const extrasJson = JSON.stringify({
       client_contact:  qe.client_contact,
       client_address:  qe.client_address,
@@ -6630,6 +6679,7 @@ async function duplicateQuote() {
     const newQuoteData = {
       name:       qe.name + ' (kopie)',
       project_name: quoteProjectName(), // keep linked to the same project/folder as the original
+      variant_group: variantGroup,
       client:     qe.client,
       quote_date: toDateStr(new Date()),
       margin:     qe.margin,
@@ -6650,7 +6700,7 @@ async function duplicateQuote() {
     for (const item of allItems) {
       await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
     }
-    toast('Offerte gedupliceerd');
+    toast('Offerte gedupliceerd als variant — alleen de hoogste open variant telt mee');
     await openQuoteEditor({ id: newId, ...newQuoteData });
   } catch (err) {
     toast('Dupliceren mislukt: ' + (err.message || err), 'error', 4000);
@@ -6888,7 +6938,7 @@ async function computeBusinessSnapshot() {
   const hoursYTD          = ANNUAL_HOURS * (dayOfYear / 365);
 
   const [quotes, invoices, rawPurchaseInvoices, receipts, mbProjects, quoteItemsAll] = await Promise.all([
-    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until', 'margin', 'extras_json'] }),
+    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'variant_group', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until', 'margin', 'extras_json'] }),
     fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
     fetchAllMoneybirdPurchaseInvoices().catch(e => { console.warn('Moneybird kosten-snapshot fout:', e); return null; }),
     fetchAllMoneybirdReceipts().catch(e => { console.warn('Moneybird bonnetjes-snapshot fout:', e); return null; }),
@@ -6905,7 +6955,20 @@ async function computeBusinessSnapshot() {
   const stageSlots = state.stageSlots?.length ? state.stageSlots : await remoteQuery({ action: 'select', table: 'stage_slots' });
 
   // ── Lokale data: offertes & projecten ──
-  const openQuotes     = quotes.filter(q => q.status === 'draft' || q.status === 'sent');
+  const rawOpenQuotes  = quotes.filter(q => q.status === 'draft' || q.status === 'sent');
+  // A variant group represents several alternatives for one enquiry. For pipeline
+  // value, retain the highest-priced open quote in every group; ungrouped quotes
+  // remain independent.
+  const openQuotesByEnquiry = new Map();
+  rawOpenQuotes.forEach(q => {
+    const key = q.variant_group ? `group:${q.variant_group}` : `quote:${q.id}`;
+    const current = openQuotesByEnquiry.get(key);
+    if (!current || Number(q.total_price || 0) > Number(current.total_price || 0)) {
+      openQuotesByEnquiry.set(key, q);
+    }
+  });
+  const openQuotes = [...openQuotesByEnquiry.values()];
+  const openQuoteVariantsIgnored = rawOpenQuotes.length - openQuotes.length;
   // "later"-offertes (nog niet relevant, bv. seizoensgebonden) horen niet bij de actieve
   // pijplijn — ze tellen niet mee in openQuotesValue/orderportefeuille, maar worden wel
   // los getoond zodat ze niet uit het zicht verdwijnen.
@@ -7227,6 +7290,7 @@ async function computeBusinessSnapshot() {
     activeProjects, longRunningProjects,
     currentlyActiveProjects, upcomingProjects, unplannedProjects, explicitMbLinks,
     openQuotes, openQuotesValue,
+    openQuoteVariantsIgnored,
     acceptedQuotes, orderportefeuille,
     fulfilledQuotes, fulfilledQuotesValue,
     laterQuotes, laterQuotesValue, staleLaterQuotes,

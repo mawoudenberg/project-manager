@@ -127,6 +127,7 @@ def init_db():
                 quote_date  TEXT DEFAULT (date('now')), margin REAL DEFAULT 20,
                 status      TEXT DEFAULT 'draft', notes TEXT DEFAULT '',
                 project_name TEXT DEFAULT '',
+                variant_group TEXT DEFAULT '',
                 created_by  TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS quote_items (
@@ -179,6 +180,8 @@ def init_db():
         db.execute("ALTER TABLE quotes ADD COLUMN total_price REAL")
     if 'project_name' not in qcols:
         db.execute("ALTER TABLE quotes ADD COLUMN project_name TEXT DEFAULT ''")
+    if 'variant_group' not in qcols:
+        db.execute("ALTER TABLE quotes ADD COLUMN variant_group TEXT DEFAULT ''")
     if 'later_since' not in qcols:
         db.execute("ALTER TABLE quotes ADD COLUMN later_since TEXT DEFAULT ''")
     if 'later_snoozed_until' not in qcols:
@@ -261,7 +264,7 @@ def order_for(table):
 # ── Generic query endpoint ──────────────────────────────────────────────────────
 
 QUOTE_COLUMNS = {
-    'name', 'client', 'quote_date', 'margin', 'status', 'notes', 'project_name',
+    'name', 'client', 'quote_date', 'margin', 'status', 'notes', 'project_name', 'variant_group',
     'created_by', 'image_data', 'extras_json', 'total_price',
 }
 QUOTE_ITEM_COLUMNS = {

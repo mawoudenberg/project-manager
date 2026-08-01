@@ -1085,6 +1085,19 @@ html[data-theme="dark"] #sidebar-logo {
   transition: opacity .15s;
 }
 .quotes-table tr:hover .quote-delete-btn { opacity: 1; }
+.ql-variant-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(124, 92, 191, .14);
+  color: #7c5cbf;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .35px;
+  vertical-align: middle;
+}
 
 .badge-draft    { background: rgba(136,145,170,.15); color: var(--text2); }
 .badge-sent     { background: rgba(79,142,247,.15);  color: var(--accent); }

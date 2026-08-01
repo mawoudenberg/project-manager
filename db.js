@@ -116,6 +116,7 @@ function createSchema() {
       status      TEXT DEFAULT 'draft',
       notes       TEXT DEFAULT '',
       project_name TEXT DEFAULT '',
+      variant_group TEXT DEFAULT '',
       created_by  TEXT DEFAULT '',
       created_at  TEXT DEFAULT (datetime('now'))
     );
@@ -171,6 +172,9 @@ function migrateSchema() {
   // Explicit link to the project's name — decouples project linkage from the quote's own
   // (editable, duplicatable) name so a duplicated/renamed quote keeps pointing at the same project.
   if (!quoteCols.includes('project_name')) db.exec("ALTER TABLE quotes ADD COLUMN project_name TEXT DEFAULT ''");
+  // Quotes from one enquiry can be grouped as alternatives. The business analysis
+  // then counts only the highest open variant for that group.
+  if (!quoteCols.includes('variant_group')) db.exec("ALTER TABLE quotes ADD COLUMN variant_group TEXT DEFAULT ''");
   // Wanneer een offerte op status "later" is gezet (los van created_at, dat veel ouder
   // kan zijn) + tot wanneer een follow-up-herinnering is uitgesteld via de snooze-knop.
   if (!quoteCols.includes('later_since'))         db.exec("ALTER TABLE quotes ADD COLUMN later_since TEXT DEFAULT ''");
