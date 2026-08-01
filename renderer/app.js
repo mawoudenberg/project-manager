@@ -4526,7 +4526,7 @@ function renderBizDashboardContent(snap) {
                   return `<button class="pm-hdr-btn pm-sort-btn${active?' pm-sort-active':''}" data-sort="${s}">${label}${arrow}</button>`;
                 };
                 return `<div class="pm-row pm-hdr">
-                <span></span>
+                <span class="pm-hdr-name-cell">${hdr('name','Naam')} ${hdr('date','Datum')}</span>
                 <span>${hdr('prognose','Prognose')}</span>
                 <span>${hdr('gefactureerd','Gefactureerd')}</span>
                 <span>${hdr('marge','Marge %')}</span>

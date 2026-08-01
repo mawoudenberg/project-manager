@@ -2652,6 +2652,7 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .pm-section-hdr:hover { color: var(--text); }
 .pm-sec-arrow { font-size: 10px; }
 .pm-section-body.hidden { display: none; }
+.pm-hdr-name-cell { display: flex; align-items: center; gap: 6px; }
 .pm-hdr-btn {
   background: none;
   border: none;
@@ -2666,6 +2667,7 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
   padding: 0;
   white-space: nowrap;
 }
+.pm-hdr-name-cell .pm-hdr-btn { text-align: left; width: auto; }
 .pm-hdr-btn:hover { color: var(--accent); }
 .pm-hdr-btn.pm-sort-active { color: var(--accent); }
 .pm-sort-btn {
