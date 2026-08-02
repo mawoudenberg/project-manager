@@ -81,6 +81,8 @@ function createSchema() {
       color       TEXT DEFAULT '#4f8ef7',
       description TEXT DEFAULT '',
       status      TEXT DEFAULT 'active',
+      analysis_acknowledged INTEGER DEFAULT 0,
+      analysis_note TEXT DEFAULT '',
       start_date  TEXT DEFAULT '',
       end_date    TEXT DEFAULT '',
       created_by  TEXT DEFAULT '',
@@ -199,6 +201,8 @@ function migrateSchema() {
   // Handmatige koppeling met een Moneybird-Project (id), voor wanneer de naam in
   // Moneybird afwijkt van de projectnaam in deze app en automatisch matchen faalt.
   if (!projCols.includes('moneybird_project_id')) db.exec("ALTER TABLE projects ADD COLUMN moneybird_project_id TEXT DEFAULT ''");
+  if (!projCols.includes('analysis_acknowledged')) db.exec("ALTER TABLE projects ADD COLUMN analysis_acknowledged INTEGER DEFAULT 0");
+  if (!projCols.includes('analysis_note')) db.exec("ALTER TABLE projects ADD COLUMN analysis_note TEXT DEFAULT ''");
 
   const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
   if (!qiCols.includes('is_outsourced'))  db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced  INTEGER DEFAULT 0");

@@ -4461,6 +4461,16 @@ function renderBizDashboardContent(snap) {
         <div class="biz-kpi-value">${snap.moneybirdError ? '—' : fmtEur(snap.thisMonthRevenue)} ${chgBadge(revChangePct)}</div>
       </div>
       <div class="biz-kpi-card">
+        <div class="biz-kpi-label">🗓️ Omzet dit jaar</div>
+        <div class="biz-kpi-value">${snap.moneybirdError ? '—' : fmtEur(snap.revenueYTD)}</div>
+        <div class="biz-kpi-sub">Gefactureerd t/m vandaag</div>
+      </div>
+      <div class="biz-kpi-card">
+        <div class="biz-kpi-label">✦ Winst dit jaar</div>
+        <div class="biz-kpi-value">${snap.moneybirdError || snap.costsYTD == null ? '—' : fmtEur(snap.profitYTD)}</div>
+        <div class="biz-kpi-sub">Omzet min inkoopkosten, excl. btw</div>
+      </div>
+      <div class="biz-kpi-card">
         <div class="biz-kpi-label">💰 Openstaande facturen</div>
         <div class="biz-kpi-value">${snap.moneybirdError ? '—' : fmtEur(snap.outstanding.sum)} ${chgBadge(outChangePct, /*invert=*/true)}</div>
         <div class="biz-kpi-sub">${snap.moneybirdError ? 'Moneybird niet bereikbaar' : `${snap.outstanding.count} facturen${snap.overdueCount ? `, ${snap.overdueCount} te laat` : ''}`}</div>
@@ -4643,8 +4653,11 @@ function renderBizDashboardContent(snap) {
                 const colMrg  = revenueMargePct !== null ? `<span class="${margeClass}">${revenueMargePct.toFixed(0)}%</span>` : '—';
                 const colVsPr = m.profitRatioPct !== null ? `<span class="pm-pct ${pctClass}">${fmtProfitDelta(m.profitRatioPct)}</span>` : '—';
                 const colWst  = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
+                const lessonButton = m.projectId
+                  ? `<button class="pm-ack-btn${m.analysisAcknowledged ? ' pm-acknowledged' : ''}" data-project-id="${m.projectId}" title="${m.analysisAcknowledged ? escHtml(m.analysisNote) : 'Leg vast waarom deze afwijking al besproken is'}">${m.analysisAcknowledged ? '✓ Les vastgelegd' : 'Markeer als besproken'}</button>`
+                  : '';
                 return `<div class="pm-row">
-                  <span class="pm-name">${escHtml(m.name)}</span>
+                  <span class="pm-name">${escHtml(m.name)}${lessonButton}</span>
                   <span class="pm-col-est">${colEst}</span>
                   <span class="pm-col-gef">${colGef}</span>
                   <span class="pm-col-marge">${colMrg}</span>
@@ -5057,6 +5070,25 @@ function _renderQuoteTable() {
       members.push(q);
       groups.set(q.variant_group, members);
     }
+  });
+
+  document.querySelectorAll('.pm-ack-btn').forEach(btn => {
+    btn.onclick = async () => {
+      const projectId = Number(btn.dataset.projectId);
+      const project = state.projects.find(p => p.id === projectId);
+      if (!project) return;
+      const note = window.prompt(
+        'Waarom is deze afwijking al besproken? De AI zal dit niet opnieuw als hoofdadvies noemen.',
+        project.analysis_note || ''
+      );
+      if (note === null) return;
+      if (!note.trim()) { toast('Vul een korte les of verklaring in.', 'error'); return; }
+      await remoteQuery({ action: 'update', table: 'projects', data: { analysis_acknowledged: 1, analysis_note: note.trim() }, where: { id: projectId } });
+      project.analysis_acknowledged = 1;
+      project.analysis_note = note.trim();
+      toast('Projectles vastgelegd');
+      await renderBedrijfsanalyse();
+    };
   });
   const renderedGroups = new Set();
   list.forEach(q => {
@@ -7319,7 +7351,7 @@ async function computeBusinessSnapshot() {
     const actualProfit = actualRevenue - cost;
     const profitRatioPct = (estimatedProfit != null && estimatedProfit > 0) ? (actualProfit / estimatedProfit) * 100 : null;
     const startDate = localProj?.start_date || '';
-    const base = { name, quoteValue, cost, estimatedProfit, actualRevenue, actualProfit, profitRatioPct, revenueIsActual, hasQuote: !!q, hasCost: costByProjectName.has(key), startDate };
+    const base = { name, quoteValue, cost, estimatedProfit, actualRevenue, actualProfit, profitRatioPct, revenueIsActual, hasQuote: !!q, hasCost: costByProjectName.has(key), startDate, projectId: localProj?.id || null, analysisAcknowledged: !!localProj?.analysis_acknowledged, analysisNote: localProj?.analysis_note || '' };
     if (!localProj || localProj.status === 'done') {
       projectMargins.push(base);
     } else if (!localProj.exclude_from_analysis && q) {
@@ -7431,6 +7463,9 @@ async function computeBusinessSnapshot() {
 
   const profitYTD = (revenueYTD !== null && costsYTD !== null) ? revenueYTD - costsYTD : null;
   const effectiveHourlyRate = profitYTD !== null ? profitYTD / hoursYTD : null;
+  const acknowledgedProjectLessons = projects
+    .filter(p => p.analysis_acknowledged && String(p.analysis_note || '').trim())
+    .map(p => ({ name: p.name, note: String(p.analysis_note).trim() }));
 
   return {
     generatedAt: now.toISOString(),
@@ -7439,7 +7474,7 @@ async function computeBusinessSnapshot() {
     revenueYTD, costsYTD, profitYTD, effectiveHourlyRate, hoursYTD,
     hourlyRateTrend6mo,
     outstanding, outstandingLastMonth, overdueCount,
-    costsError, costsByProject, unmatchedProjectCosts, projectMargins, activeProjectMargins,
+    costsError, costsByProject, unmatchedProjectCosts, projectMargins, activeProjectMargins, acknowledgedProjectLessons,
     activeProjects, longRunningProjects,
     currentlyActiveProjects, upcomingProjects, unplannedProjects, explicitMbLinks,
     openQuotes, openQuotesValue,
@@ -7541,6 +7576,7 @@ Regels:
 - Onderbouw elke uitspraak met de beschikbare cijfers.
 - Geef duidelijk aan wanneer er onvoldoende data is voor een harde conclusie.
 - Vermijd algemene managementclichés.
+- Projecten die in de context als "besproken historische les" zijn gemarkeerd, zijn bekende en verklaarde afwijkingen. Noem ze niet opnieuw als inzicht of hoofdadvies, tenzij de gebruiker er expliciet naar vraagt.
 - Schrijf in het Nederlands, beknopt en concreet.`;
 }
 
@@ -7554,6 +7590,9 @@ function buildSnapshotContextText(snap) {
   }
   lines.push(`Openstaande offertes: ${snap.openQuotes.length} stuks, totale waarde ${fmtEur(snap.openQuotesValue)}`);
   lines.push(`Orderportefeuille (geaccepteerde offertes, nog te factureren): ${fmtEur(snap.orderportefeuille)} (${snap.acceptedQuotes.length} offertes)`);
+  if (snap.acknowledgedProjectLessons.length) {
+    lines.push(`Besproken historische lessen — niet opnieuw als inzicht of hoofdadvies noemen: ${snap.acknowledgedProjectLessons.map(l => `${l.name}: ${l.note}`).join('; ')}`);
+  }
   if (!snap.costsError && (snap.costsByProject.length || snap.unmatchedProjectCosts.length)) {
     lines.push(`Kosten per project (via Moneybird-Project-koppeling op inkoopfacturen, excl. BTW): ${snap.costsByProject.map(c => `${c.name}: ${fmtEur(c.cost)}`).join(', ')}`);
     if (snap.unmatchedProjectCosts.length) {

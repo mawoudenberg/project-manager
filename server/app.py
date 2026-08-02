@@ -107,6 +107,8 @@ def init_db():
                 start_date  TEXT DEFAULT '',
                 end_date    TEXT DEFAULT '',
                 status      TEXT DEFAULT 'active',
+                analysis_acknowledged INTEGER DEFAULT 0,
+                analysis_note TEXT DEFAULT '',
                 color       TEXT DEFAULT '#4f8ef7',
                 created_by  TEXT DEFAULT '',
                 created_at  TEXT DEFAULT (datetime('now'))
@@ -209,6 +211,10 @@ def init_db():
         db.execute("ALTER TABLE projects ADD COLUMN exclude_from_analysis INTEGER DEFAULT 0")
     if 'moneybird_project_id' not in pcols:
         db.execute("ALTER TABLE projects ADD COLUMN moneybird_project_id TEXT DEFAULT ''")
+    if 'analysis_acknowledged' not in pcols:
+        db.execute("ALTER TABLE projects ADD COLUMN analysis_acknowledged INTEGER DEFAULT 0")
+    if 'analysis_note' not in pcols:
+        db.execute("ALTER TABLE projects ADD COLUMN analysis_note TEXT DEFAULT ''")
 
     # One-time migration: consolidate duplicate stages by (project_id, name)
     # and move their date ranges into stage_slots.

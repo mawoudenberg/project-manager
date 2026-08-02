@@ -2613,6 +2613,21 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .biz-kpi-value { font-size: 20px; font-weight: 700; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .biz-kpi-sub { font-size: 11px; color: var(--text2); margin-top: 4px; }
 
+.pm-ack-btn {
+  display: block;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text2);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.pm-ack-btn:hover { border-color: var(--accent); color: var(--accent); }
+.pm-ack-btn.pm-acknowledged { border-color: rgba(74,132,92,.35); color: var(--green); }
+
 .biz-chg { font-size: 12px; font-weight: 600; padding: 1px 6px; border-radius: 6px; }
 .biz-chg-up   { background: rgba(74,132,92,.15); color: var(--green); }
 .biz-chg-down { background: rgba(191,79,79,.15); color: var(--red); }
