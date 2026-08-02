@@ -5053,6 +5053,15 @@ function _renderQuoteTable() {
     };
   });
 
+  document.querySelectorAll('.quote-variant-group').forEach(row => {
+    row.onclick = () => {
+      const group = row.dataset.group;
+      if (_expandedVariantGroups.has(group)) _expandedVariantGroups.delete(group);
+      else _expandedVariantGroups.add(group);
+      _renderQuoteTable();
+    };
+  });
+
   document.querySelectorAll('.quote-delete-btn').forEach(btn => {
     btn.onclick = async (e) => {
       e.stopPropagation();
@@ -7019,14 +7028,6 @@ async function computeBusinessSnapshot() {
     }
   });
 
-  document.querySelectorAll('.quote-variant-group').forEach(row => {
-    row.onclick = () => {
-      const group = row.dataset.group;
-      if (_expandedVariantGroups.has(group)) _expandedVariantGroups.delete(group);
-      else _expandedVariantGroups.add(group);
-      _renderQuoteTable();
-    };
-  });
   const openQuotes = [...openQuotesByEnquiry.values()];
   const openQuoteVariantsIgnored = rawOpenQuotes.length - openQuotes.length;
   // "later"-offertes (nog niet relevant, bv. seizoensgebonden) horen niet bij de actieve
