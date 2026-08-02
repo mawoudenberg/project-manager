@@ -213,22 +213,37 @@ function pickProjectColor() {
   return pickNextColor(state.projects.filter(p => p.status === 'active'));
 }
 
-async function createProjectFromQuote(quoteName, askFirst = true) {
+async function createProjectFromQuote(quoteName, askFirst = true, initialStatus = 'on_hold') {
   const name = (quoteName || '').trim();
   if (!name) return;
   const existing = state.projects.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
-  if (existing) { toast(`Project "${name}" bestaat al`); return; }
+  if (existing) {
+    // A project may have been prepared while the quote was still pending. Once
+    // accepted, promote that same project instead of leaving it hidden on hold.
+    if (initialStatus === 'active' && existing.status === 'on_hold') {
+      await remoteQuery({ action: 'update', table: 'projects', data: { status: 'active' }, where: { id: existing.id } });
+      existing.status = 'active';
+      moveProjectFolder(name, 'active');
+      toast(`Project "${name}" is nu actief — offerte geaccepteerd`);
+    } else {
+      toast(`Project "${name}" bestaat al`);
+    }
+    return existing;
+  }
   if (askFirst && !confirm(`Project aanmaken voor "${name}"?`)) return;
   try {
     await remoteQuery({ action: 'insert', table: 'projects', data: {
       name,
-      status: 'active',
+      status: initialStatus,
       color: pickProjectColor(),
       description: '',
     }});
     state.projects = await remoteQuery({ action: 'select', table: 'projects' });
     createProjectFolder(name); // fire-and-forget
-    toast(`📁 Project "${name}" aangemaakt`);
+    toast(initialStatus === 'on_hold'
+      ? `📁 Project "${name}" aangemaakt — in de wacht tot acceptatie`
+      : `📁 Project "${name}" aangemaakt`);
+    return state.projects.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
   } catch (e) {
     toast('Project aanmaken mislukt: ' + (e.message || e), 'error', 4000);
     console.error('Project aanmaken mislukt:', e);
@@ -310,7 +325,7 @@ async function changeQuoteStatus(quote, newStatus) {
   const linkName = (quote.project_name || quote.name || '').trim();
   if (!linkName) return;
   if (newStatus === 'sent' || newStatus === 'accepted') {
-    createProjectFromQuote(linkName, true);
+    await createProjectFromQuote(linkName, true, newStatus === 'accepted' ? 'active' : 'on_hold');
     quote.project_name = linkName;
     await persistQuoteProjectLink(quote.id, linkName);
   }
@@ -4909,6 +4924,7 @@ let _quotesFilter  = new Set(); // leeg = alle statussen
 let _quotesSort    = { field: 'date', dir: 'desc' };
 let _allQuotes     = []; // cached for client-side filter/sort
 let _selectedQuoteIds = new Set(); // voor samenvoegen / bundelen
+let _expandedVariantGroups = new Set();
 
 function quoteVariantGroupId() {
   // Timestamp + random suffix is sufficient here: this is an opaque local grouping
@@ -4947,12 +4963,12 @@ function _renderQuoteTable() {
       <th>Project</th><th>Klant</th><th>Datum</th>
       <th style="text-align:right">Totaal excl. BTW</th><th>Status</th><th></th>
     </tr></thead><tbody>`;
-  list.forEach(q => {
+  const renderQuoteRow = (q, isVariantChild = false) => {
     const hasTotal = q.total_price != null;
     const checked = _selectedQuoteIds.has(q.id);
     const linkName = (q.project_name || q.name || '').trim().toLowerCase();
     const fulfilled = q.status === 'accepted' && linkName && state.projects?.find(p => p.name.trim().toLowerCase() === linkName && p.status === 'done');
-    html += `<tr class="quote-row${checked ? ' ql-row-selected' : ''}" data-id="${q.id}">
+    return `<tr class="quote-row${isVariantChild ? ' ql-variant-child' : ''}${checked ? ' ql-row-selected' : ''}" data-id="${q.id}">
       <td class="ql-cb-col"><input type="checkbox" class="ql-cb" data-id="${q.id}"${checked ? ' checked' : ''} /></td>
       <td><strong>${escHtml(q.name)}</strong>${q.variant_group ? ` <span class="ql-variant-badge" title="Alternatieve offerte binnen dezelfde aanvraag">variant</span>` : ''}</td>
       <td>${escHtml(q.client)}</td>
@@ -4965,6 +4981,41 @@ function _renderQuoteTable() {
       </div></td>
       <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
+  };
+
+  // A grouped row keeps alternatives together. Its total is intentionally the
+  // highest option, matching the pipeline calculation in Bedrijfsanalyse.
+  const groups = new Map();
+  list.forEach(q => {
+    if (q.variant_group) {
+      const members = groups.get(q.variant_group) || [];
+      members.push(q);
+      groups.set(q.variant_group, members);
+    }
+  });
+  const renderedGroups = new Set();
+  list.forEach(q => {
+    if (!q.variant_group) {
+      html += renderQuoteRow(q);
+      return;
+    }
+    if (renderedGroups.has(q.variant_group)) return;
+    renderedGroups.add(q.variant_group);
+    const members = groups.get(q.variant_group) || [q];
+    const highest = members.reduce((best, item) =>
+      Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, members[0]);
+    const expanded = _expandedVariantGroups.has(q.variant_group);
+    const client = [...new Set(members.map(item => item.client).filter(Boolean))].join(', ') || '—';
+    const latestDate = members.map(item => item.quote_date || '').sort().at(-1) || '—';
+    html += `<tr class="quote-variant-group" data-group="${escHtml(q.variant_group)}">
+      <td class="ql-cb-col"></td>
+      <td><span class="ql-group-chevron">${expanded ? '▾' : '▸'}</span> <strong>${members.length} varianten</strong></td>
+      <td>${escHtml(client)}</td>
+      <td>${latestDate}</td>
+      <td class="amount">${fmtEur(highest.total_price)} <span class="ql-group-total-note">hoogste</span></td>
+      <td><span class="ql-group-status">één aanvraag</span></td><td></td>
+    </tr>`;
+    if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
   });
   html += `</tbody></table>`;
   document.getElementById('ql-table-wrap').innerHTML = html;
@@ -5461,7 +5512,7 @@ function renderQuoteEditorView() {
     if (!qe.name.trim()) { shake(document.getElementById('qe-name')); toast('Vul een projectnaam in'); return; }
     if (!qe.id || _qeDirty) await performSave();
     const linkName = quoteProjectName();
-    createProjectFromQuote(linkName);
+    await createProjectFromQuote(linkName, true, qe.status === 'accepted' ? 'active' : 'on_hold');
     await linkQuoteToProject(linkName);
   };
   document.getElementById('qe-folder-btn').onclick  = () => openProjectFolder(quoteProjectName());
@@ -6631,7 +6682,7 @@ async function performSave() {
     if ((qe.status === 'sent' || qe.status === 'accepted') && qe.name) {
       const linkName = quoteProjectName();
       const existing = state.projects.find(p => p.name.trim().toLowerCase() === linkName.toLowerCase());
-      if (!existing) createProjectFromQuote(linkName, /*silent=*/false);
+      await createProjectFromQuote(linkName, /*silent=*/false, qe.status === 'accepted' ? 'active' : 'on_hold');
       await linkQuoteToProject(linkName);
     }
     return true;
@@ -6966,6 +7017,15 @@ async function computeBusinessSnapshot() {
     if (!current || Number(q.total_price || 0) > Number(current.total_price || 0)) {
       openQuotesByEnquiry.set(key, q);
     }
+  });
+
+  document.querySelectorAll('.quote-variant-group').forEach(row => {
+    row.onclick = () => {
+      const group = row.dataset.group;
+      if (_expandedVariantGroups.has(group)) _expandedVariantGroups.delete(group);
+      else _expandedVariantGroups.add(group);
+      _renderQuoteTable();
+    };
   });
   const openQuotes = [...openQuotesByEnquiry.values()];
   const openQuoteVariantsIgnored = rawOpenQuotes.length - openQuotes.length;
