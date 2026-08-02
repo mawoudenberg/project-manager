@@ -51,6 +51,9 @@ let state = {
   ganttHideWeekends: false,
   ganttHiddenProjects: new Set(), // project IDs explicitly hidden by user
   projectsHideInactive: true,
+  projectsFilter: 'active',
+  projectsSearch: '',
+  projectsSort: { field: 'date', dir: 'asc' },
   myTasksHideInactive: true,
   todoHideDone: false,
   calFilter: { tasks: 'active', stages: 'active' }, // tasks: 'all'|'active'|'none'  stages: 'all'|'active'|'none'
@@ -2262,25 +2265,61 @@ function renderProjectsView() {
   const content = document.getElementById('content');
   const ctrl    = document.getElementById('toolbar-controls');
 
-  ctrl.innerHTML = `
-    <button class="btn btn-primary btn-sm" id="new-proj-btn">+ Nieuw project</button>
-    <button class="btn btn-sm${state.projectsHideInactive?' btn-primary':' btn-ghost'}" id="proj-filter-btn">
-      ${state.projectsHideInactive ? 'Toon alles' : 'Alleen actief'}
-    </button>`;
+  ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-proj-btn">+ Nieuw project</button>`;
   document.getElementById('new-proj-btn').onclick = () => openProjectModal(null);
-  document.getElementById('proj-filter-btn').onclick = () => { state.projectsHideInactive = !state.projectsHideInactive; renderProjectsView(); };
 
-  const visibleProjects = state.projectsHideInactive
-    ? state.projects.filter(p => p.status === 'active')
-    : state.projects;
+  const filters = [
+    ['all', 'Alle'], ['active', 'Actief'], ['on_hold', 'In de wacht'], ['done', 'Afgerond'],
+  ];
+  const sortLabel = field => {
+    const active = state.projectsSort.field === field;
+    const arrow = active ? (state.projectsSort.dir === 'asc' ? '↑' : '↓') : '↕';
+    return `${field === 'name' ? 'Naam' : 'Datum'} ${arrow}`;
+  };
+  const escapedSearch = escHtml(state.projectsSearch);
+  content.innerHTML = `<div class="proj-browser">
+    <div class="proj-browser-top">
+      <label class="proj-search-wrap" for="proj-search">
+        <span>⌕</span><input id="proj-search" type="search" value="${escapedSearch}" placeholder="Zoek project, klant of omschrijving…" autocomplete="off" />
+      </label>
+      <div class="proj-sort-actions">
+        <button class="proj-sort-btn${state.projectsSort.field === 'name' ? ' active' : ''}" data-proj-sort="name">${sortLabel('name')}</button>
+        <button class="proj-sort-btn${state.projectsSort.field === 'date' ? ' active' : ''}" data-proj-sort="date">${sortLabel('date')}</button>
+      </div>
+    </div>
+    <div class="proj-filter-chips">
+      ${filters.map(([key, label]) => `<button class="proj-filter-chip${state.projectsFilter === key ? ' active' : ''}" data-proj-status-filter="${key}">${label}</button>`).join('')}
+    </div>
+    <div id="proj-results"></div>
+  </div>`;
 
-  if (visibleProjects.length === 0) {
-    content.innerHTML = `<div class="empty"><div class="empty-icon">📁</div><p>Nog geen projecten. Maak een project aan om te beginnen.</p></div>`;
-    return;
-  }
+  const renderResults = () => {
+    const needle = state.projectsSearch.trim().toLowerCase();
+    const visibleProjects = state.projects
+      .filter(p => state.projectsFilter === 'all' || p.status === state.projectsFilter)
+      .filter(p => !needle || [p.name, p.client, p.description].some(value => String(value || '').toLowerCase().includes(needle)))
+      .sort((a, b) => {
+        let result;
+        if (state.projectsSort.field === 'name') {
+          result = (a.name || '').localeCompare(b.name || '', 'nl');
+        } else {
+          // Projects without a start date go below dated projects in both directions.
+          if (!a.start_date && !b.start_date) result = 0;
+          else if (!a.start_date) result = 1;
+          else if (!b.start_date) result = -1;
+          else result = a.start_date.localeCompare(b.start_date);
+        }
+        return state.projectsSort.dir === 'asc' ? result : -result;
+      });
 
-  const html = `<div class="proj-grid">` +
-    visibleProjects.map(p => {
+    const results = document.getElementById('proj-results');
+    if (visibleProjects.length === 0) {
+      results.innerHTML = `<div class="empty"><div class="empty-icon">📁</div><p>${state.projects.length ? 'Geen projecten gevonden met deze filter.' : 'Nog geen projecten. Maak een project aan om te beginnen.'}</p></div>`;
+      return;
+    }
+
+    const html = `<div class="proj-result-count">${visibleProjects.length} ${visibleProjects.length === 1 ? 'project' : 'projecten'}</div><div class="proj-grid">` +
+      visibleProjects.map(p => {
       const taskCount = state.tasks.filter(t => t.project_id == p.id).length;
       const doneCount = state.tasks.filter(t => t.project_id == p.id && t.status === 'done').length;
       const pct = taskCount ? Math.round(doneCount / taskCount * 100) : 0;
@@ -2305,21 +2344,41 @@ function renderProjectsView() {
           </div>
         </div>
       </div>`;
-    }).join('') + `</div>`;
+      }).join('') + `</div>`;
 
-  content.innerHTML = html;
-  content.querySelectorAll('.proj-card').forEach(card => {
-    card.onclick = () => {
-      const proj = state.projects.find(p => p.id == card.dataset.projId);
-      if (proj) renderProjectDetail(proj);
+    results.innerHTML = html;
+    results.querySelectorAll('.proj-card').forEach(card => {
+      card.onclick = () => {
+        const proj = state.projects.find(p => p.id == card.dataset.projId);
+        if (proj) renderProjectDetail(proj);
+      };
+    });
+    results.querySelectorAll('.proj-folder-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        openProjectFolder(btn.dataset.name);
+      };
+    });
+  };
+
+  content.querySelectorAll('.proj-filter-chip').forEach(btn => {
+    btn.onclick = () => { state.projectsFilter = btn.dataset.projStatusFilter; renderProjectsView(); };
+  });
+  content.querySelectorAll('.proj-sort-btn').forEach(btn => {
+    btn.onclick = () => {
+      const field = btn.dataset.projSort;
+      state.projectsSort = state.projectsSort.field === field
+        ? { field, dir: state.projectsSort.dir === 'asc' ? 'desc' : 'asc' }
+        : { field, dir: 'asc' };
+      renderProjectsView();
     };
   });
-  content.querySelectorAll('.proj-folder-btn').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      openProjectFolder(btn.dataset.name);
-    };
-  });
+  const search = document.getElementById('proj-search');
+  search.oninput = () => {
+    state.projectsSearch = search.value;
+    renderResults();
+  };
+  renderResults();
 }
 
 /* ─── Project Detail Page ──────────────────────────────────────────────────── */
