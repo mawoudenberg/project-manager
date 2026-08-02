@@ -1555,6 +1555,7 @@ tr:hover .qi-del { opacity: 1; }
   border-top: 2px solid var(--border);
 }
 .qi-section-hdr:first-child td { border-top: none; }
+.qi-section-empty td { padding: 5px 8px 9px; color: var(--text2); font-size: 11px; font-style: italic; background: var(--bg2); }
 
 /* ─── Team Members ─────────────────────────────────────────────────────────── */
 .team-member-row {

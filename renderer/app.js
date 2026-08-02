@@ -4973,6 +4973,9 @@ function freshQE(quote) {
     notes:      quote?.notes      ?? '',
     image_data:     quote?.image_data || (quote?.id ? localStorage.getItem('qimg_' + quote.id) : '') || '',
     extra_images:   stored.extra_images ?? [],
+    // Alleen samengevoegde offertes hebben deze volgorde. Hiermee kunnen ook lege
+    // Materiaal-/Diensten-blokken in de editor en interne PDF zichtbaar blijven.
+    merged_sections: Array.isArray(stored.merged_sections) ? stored.merged_sections : [],
     checklist_done: quote?.id ? true : false,
     materials:  [],
     services:   [],
@@ -5240,9 +5243,16 @@ async function mergeSelectedQuotes() {
   const base = fullQuotes.slice().sort((a, b) => (b.quote_date || '').localeCompare(a.quote_date || ''))[0];
 
   // Combineer alle items (materialen + diensten + exclusies), gegroepeerd per bronofferte
+  const usedSectionLabels = new Map();
+  const sourceLabels = fullQuotes.map((quote, idx) => {
+    const baseLabel = quote?.name || `Onderdeel ${idx + 1}`;
+    const count = (usedSectionLabels.get(baseLabel) || 0) + 1;
+    usedSectionLabels.set(baseLabel, count);
+    return count === 1 ? baseLabel : `${baseLabel} (${count})`;
+  });
   const mergedItems = [];
   allItems.forEach((items, idx) => {
-    const label = fullQuotes[idx]?.name || `Onderdeel ${idx + 1}`;
+    const label = sourceLabels[idx];
     (items || []).forEach(it => mergedItems.push({ ...it, id: undefined, quote_id: undefined, section_label: label }));
   });
 
@@ -5254,7 +5264,11 @@ async function mergeSelectedQuotes() {
   // Bouw de samengevoegde extras_json op basis van de basisofferte
   let baseExtras = {};
   try { baseExtras = JSON.parse(base.extras_json || '{}') || {}; } catch {}
-  const mergedExtras = { ...baseExtras, fixed_items: allFixedItems };
+  const mergedExtras = {
+    ...baseExtras,
+    fixed_items: allFixedItems,
+    merged_sections: sourceLabels,
+  };
 
   const names = fullQuotes.map(q => q.name).join(' + ');
   const mergedName = names.length > 80 ? base.name + ' (samengevoegd)' : names;
@@ -6086,7 +6100,7 @@ function renderMatTable() {
   if (!tbody) return;
 
   let _lastMatSection = null;
-  tbody.innerHTML = qe.materials.map((m, i) => {
+  const itemRows = qe.materials.map((m, i) => {
     let header = '';
     if (m.section_label && m.section_label !== _lastMatSection) {
       header = `<tr class="qi-section-hdr"><td colspan="9">${escHtml(m.section_label)}</td></tr>`;
@@ -6104,7 +6118,12 @@ function renderMatTable() {
       <td class="num" id="mat-row-total-${i}">${m.enabled !== 0 ? fmtEur((m.quantity ?? 1) * (m.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="mat" data-i="${i}">✕</button></td>
     </tr>`;
-  }).join('') || `<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
+  }).join('');
+  const emptySections = (qe.merged_sections || [])
+    .filter(label => !qe.materials.some(m => m.section_label === label))
+    .map(label => `<tr class="qi-section-hdr"><td colspan="9">${escHtml(label)} — Materialen</td></tr><tr class="qi-section-empty"><td colspan="9">Geen materialen</td></tr>`)
+    .join('');
+  tbody.innerHTML = itemRows + emptySections || `<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('mat');
   wireDragDrop('mat');
@@ -6116,7 +6135,7 @@ function renderSvcTable() {
   if (!tbody) return;
 
   let _lastSvcSection = null;
-  tbody.innerHTML = qe.services.map((s, i) => {
+  const itemRows = qe.services.map((s, i) => {
     let header = '';
     if (s.section_label && s.section_label !== _lastSvcSection) {
       header = `<tr class="qi-section-hdr"><td colspan="10">${escHtml(s.section_label)}</td></tr>`;
@@ -6138,7 +6157,12 @@ function renderSvcTable() {
       <td class="num" id="svc-row-total-${i}">${s.enabled !== 0 ? fmtEur((s.quantity ?? 1) * (s.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
     </tr>`;
-  }).join('') || `<tr><td colspan="10" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
+  }).join('');
+  const emptySections = (qe.merged_sections || [])
+    .filter(label => !qe.services.some(s => s.section_label === label))
+    .map(label => `<tr class="qi-section-hdr"><td colspan="10">${escHtml(label)} — Diensten</td></tr><tr class="qi-section-empty"><td colspan="10">Geen diensten</td></tr>`)
+    .join('');
+  tbody.innerHTML = itemRows + emptySections || `<tr><td colspan="10" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('svc');
   wireDragDrop('svc');
@@ -6749,6 +6773,7 @@ async function performSave() {
     pdf_opts: qe.pdf_opts,
     outsource_margin: qe.outsource_margin,
     fixed_items: qe.fixed_enabled ? qe.fixed_items : [],
+    merged_sections: qe.merged_sections || [],
   });
   const quoteData = {
     name: qe.name.trim(), client: qe.client.trim(), quote_date: qe.quote_date,
@@ -6847,6 +6872,7 @@ async function duplicateQuote() {
       pdf_opts:        qe.pdf_opts,
       outsource_margin: qe.outsource_margin,
       fixed_items: qe.fixed_enabled ? qe.fixed_items : [],
+      merged_sections: qe.merged_sections || [],
     });
     const newQuoteData = {
       name:       qe.name + ' (kopie)',
@@ -7911,6 +7937,24 @@ async function exportQuotePdf(mode = 'internal') {
     </tr>`;
   }).join('');
 
+  // Een samengevoegde offerte blijft intern per brononderdeel leesbaar. De
+  // klantversie hieronder verandert bewust niet: die toont alleen de eindprijs.
+  const groupedInternalBlocks = (qe.merged_sections || []).map(label => {
+    const mats = matRowsEnabled.filter(m => m.section_label === label);
+    const svcs = svcRowsEnabled.filter(s => s.section_label === label);
+    const materialRows = mats.map(m => {
+      const price = t.isFixedPrice ? m.unit_price : m.unit_price * (1 + ((m.margin != null && m.margin !== '') ? parseFloat(m.margin) : t.marginPct) / 100);
+      const unit = escHtml(m.unit || 'st');
+      return `<tr><td>${escHtml(m.name)}</td><td class="r">${m.quantity} ${unit}</td><td class="r">${fmtEur(price)}</td><td class="r">${fmtEur(m.quantity * price)}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="empty-pdf-row">Geen materialen</td></tr>';
+    const serviceRows = svcs.map(s => {
+      const unit = escHtml(s.unit || 'uur');
+      const price = s.is_outsourced ? s.unit_price * (1 + ((s.margin != null && s.margin !== '') ? parseFloat(s.margin) : t.outsourceMarginPct) / 100) : (s.margin != null && s.margin !== '' ? s.unit_price * (1 + parseFloat(s.margin) / 100) : s.unit_price);
+      return `<tr><td>${escHtml(s.name)}</td><td class="r">${s.quantity} ${unit}</td><td class="r">${fmtEur(price)}/${unit}</td><td class="r">${fmtEur(s.quantity * price)}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="empty-pdf-row">Geen diensten</td></tr>';
+    return `<div class="internal-section"><h2>${escHtml(label)}</h2><h3>Materialen</h3><table class="content-table"><thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">${t.isFixedPrice ? 'Inkoopprijs' : 'Stukprijs'}</th><th class="r" style="width:17%">Totaal</th></tr></thead><tbody>${materialRows}</tbody></table>${!t.isFixedPrice ? `<h3>Diensten</h3><table class="content-table"><thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Tarief</th><th class="r" style="width:17%">Totaal</th></tr></thead><tbody>${serviceRows}</tbody></table>` : ''}</div>`;
+  }).join('');
+
   // ── Client PDF: items listed, no individual prices (only enabled items) ──
   const clientItemsList = [
     ...matRowsEnabled.map(m => escHtml(m.name)),
@@ -8053,6 +8097,9 @@ async function exportQuotePdf(mode = 'internal') {
   .client-addr { font-size: 10px; color: #666; line-height: 1.6; margin-top: 4px; }
   .notes-block { margin-top: 4mm; margin-bottom: 6mm; padding: 8px 14px; background: ${bgTint}; border-left: 3px solid ${accent}; border-radius: 0 4px 4px 0; font-size: 10px; color: #666; line-height: 1.6; break-inside: avoid; page-break-inside: avoid; }
   .notes-block .lbl { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
+  .internal-section { margin-top: 6mm; break-inside: avoid; page-break-inside: avoid; }
+  .internal-section h2 { font-size: 13px; color: ${accentD}; margin: 0 0 3mm; }
+  .empty-pdf-row { color: #888; font-style: italic; text-align: center; }
 
   /* ── Extra images page ── */
   .extras-page {
@@ -8143,20 +8190,20 @@ ${opts.show_title_page ? `
     </div>
     ` : `
     <!-- Internal PDF: full detail (disabled items excluded) -->
-    ${matRowsEnabled.length > 0 ? `
+    ${groupedInternalBlocks || (matRowsEnabled.length > 0 ? `
     <h3>Materialen</h3>
     <table class="content-table">
       <thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">${t.isFixedPrice ? 'Inkoopprijs' : 'Stukprijs'}</th><th class="r" style="width:17%">Totaal</th></tr></thead>
       <tbody>${matRows}</tbody>
     </table>
-    ` : ''}
+    ` : '')}
 
-    ${!t.isFixedPrice && svcRowsEnabled.length > 0 ? `
+    ${groupedInternalBlocks ? '' : (!t.isFixedPrice && svcRowsEnabled.length > 0 ? `
     <h3>Diensten</h3>
     <table class="content-table">
       <thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Tarief</th><th class="r" style="width:17%">Totaal</th></tr></thead>
       <tbody>${svcRows}</tbody>
-    </table>` : ''}
+    </table>` : '')}
 
     ${t.isFixedPrice && t.fixedItems?.length > 0 ? `
     <h3>Vaste stuksprijs</h3>
