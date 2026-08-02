@@ -1090,6 +1090,13 @@ html[data-theme="dark"] #sidebar-logo {
   border-bottom-color: rgba(124, 92, 191, .22);
   cursor: pointer;
 }
+.ql-search-wrap {
+  display: flex; align-items: center; gap: 7px; flex: 1; min-width: 180px; max-width: 300px;
+  padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg2); color: var(--text2);
+}
+.ql-search-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,142,247,.12); }
+.ql-search-wrap span { font-size: 17px; line-height: 1; transform: rotate(-20deg); }
+.ql-search-wrap input { min-width: 0; width: 100%; padding: 8px 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
 .quote-variant-group:hover td { background: rgba(124, 92, 191, .12) !important; }
 .ql-group-chevron { color: #7c5cbf; font-size: 14px; }
 .ql-group-total-note { color: var(--text2); font-family: inherit; font-size: 10px; }

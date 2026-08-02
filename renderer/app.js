@@ -4981,6 +4981,7 @@ function freshQE(quote) {
 
 let _quotesFilter  = new Set(); // leeg = alle statussen
 let _quotesSort    = { field: 'date', dir: 'desc' };
+let _quotesSearch  = '';
 let _allQuotes     = []; // cached for client-side filter/sort
 let _selectedQuoteIds = new Set(); // voor samenvoegen / bundelen
 let _expandedVariantGroups = new Set();
@@ -4996,6 +4997,11 @@ function _renderQuoteTable() {
 
   // Filter
   if (_quotesFilter.size) list = list.filter(q => _quotesFilter.has(q.status));
+  const needle = _quotesSearch.trim().toLowerCase();
+  if (needle) {
+    list = list.filter(q => [q.name, q.client, q.project_name]
+      .some(value => String(value || '').toLowerCase().includes(needle)));
+  }
 
   // Sort
   list.sort((a, b) => {
@@ -5012,7 +5018,7 @@ function _renderQuoteTable() {
 
   if (!list.length) {
     document.getElementById('ql-table-wrap').innerHTML =
-      `<div class="empty" style="margin-top:40px"><div class="empty-icon">🔍</div><p>Geen offertes voor dit filter.</p></div>`;
+      `<div class="empty" style="margin-top:40px"><div class="empty-icon">🔍</div><p>Geen offertes gevonden voor deze zoekopdracht of filter.</p></div>`;
     return;
   }
 
@@ -5262,6 +5268,9 @@ function _renderQuoteFilterBar() {
     return _quotesSort.dir === 'desc' ? '↓' : '↑';
   };
   return `<div class="ql-controls-bar">
+    <label class="ql-search-wrap" for="ql-search">
+      <span>⌕</span><input id="ql-search" type="search" value="${escHtml(_quotesSearch)}" placeholder="Zoek project of klant…" autocomplete="off" />
+    </label>
     <div class="ql-filters">
       ${FILTERS.map(f => {
         const isAll = f.key === null;
@@ -5274,6 +5283,15 @@ function _renderQuoteFilterBar() {
       <button class="ql-sort-btn${_quotesSort.field === 'price' ? ' active' : ''}" data-sort="price">Prijs ${sortIcon('price')}</button>
     </div>
   </div>`;
+}
+
+function wireQuoteSearch() {
+  const search = document.getElementById('ql-search');
+  if (!search) return;
+  search.oninput = () => {
+    _quotesSearch = search.value;
+    _renderQuoteTable();
+  };
 }
 
 async function renderQuoteList() {
@@ -5297,6 +5315,7 @@ async function renderQuoteList() {
   }
 
   content.innerHTML = `<div id="ql-bar-wrap">${_renderQuoteFilterBar()}</div><div id="ql-table-wrap"></div>`;
+  wireQuoteSearch();
   _renderQuoteTable();
 
   // Event delegation: filter chips and sort buttons bubble up to content
@@ -5313,6 +5332,7 @@ async function renderQuoteList() {
         _quotesFilter.add(key);
       }
       document.getElementById('ql-bar-wrap').innerHTML = _renderQuoteFilterBar();
+      wireQuoteSearch();
       _renderQuoteTable();
     } else if (sortBtn) {
       const field = sortBtn.dataset.sort;
@@ -5320,6 +5340,7 @@ async function renderQuoteList() {
         ? { field, dir: _quotesSort.dir === 'desc' ? 'asc' : 'desc' }
         : { field, dir: 'desc' };
       document.getElementById('ql-bar-wrap').innerHTML = _renderQuoteFilterBar();
+      wireQuoteSearch();
       _renderQuoteTable();
     }
   });
