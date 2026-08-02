@@ -7077,20 +7077,25 @@ async function computeBusinessSnapshot() {
   const ANNUAL_HOURS      = 2 * 40 * 46; // 3680 uur/jaar (2 man × 40u × 46 weken)
   const hoursYTD          = ANNUAL_HOURS * (dayOfYear / 365);
 
-  const [quotes, invoices, rawPurchaseInvoices, receipts, mbProjects, quoteItemsAll] = await Promise.all([
+  // Haal projecten altijd opnieuw op. De Moneybird-koppeling kan net zijn aangepast
+  // (ook vanaf een andere computer); state.projects is dan nog de oude kopie.
+  // Zonder deze verse bron worden actuele Moneybird-bedragen met een verouderde
+  // projectkoppeling gecombineerd.
+  const [quotes, invoices, rawPurchaseInvoices, receipts, mbProjects, quoteItemsAll, projects] = await Promise.all([
     remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'variant_group', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until', 'margin', 'extras_json'] }),
     fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
     fetchAllMoneybirdPurchaseInvoices().catch(e => { console.warn('Moneybird kosten-snapshot fout:', e); return null; }),
     fetchAllMoneybirdReceipts().catch(e => { console.warn('Moneybird bonnetjes-snapshot fout:', e); return null; }),
     fetchAllMoneybirdProjects().catch(e => { console.warn('Moneybird projecten-snapshot fout:', e); return null; }),
     remoteQuery({ action: 'select', table: 'quote_items' }),
+    remoteQuery({ action: 'select', table: 'projects' }),
   ]);
   // Combineer leveranciersfacturen en bonnetjes — beide hebben dezelfde structuur
   // (details[].project_id, total_price_excl_tax). Alleen null als BEIDE falen (→ costsError).
   const purchaseInvoices = (rawPurchaseInvoices === null && receipts === null)
     ? null
     : [...(rawPurchaseInvoices || []), ...(receipts || [])];
-  const projects = state.projects?.length ? state.projects : await remoteQuery({ action: 'select', table: 'projects' });
+  state.projects = projects;
   const stages    = state.stages?.length    ? state.stages    : await remoteQuery({ action: 'select', table: 'project_stages' });
   const stageSlots = state.stageSlots?.length ? state.stageSlots : await remoteQuery({ action: 'select', table: 'stage_slots' });
 
@@ -7288,7 +7293,14 @@ async function computeBusinessSnapshot() {
     entry.estimatedProfit += computeQuoteProfit(q, quoteItemsByQuoteId.get(q.id) || []);
     quoteValueByProjectName.set(key, entry);
   });
-  const costByProjectName = new Map(costsByProject.map(c => [c.name.toLowerCase(), c.cost]));
+  // Eén lokaal project kan aan meerdere Moneybird-projecten gekoppeld zijn. Tel
+  // daarom alle kostenregels met dezelfde lokale projectnaam op; Map([...]) zou
+  // anders de vorige waarde overschrijven (bijv. €258,59 door €69,00).
+  const costByProjectName = new Map();
+  costsByProject.forEach(c => {
+    const key = c.name.toLowerCase();
+    costByProjectName.set(key, (costByProjectName.get(key) || 0) + c.cost);
+  });
   const marginProjectKeys = new Set([...quoteValueByProjectName.keys(), ...costByProjectName.keys(), ...actualRevenueByProjectName.keys()]);
   const projectMargins = [];
   const activeProjectMargins = [];
