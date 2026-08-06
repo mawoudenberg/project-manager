@@ -2633,7 +2633,8 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 }
 .pm-hdr span { text-align: right; }
 .pm-hdr span:first-child { text-align: left; }
-.pm-name { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-name { color: var(--text); display: flex; align-items: center; overflow: hidden; }
+.pm-name-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pm-col-est    { text-align: right; color: var(--text2); font-size: 12px; }
 .pm-col-gef    { text-align: right; color: var(--text2); font-size: 12px; }
 .pm-col-marge  { text-align: right; font-size: 12px; }
@@ -2641,9 +2642,18 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .pm-col-winst  { text-align: right; }
 .pm-actual { font-size: 14px; font-weight: 700; color: var(--text); }
 .pm-pct    { font-size: 14px; font-weight: 700; }
-.pm-actual.biz-margin-good, .pm-pct.biz-margin-good { color: #2e9e5b; }
-.pm-actual.biz-margin-warn, .pm-pct.biz-margin-warn { color: #c98a13; }
-.pm-actual.biz-margin-bad,  .pm-pct.biz-margin-bad  { color: #d6453d; }
+.pm-actual.biz-margin-good, .pm-pct.biz-margin-good, .biz-margin-good { color: #2e9e5b; }
+.pm-actual.biz-margin-warn, .pm-pct.biz-margin-warn, .biz-margin-warn { color: #c98a13; }
+.pm-actual.biz-margin-bad,  .pm-pct.biz-margin-bad,  .biz-margin-bad  { color: #d6453d; }
+.pm-actual.biz-margin-ack,  .pm-pct.biz-margin-ack,  .biz-margin-ack  { color: var(--text2); }
+.pm-ack-btn {
+  background: none; border: none; cursor: pointer; padding: 0 3px; margin-left: 2px;
+  font-size: 11px; opacity: 0; color: var(--text2); transition: opacity .15s, color .1s;
+  line-height: 1; flex-shrink: 0;
+}
+.pm-row:hover .pm-ack-btn { opacity: 0.5; }
+.pm-ack-btn:hover { opacity: 1 !important; color: var(--accent); }
+.pm-ack-btn.pm-ack-active { opacity: 1; color: var(--accent); }
 .pm-section-hdr {
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .45px;
   color: var(--text2); padding: 12px 0 6px; border-top: 1px solid var(--border); margin-top: 4px;

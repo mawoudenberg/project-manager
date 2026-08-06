@@ -4557,20 +4557,23 @@ function renderBizDashboardContent(snap) {
                   if (b.profitRatioPct === null) return -1;
                   return d * (b.profitRatioPct - a.profitRatioPct);
                 };
+                const ackedProjects = new Set(JSON.parse(localStorage.getItem('biz_acknowledged_projects') || '[]'));
                 return [...snap.projectMargins].sort(sortFn).map(m => {
+                const acked = ackedProjects.has(m.name);
                 const delta = m.profitRatioPct === null ? null : m.profitRatioPct - 100;
-                const pctClass = delta === null ? '' : delta < -50 ? 'biz-margin-bad' : delta < -10 ? 'biz-margin-warn' : 'biz-margin-good';
-                const profitClass = m.actualProfit < 0 ? 'biz-margin-bad' : 'biz-margin-good';
+                const pctClass = acked ? 'biz-margin-ack' : (delta === null ? '' : delta < -50 ? 'biz-margin-bad' : delta < -10 ? 'biz-margin-warn' : 'biz-margin-good');
+                const profitClass = acked ? 'biz-margin-ack' : (m.actualProfit < 0 ? 'biz-margin-bad' : 'biz-margin-good');
                 const revenueMargePct = m.actualRevenue > 0 ? (m.actualProfit / m.actualRevenue) * 100 : null;
-                const margeClass = revenueMargePct === null ? '' : revenueMargePct < 0 ? 'biz-margin-bad' : revenueMargePct < 20 ? 'biz-margin-warn' : 'biz-margin-good';
+                const margeClass = acked ? 'biz-margin-ack' : (revenueMargePct === null ? '' : revenueMargePct < 0 ? 'biz-margin-bad' : revenueMargePct < 20 ? 'biz-margin-warn' : 'biz-margin-good');
                 const notActual = !m.revenueIsActual ? ' <span class="biz-margin-note" title="Nog geen omzet getagd in Moneybird — offertebedrag als schatting">*</span>' : '';
                 const colEst  = m.hasQuote ? fmtEur(m.estimatedProfit) : '—';
                 const colGef  = `${fmtEur(m.actualRevenue)}${notActual}`;
                 const colMrg  = revenueMargePct !== null ? `<span class="${margeClass}">${revenueMargePct.toFixed(0)}%</span>` : '—';
                 const colVsPr = m.profitRatioPct !== null ? `<span class="pm-pct ${pctClass}">${fmtProfitDelta(m.profitRatioPct)}</span>` : '—';
                 const colWst  = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
+                const ackBtn  = `<button class="pm-ack-btn${acked ? ' pm-ack-active' : ''}" data-ack="${escHtml(m.name)}" title="${acked ? 'Klik om erkenning ongedaan te maken' : 'Markeer als begrepen (verbergt waarschuwingskleuren)'}">✓</button>`;
                 return `<div class="pm-row">
-                  <span class="pm-name">${escHtml(m.name)}</span>
+                  <span class="pm-name"><span class="pm-name-text">${escHtml(m.name)}</span>${ackBtn}</span>
                   <span class="pm-col-est">${colEst}</span>
                   <span class="pm-col-gef">${colGef}</span>
                   <span class="pm-col-marge">${colMrg}</span>
@@ -4726,6 +4729,17 @@ function renderBizDashboardContent(snap) {
         localStorage.setItem('pm_sort', btn.dataset.sort);
         localStorage.setItem('pm_sort_dir', 'desc');
       }
+      renderBizDashboardContent(_bizSnapshot);
+    };
+  });
+  // Begrepen-knop per project (onderdrukt waarschuwingskleuren voor bekende afwijkingen)
+  document.querySelectorAll('.pm-ack-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const name = btn.dataset.ack;
+      const acked = new Set(JSON.parse(localStorage.getItem('biz_acknowledged_projects') || '[]'));
+      if (acked.has(name)) { acked.delete(name); } else { acked.add(name); }
+      localStorage.setItem('biz_acknowledged_projects', JSON.stringify([...acked]));
       renderBizDashboardContent(_bizSnapshot);
     };
   });
@@ -5041,11 +5055,26 @@ async function mergeSelectedQuotes() {
   // Gebruik de nieuwste offerte als basis voor metadata
   const base = fullQuotes.slice().sort((a, b) => (b.quote_date || '').localeCompare(a.quote_date || ''))[0];
 
-  // Combineer alle items (materialen + diensten + exclusies), gegroepeerd per bronofferte
+  // Combineer alle items (materialen + diensten + exclusies), gegroepeerd per bronofferte.
+  // We baken de effectieve marge van de bronofferte in elk item in, zodat items met een
+  // null-marge (= "gebruik de globale marge van deze offerte") niet de globale marge van
+  // de basisofferte krijgen na het samenvoegen — anders klopt het totaal niet meer.
   const mergedItems = [];
   allItems.forEach((items, idx) => {
-    const label = fullQuotes[idx]?.name || `Onderdeel ${idx + 1}`;
-    (items || []).forEach(it => mergedItems.push({ ...it, id: undefined, quote_id: undefined, section_label: label }));
+    const label    = fullQuotes[idx]?.name || `Onderdeel ${idx + 1}`;
+    const srcQuote = fullQuotes[idx];
+    let srcExtras = {};
+    try { srcExtras = JSON.parse(srcQuote?.extras_json || '{}') || {}; } catch {}
+    const srcGlobalMargin    = (srcQuote?.margin          != null && srcQuote?.margin          !== '') ? parseFloat(srcQuote.margin)          : 20;
+    const srcOutsourceMargin = (srcExtras.outsource_margin != null && srcExtras.outsource_margin !== '') ? parseFloat(srcExtras.outsource_margin) : 0;
+    (items || []).forEach(it => {
+      let margin = it.margin;
+      if (margin == null || margin === '') {
+        if (it.type === 'material') margin = srcGlobalMargin;
+        else if (it.type === 'service' && it.is_outsourced) margin = srcOutsourceMargin;
+      }
+      mergedItems.push({ ...it, id: undefined, quote_id: undefined, section_label: label, margin });
+    });
   });
 
   // Combineer fixed_items uit alle offertes
@@ -7346,9 +7375,15 @@ function buildSnapshotContextText(snap) {
     }
   }
   if (snap.projectMargins.length) {
+    const ackedNames = new Set(JSON.parse(localStorage.getItem('biz_acknowledged_projects') || '[]'));
     const withQuote = snap.projectMargins.filter(m => m.hasQuote);
-    if (withQuote.length) {
-      lines.push(`Eigen verdiensten per afgesloten project (alleen projecten met status "Afgerond" — bij lopende projecten is dit nog niet betrouwbaar) — prognose winst uit de offerte vs. daadwerkelijke winst (omzet die in Moneybird aan het project getagd is, of bij gebrek daaraan de offertewaarde, minus werkelijke Moneybird-kosten, excl. BTW), met de afwijking t.o.v. de prognose (+ = beter dan verwacht, - = slechter), gesorteerd sterkste presteerders eerst: ${withQuote.map(m => `${m.name}: prognose ${fmtEur(m.estimatedProfit)}, daadwerkelijk ${fmtEur(m.actualProfit)}${m.profitRatioPct !== null ? ` (${fmtProfitDelta(m.profitRatioPct)})` : ''}${m.revenueIsActual ? '' : ' [nog gebaseerd op offertewaarde, nog geen omzet getagd in Moneybird]'}`).join('; ')}`);
+    const normalWithQuote = withQuote.filter(m => !ackedNames.has(m.name));
+    const ackedWithQuote  = withQuote.filter(m => ackedNames.has(m.name));
+    if (normalWithQuote.length) {
+      lines.push(`Eigen verdiensten per afgesloten project (alleen projecten met status "Afgerond" — bij lopende projecten is dit nog niet betrouwbaar) — prognose winst uit de offerte vs. daadwerkelijke winst (omzet die in Moneybird aan het project getagd is, of bij gebrek daaraan de offertewaarde, minus werkelijke Moneybird-kosten, excl. BTW), met de afwijking t.o.v. de prognose (+ = beter dan verwacht, - = slechter), gesorteerd sterkste presteerders eerst: ${normalWithQuote.map(m => `${m.name}: prognose ${fmtEur(m.estimatedProfit)}, daadwerkelijk ${fmtEur(m.actualProfit)}${m.profitRatioPct !== null ? ` (${fmtProfitDelta(m.profitRatioPct)})` : ''}${m.revenueIsActual ? '' : ' [nog gebaseerd op offertewaarde, nog geen omzet getagd in Moneybird]'}`).join('; ')}`);
+    }
+    if (ackedWithQuote.length) {
+      lines.push(`Bekende margeafwijkingen (al beoordeeld en begrepen door de gebruiker — NIET als probleem of aandachtspunt beschouwen): ${ackedWithQuote.map(m => `${m.name}: ${fmtProfitDelta(m.profitRatioPct)}`).join(', ')}`);
     }
     const costOnly = snap.projectMargins.filter(m => !m.hasQuote);
     if (costOnly.length) {
