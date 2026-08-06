@@ -5265,8 +5265,22 @@ async function mergeSelectedQuotes() {
   });
   const mergedItems = [];
   allItems.forEach((items, idx) => {
-    const label = sourceLabels[idx];
-    (items || []).forEach(it => mergedItems.push({ ...it, id: undefined, quote_id: undefined, section_label: label }));
+    const label    = sourceLabels[idx];
+    const srcQuote = fullQuotes[idx];
+    let srcExtras = {};
+    try { srcExtras = JSON.parse(srcQuote?.extras_json || '{}') || {}; } catch {}
+    const srcGlobalMargin    = (srcQuote?.margin           != null && srcQuote?.margin           !== '') ? parseFloat(srcQuote.margin)           : 20;
+    const srcOutsourceMargin = (srcExtras.outsource_margin != null && srcExtras.outsource_margin !== '') ? parseFloat(srcExtras.outsource_margin) : 0;
+    (items || []).forEach(it => {
+      // Bak de effectieve marge in zodat items met null-marge niet de globale marge
+      // van de basisofferte overnemen — anders klopt het samengevoegde totaal niet.
+      let margin = it.margin;
+      if (margin == null || margin === '') {
+        if (it.type === 'material') margin = srcGlobalMargin;
+        else if (it.type === 'service' && it.is_outsourced) margin = srcOutsourceMargin;
+      }
+      mergedItems.push({ ...it, id: undefined, quote_id: undefined, section_label: label, margin });
+    });
   });
 
   // Combineer fixed_items uit alle offertes
