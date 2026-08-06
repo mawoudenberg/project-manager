@@ -51,6 +51,9 @@ let state = {
   ganttHideWeekends: false,
   ganttHiddenProjects: new Set(), // project IDs explicitly hidden by user
   projectsHideInactive: true,
+  projectsFilter: 'active',
+  projectsSearch: '',
+  projectsSort: { field: 'date', dir: 'asc' },
   myTasksHideInactive: true,
   todoHideDone: false,
   calFilter: { tasks: 'active', stages: 'active' }, // tasks: 'all'|'active'|'none'  stages: 'all'|'active'|'none'
@@ -213,22 +216,37 @@ function pickProjectColor() {
   return pickNextColor(state.projects.filter(p => p.status === 'active'));
 }
 
-async function createProjectFromQuote(quoteName, askFirst = true) {
+async function createProjectFromQuote(quoteName, askFirst = true, initialStatus = 'on_hold') {
   const name = (quoteName || '').trim();
   if (!name) return;
   const existing = state.projects.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
-  if (existing) { toast(`Project "${name}" bestaat al`); return; }
+  if (existing) {
+    // A project may have been prepared while the quote was still pending. Once
+    // accepted, promote that same project instead of leaving it hidden on hold.
+    if (initialStatus === 'active' && existing.status === 'on_hold') {
+      await remoteQuery({ action: 'update', table: 'projects', data: { status: 'active' }, where: { id: existing.id } });
+      existing.status = 'active';
+      moveProjectFolder(name, 'active');
+      toast(`Project "${name}" is nu actief — offerte geaccepteerd`);
+    } else {
+      toast(`Project "${name}" bestaat al`);
+    }
+    return existing;
+  }
   if (askFirst && !confirm(`Project aanmaken voor "${name}"?`)) return;
   try {
     await remoteQuery({ action: 'insert', table: 'projects', data: {
       name,
-      status: 'active',
+      status: initialStatus,
       color: pickProjectColor(),
       description: '',
     }});
     state.projects = await remoteQuery({ action: 'select', table: 'projects' });
     createProjectFolder(name); // fire-and-forget
-    toast(`📁 Project "${name}" aangemaakt`);
+    toast(initialStatus === 'on_hold'
+      ? `📁 Project "${name}" aangemaakt — in de wacht tot acceptatie`
+      : `📁 Project "${name}" aangemaakt`);
+    return state.projects.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
   } catch (e) {
     toast('Project aanmaken mislukt: ' + (e.message || e), 'error', 4000);
     console.error('Project aanmaken mislukt:', e);
@@ -310,7 +328,7 @@ async function changeQuoteStatus(quote, newStatus) {
   const linkName = (quote.project_name || quote.name || '').trim();
   if (!linkName) return;
   if (newStatus === 'sent' || newStatus === 'accepted') {
-    createProjectFromQuote(linkName, true);
+    await createProjectFromQuote(linkName, true, newStatus === 'accepted' ? 'active' : 'on_hold');
     quote.project_name = linkName;
     await persistQuoteProjectLink(quote.id, linkName);
   }
@@ -2247,25 +2265,61 @@ function renderProjectsView() {
   const content = document.getElementById('content');
   const ctrl    = document.getElementById('toolbar-controls');
 
-  ctrl.innerHTML = `
-    <button class="btn btn-primary btn-sm" id="new-proj-btn">+ Nieuw project</button>
-    <button class="btn btn-sm${state.projectsHideInactive?' btn-primary':' btn-ghost'}" id="proj-filter-btn">
-      ${state.projectsHideInactive ? 'Toon alles' : 'Alleen actief'}
-    </button>`;
+  ctrl.innerHTML = `<button class="btn btn-primary btn-sm" id="new-proj-btn">+ Nieuw project</button>`;
   document.getElementById('new-proj-btn').onclick = () => openProjectModal(null);
-  document.getElementById('proj-filter-btn').onclick = () => { state.projectsHideInactive = !state.projectsHideInactive; renderProjectsView(); };
 
-  const visibleProjects = state.projectsHideInactive
-    ? state.projects.filter(p => p.status === 'active')
-    : state.projects;
+  const filters = [
+    ['all', 'Alle'], ['active', 'Actief'], ['on_hold', 'In de wacht'], ['done', 'Afgerond'],
+  ];
+  const sortLabel = field => {
+    const active = state.projectsSort.field === field;
+    const arrow = active ? (state.projectsSort.dir === 'asc' ? '↑' : '↓') : '↕';
+    return `${field === 'name' ? 'Naam' : 'Datum'} ${arrow}`;
+  };
+  const escapedSearch = escHtml(state.projectsSearch);
+  content.innerHTML = `<div class="proj-browser">
+    <div class="proj-browser-top">
+      <label class="proj-search-wrap" for="proj-search">
+        <span>⌕</span><input id="proj-search" type="search" value="${escapedSearch}" placeholder="Zoek project, klant of omschrijving…" autocomplete="off" />
+      </label>
+      <div class="proj-sort-actions">
+        <button class="proj-sort-btn${state.projectsSort.field === 'name' ? ' active' : ''}" data-proj-sort="name">${sortLabel('name')}</button>
+        <button class="proj-sort-btn${state.projectsSort.field === 'date' ? ' active' : ''}" data-proj-sort="date">${sortLabel('date')}</button>
+      </div>
+    </div>
+    <div class="proj-filter-chips">
+      ${filters.map(([key, label]) => `<button class="proj-filter-chip${state.projectsFilter === key ? ' active' : ''}" data-proj-status-filter="${key}">${label}</button>`).join('')}
+    </div>
+    <div id="proj-results"></div>
+  </div>`;
 
-  if (visibleProjects.length === 0) {
-    content.innerHTML = `<div class="empty"><div class="empty-icon">📁</div><p>Nog geen projecten. Maak een project aan om te beginnen.</p></div>`;
-    return;
-  }
+  const renderResults = () => {
+    const needle = state.projectsSearch.trim().toLowerCase();
+    const visibleProjects = state.projects
+      .filter(p => state.projectsFilter === 'all' || p.status === state.projectsFilter)
+      .filter(p => !needle || [p.name, p.client, p.description].some(value => String(value || '').toLowerCase().includes(needle)))
+      .sort((a, b) => {
+        let result;
+        if (state.projectsSort.field === 'name') {
+          result = (a.name || '').localeCompare(b.name || '', 'nl');
+        } else {
+          // Projects without a start date go below dated projects in both directions.
+          if (!a.start_date && !b.start_date) result = 0;
+          else if (!a.start_date) result = 1;
+          else if (!b.start_date) result = -1;
+          else result = a.start_date.localeCompare(b.start_date);
+        }
+        return state.projectsSort.dir === 'asc' ? result : -result;
+      });
 
-  const html = `<div class="proj-grid">` +
-    visibleProjects.map(p => {
+    const results = document.getElementById('proj-results');
+    if (visibleProjects.length === 0) {
+      results.innerHTML = `<div class="empty"><div class="empty-icon">📁</div><p>${state.projects.length ? 'Geen projecten gevonden met deze filter.' : 'Nog geen projecten. Maak een project aan om te beginnen.'}</p></div>`;
+      return;
+    }
+
+    const html = `<div class="proj-result-count">${visibleProjects.length} ${visibleProjects.length === 1 ? 'project' : 'projecten'}</div><div class="proj-grid">` +
+      visibleProjects.map(p => {
       const taskCount = state.tasks.filter(t => t.project_id == p.id).length;
       const doneCount = state.tasks.filter(t => t.project_id == p.id && t.status === 'done').length;
       const pct = taskCount ? Math.round(doneCount / taskCount * 100) : 0;
@@ -2290,21 +2344,41 @@ function renderProjectsView() {
           </div>
         </div>
       </div>`;
-    }).join('') + `</div>`;
+      }).join('') + `</div>`;
 
-  content.innerHTML = html;
-  content.querySelectorAll('.proj-card').forEach(card => {
-    card.onclick = () => {
-      const proj = state.projects.find(p => p.id == card.dataset.projId);
-      if (proj) renderProjectDetail(proj);
+    results.innerHTML = html;
+    results.querySelectorAll('.proj-card').forEach(card => {
+      card.onclick = () => {
+        const proj = state.projects.find(p => p.id == card.dataset.projId);
+        if (proj) renderProjectDetail(proj);
+      };
+    });
+    results.querySelectorAll('.proj-folder-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        openProjectFolder(btn.dataset.name);
+      };
+    });
+  };
+
+  content.querySelectorAll('.proj-filter-chip').forEach(btn => {
+    btn.onclick = () => { state.projectsFilter = btn.dataset.projStatusFilter; renderProjectsView(); };
+  });
+  content.querySelectorAll('.proj-sort-btn').forEach(btn => {
+    btn.onclick = () => {
+      const field = btn.dataset.projSort;
+      state.projectsSort = state.projectsSort.field === field
+        ? { field, dir: state.projectsSort.dir === 'asc' ? 'desc' : 'asc' }
+        : { field, dir: 'asc' };
+      renderProjectsView();
     };
   });
-  content.querySelectorAll('.proj-folder-btn').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      openProjectFolder(btn.dataset.name);
-    };
-  });
+  const search = document.getElementById('proj-search');
+  search.oninput = () => {
+    state.projectsSearch = search.value;
+    renderResults();
+  };
+  renderResults();
 }
 
 /* ─── Project Detail Page ──────────────────────────────────────────────────── */
@@ -4387,6 +4461,16 @@ function renderBizDashboardContent(snap) {
         <div class="biz-kpi-value">${snap.moneybirdError ? '—' : fmtEur(snap.thisMonthRevenue)} ${chgBadge(revChangePct)}</div>
       </div>
       <div class="biz-kpi-card">
+        <div class="biz-kpi-label">🗓️ Omzet dit jaar</div>
+        <div class="biz-kpi-value">${snap.moneybirdError ? '—' : fmtEur(snap.revenueYTD)}</div>
+        <div class="biz-kpi-sub">Gefactureerd t/m vandaag</div>
+      </div>
+      <div class="biz-kpi-card">
+        <div class="biz-kpi-label">✦ Winst dit jaar</div>
+        <div class="biz-kpi-value">${snap.moneybirdError || snap.costsYTD == null ? '—' : fmtEur(snap.profitYTD)}</div>
+        <div class="biz-kpi-sub">Omzet min inkoopkosten, excl. btw</div>
+      </div>
+      <div class="biz-kpi-card">
         <div class="biz-kpi-label">💰 Openstaande facturen</div>
         <div class="biz-kpi-value">${snap.moneybirdError ? '—' : fmtEur(snap.outstanding.sum)} ${chgBadge(outChangePct, /*invert=*/true)}</div>
         <div class="biz-kpi-sub">${snap.moneybirdError ? 'Moneybird niet bereikbaar' : `${snap.outstanding.count} facturen${snap.overdueCount ? `, ${snap.overdueCount} te laat` : ''}`}</div>
@@ -4399,7 +4483,7 @@ function renderBizDashboardContent(snap) {
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📋 Openstaande offertes</div>
         <div class="biz-kpi-value">${fmtEur(snap.openQuotesValue)}</div>
-        <div class="biz-kpi-sub">${snap.openQuotes.length} offertes${snap.laterQuotes.length ? `<br>+ ${snap.laterQuotes.length} op "later" (${fmtEur(snap.laterQuotesValue)}, niet meegeteld)` : ''}</div>
+        <div class="biz-kpi-sub">${snap.openQuotes.length} aanvragen${snap.openQuoteVariantsIgnored ? `<br>${snap.openQuoteVariantsIgnored} variant${snap.openQuoteVariantsIgnored === 1 ? '' : 'en'} niet dubbel geteld` : ''}${snap.laterQuotes.length ? `<br>+ ${snap.laterQuotes.length} op "later" (${fmtEur(snap.laterQuotesValue)}, niet meegeteld)` : ''}</div>
       </div>
       <div class="biz-kpi-card">
         <div class="biz-kpi-label">📅 Orderportefeuille</div>
@@ -4571,9 +4655,11 @@ function renderBizDashboardContent(snap) {
                 const colMrg  = revenueMargePct !== null ? `<span class="${margeClass}">${revenueMargePct.toFixed(0)}%</span>` : '—';
                 const colVsPr = m.profitRatioPct !== null ? `<span class="pm-pct ${pctClass}">${fmtProfitDelta(m.profitRatioPct)}</span>` : '—';
                 const colWst  = `<span class="pm-actual ${profitClass}">${fmtEur(m.actualProfit)}</span>`;
-                const ackBtn  = `<button class="pm-ack-btn${acked ? ' pm-ack-active' : ''}" data-ack="${escHtml(m.name)}" title="${acked ? 'Klik om erkenning ongedaan te maken' : 'Markeer als begrepen (verbergt waarschuwingskleuren)'}">✓</button>`;
+                const lessonButton = m.projectId
+                  ? `<button class="pm-ack-btn${m.analysisAcknowledged ? ' pm-acknowledged' : ''}" data-project-id="${m.projectId}" title="${m.analysisAcknowledged ? escHtml(m.analysisNote) : 'Leg vast waarom deze afwijking al besproken is'}">${m.analysisAcknowledged ? '✓ Les vastgelegd' : 'Markeer als besproken'}</button>`
+                  : '';
                 return `<div class="pm-row">
-                  <span class="pm-name"><span class="pm-name-text">${escHtml(m.name)}</span>${ackBtn}</span>
+                  <span class="pm-name">${escHtml(m.name)}${lessonButton}</span>
                   <span class="pm-col-est">${colEst}</span>
                   <span class="pm-col-gef">${colGef}</span>
                   <span class="pm-col-marge">${colMrg}</span>
@@ -4882,6 +4968,7 @@ function freshQE(quote) {
     id:         quote?.id         ?? null,
     name:       quote?.name       ?? '',
     project_name: quote?.project_name ?? '',
+    variant_group: quote?.variant_group ?? '',
     client:     quote?.client     ?? '',
     client_contact: stored.client_contact ?? '',
     client_address: stored.client_address ?? '',
@@ -4899,6 +4986,9 @@ function freshQE(quote) {
     notes:      quote?.notes      ?? '',
     image_data:     quote?.image_data || (quote?.id ? localStorage.getItem('qimg_' + quote.id) : '') || '',
     extra_images:   stored.extra_images ?? [],
+    // Alleen samengevoegde offertes hebben deze volgorde. Hiermee kunnen ook lege
+    // Materiaal-/Diensten-blokken in de editor en interne PDF zichtbaar blijven.
+    merged_sections: Array.isArray(stored.merged_sections) ? stored.merged_sections : [],
     checklist_done: quote?.id ? true : false,
     materials:  [],
     services:   [],
@@ -4920,14 +5010,27 @@ function freshQE(quote) {
 
 let _quotesFilter  = new Set(); // leeg = alle statussen
 let _quotesSort    = { field: 'date', dir: 'desc' };
+let _quotesSearch  = '';
 let _allQuotes     = []; // cached for client-side filter/sort
-let _selectedQuoteIds = new Set(); // voor samenvoegen
+let _selectedQuoteIds = new Set(); // voor samenvoegen / bundelen
+let _expandedVariantGroups = new Set();
+
+function quoteVariantGroupId() {
+  // Timestamp + random suffix is sufficient here: this is an opaque local grouping
+  // key, not an externally exposed identifier.
+  return `variants-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function _renderQuoteTable() {
   let list = _allQuotes.slice();
 
   // Filter
   if (_quotesFilter.size) list = list.filter(q => _quotesFilter.has(q.status));
+  const needle = _quotesSearch.trim().toLowerCase();
+  if (needle) {
+    list = list.filter(q => [q.name, q.client, q.project_name]
+      .some(value => String(value || '').toLowerCase().includes(needle)));
+  }
 
   // Sort
   list.sort((a, b) => {
@@ -4944,7 +5047,7 @@ function _renderQuoteTable() {
 
   if (!list.length) {
     document.getElementById('ql-table-wrap').innerHTML =
-      `<div class="empty" style="margin-top:40px"><div class="empty-icon">🔍</div><p>Geen offertes voor dit filter.</p></div>`;
+      `<div class="empty" style="margin-top:40px"><div class="empty-icon">🔍</div><p>Geen offertes gevonden voor deze zoekopdracht of filter.</p></div>`;
     return;
   }
 
@@ -4954,14 +5057,14 @@ function _renderQuoteTable() {
       <th>Project</th><th>Klant</th><th>Datum</th>
       <th style="text-align:right">Totaal excl. BTW</th><th>Status</th><th></th>
     </tr></thead><tbody>`;
-  list.forEach(q => {
+  const renderQuoteRow = (q, isVariantChild = false) => {
     const hasTotal = q.total_price != null;
     const checked = _selectedQuoteIds.has(q.id);
     const linkName = (q.project_name || q.name || '').trim().toLowerCase();
     const fulfilled = q.status === 'accepted' && linkName && state.projects?.find(p => p.name.trim().toLowerCase() === linkName && p.status === 'done');
-    html += `<tr class="quote-row${checked ? ' ql-row-selected' : ''}" data-id="${q.id}">
+    return `<tr class="quote-row${isVariantChild ? ' ql-variant-child' : ''}${checked ? ' ql-row-selected' : ''}" data-id="${q.id}">
       <td class="ql-cb-col"><input type="checkbox" class="ql-cb" data-id="${q.id}"${checked ? ' checked' : ''} /></td>
-      <td><strong>${escHtml(q.name)}</strong></td>
+      <td><strong>${escHtml(q.name)}</strong>${q.variant_group ? ` <span class="ql-variant-badge" title="Alternatieve offerte binnen dezelfde aanvraag">variant</span>` : ''}</td>
       <td>${escHtml(q.client)}</td>
       <td>${q.quote_date || '—'}</td>
       <td class="amount qt-total${hasTotal ? '' : ' loading'}" id="qt-total-${q.id}">${hasTotal ? fmtEur(q.total_price) : '…'}</td>
@@ -4972,6 +5075,60 @@ function _renderQuoteTable() {
       </div></td>
       <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
     </tr>`;
+  };
+
+  // A grouped row keeps alternatives together. Its total is intentionally the
+  // highest option, matching the pipeline calculation in Bedrijfsanalyse.
+  const groups = new Map();
+  list.forEach(q => {
+    if (q.variant_group) {
+      const members = groups.get(q.variant_group) || [];
+      members.push(q);
+      groups.set(q.variant_group, members);
+    }
+  });
+
+  document.querySelectorAll('.pm-ack-btn').forEach(btn => {
+    btn.onclick = async () => {
+      const projectId = Number(btn.dataset.projectId);
+      const project = state.projects.find(p => p.id === projectId);
+      if (!project) return;
+      const note = window.prompt(
+        'Waarom is deze afwijking al besproken? De AI zal dit niet opnieuw als hoofdadvies noemen.',
+        project.analysis_note || ''
+      );
+      if (note === null) return;
+      if (!note.trim()) { toast('Vul een korte les of verklaring in.', 'error'); return; }
+      await remoteQuery({ action: 'update', table: 'projects', data: { analysis_acknowledged: 1, analysis_note: note.trim() }, where: { id: projectId } });
+      project.analysis_acknowledged = 1;
+      project.analysis_note = note.trim();
+      toast('Projectles vastgelegd');
+      await renderBedrijfsanalyse();
+    };
+  });
+  const renderedGroups = new Set();
+  list.forEach(q => {
+    if (!q.variant_group) {
+      html += renderQuoteRow(q);
+      return;
+    }
+    if (renderedGroups.has(q.variant_group)) return;
+    renderedGroups.add(q.variant_group);
+    const members = groups.get(q.variant_group) || [q];
+    const highest = members.reduce((best, item) =>
+      Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, members[0]);
+    const expanded = _expandedVariantGroups.has(q.variant_group);
+    const client = [...new Set(members.map(item => item.client).filter(Boolean))].join(', ') || '—';
+    const latestDate = members.map(item => item.quote_date || '').sort().at(-1) || '—';
+    html += `<tr class="quote-variant-group" data-group="${escHtml(q.variant_group)}">
+      <td class="ql-cb-col"></td>
+      <td><span class="ql-group-chevron">${expanded ? '▾' : '▸'}</span> <strong>${members.length} varianten</strong></td>
+      <td>${escHtml(client)}</td>
+      <td>${latestDate}</td>
+      <td class="amount">${fmtEur(highest.total_price)} <span class="ql-group-total-note">hoogste</span></td>
+      <td><span class="ql-group-status">één aanvraag</span></td><td></td>
+    </tr>`;
+    if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
   });
   html += `</tbody></table>`;
   document.getElementById('ql-table-wrap').innerHTML = html;
@@ -4983,7 +5140,7 @@ function _renderQuoteTable() {
       const id = parseInt(cb.dataset.id);
       if (cb.checked) _selectedQuoteIds.add(id); else _selectedQuoteIds.delete(id);
       cb.closest('tr').classList.toggle('ql-row-selected', cb.checked);
-      _updateMergeButton();
+      _updateQuoteSelectionActions();
     };
   });
 
@@ -5009,6 +5166,15 @@ function _renderQuoteTable() {
     };
   });
 
+  document.querySelectorAll('.quote-variant-group').forEach(row => {
+    row.onclick = () => {
+      const group = row.dataset.group;
+      if (_expandedVariantGroups.has(group)) _expandedVariantGroups.delete(group);
+      else _expandedVariantGroups.add(group);
+      _renderQuoteTable();
+    };
+  });
+
   document.querySelectorAll('.quote-delete-btn').forEach(btn => {
     btn.onclick = async (e) => {
       e.stopPropagation();
@@ -5024,21 +5190,55 @@ function _renderQuoteTable() {
   });
 }
 
-function _updateMergeButton() {
+function _updateQuoteSelectionActions() {
   const n = _selectedQuoteIds.size;
-  let btn = document.getElementById('ql-merge-btn');
+  let mergeBtn = document.getElementById('ql-merge-btn');
+  let groupBtn = document.getElementById('ql-group-btn');
   if (n >= 2) {
-    if (!btn) {
-      btn = document.createElement('button');
-      btn.id = 'ql-merge-btn';
-      btn.className = 'btn btn-secondary btn-sm';
-      btn.onclick = mergeSelectedQuotes;
-      document.getElementById('toolbar-controls').appendChild(btn);
+    if (!mergeBtn) {
+      mergeBtn = document.createElement('button');
+      mergeBtn.id = 'ql-merge-btn';
+      mergeBtn.className = 'btn btn-secondary btn-sm';
+      mergeBtn.onclick = mergeSelectedQuotes;
+      document.getElementById('toolbar-controls').appendChild(mergeBtn);
     }
-    btn.textContent = `Samenvoegen (${n})`;
+    if (!groupBtn) {
+      groupBtn = document.createElement('button');
+      groupBtn.id = 'ql-group-btn';
+      groupBtn.className = 'btn btn-secondary btn-sm';
+      groupBtn.onclick = groupSelectedQuotes;
+      document.getElementById('toolbar-controls').appendChild(groupBtn);
+    }
+    mergeBtn.textContent = `Samenvoegen (${n})`;
+    const selected = _allQuotes.filter(q => _selectedQuoteIds.has(q.id));
+    const commonGroup = selected[0]?.variant_group && selected.every(q => q.variant_group === selected[0].variant_group);
+    groupBtn.textContent = commonGroup ? `Bundel opheffen (${n})` : `Bundelen als varianten (${n})`;
+    groupBtn.title = commonGroup
+      ? 'Deze offertes zijn weer losse aanvragen in de bedrijfsanalyse'
+      : 'Tel in openstaande offertes alleen de hoogste variant mee';
   } else {
-    btn?.remove();
+    mergeBtn?.remove();
+    groupBtn?.remove();
   }
+}
+
+async function groupSelectedQuotes() {
+  const selected = _allQuotes.filter(q => _selectedQuoteIds.has(q.id));
+  if (selected.length < 2) return;
+  const commonGroup = selected[0]?.variant_group && selected.every(q => q.variant_group === selected[0].variant_group);
+  const group = commonGroup ? '' : quoteVariantGroupId();
+  const label = commonGroup ? 'de bundel opheffen' : 'deze offertes als varianten van één aanvraag bundelen';
+  if (!confirm(`Wil je ${label}?`)) return;
+  await Promise.all(selected.map(q => remoteQuery({
+    action: 'update', table: 'quotes', data: { variant_group: group }, where: { id: q.id },
+  })));
+  selected.forEach(q => { q.variant_group = group; });
+  _selectedQuoteIds.clear();
+  toast(commonGroup
+    ? 'Offertes zijn weer losse aanvragen'
+    : 'Varianten gebundeld — alleen de hoogste open variant telt mee');
+  _renderQuoteTable();
+  _updateQuoteSelectionActions();
 }
 
 async function mergeSelectedQuotes() {
@@ -5055,26 +5255,18 @@ async function mergeSelectedQuotes() {
   // Gebruik de nieuwste offerte als basis voor metadata
   const base = fullQuotes.slice().sort((a, b) => (b.quote_date || '').localeCompare(a.quote_date || ''))[0];
 
-  // Combineer alle items (materialen + diensten + exclusies), gegroepeerd per bronofferte.
-  // We baken de effectieve marge van de bronofferte in elk item in, zodat items met een
-  // null-marge (= "gebruik de globale marge van deze offerte") niet de globale marge van
-  // de basisofferte krijgen na het samenvoegen — anders klopt het totaal niet meer.
+  // Combineer alle items (materialen + diensten + exclusies), gegroepeerd per bronofferte
+  const usedSectionLabels = new Map();
+  const sourceLabels = fullQuotes.map((quote, idx) => {
+    const baseLabel = quote?.name || `Onderdeel ${idx + 1}`;
+    const count = (usedSectionLabels.get(baseLabel) || 0) + 1;
+    usedSectionLabels.set(baseLabel, count);
+    return count === 1 ? baseLabel : `${baseLabel} (${count})`;
+  });
   const mergedItems = [];
   allItems.forEach((items, idx) => {
-    const label    = fullQuotes[idx]?.name || `Onderdeel ${idx + 1}`;
-    const srcQuote = fullQuotes[idx];
-    let srcExtras = {};
-    try { srcExtras = JSON.parse(srcQuote?.extras_json || '{}') || {}; } catch {}
-    const srcGlobalMargin    = (srcQuote?.margin          != null && srcQuote?.margin          !== '') ? parseFloat(srcQuote.margin)          : 20;
-    const srcOutsourceMargin = (srcExtras.outsource_margin != null && srcExtras.outsource_margin !== '') ? parseFloat(srcExtras.outsource_margin) : 0;
-    (items || []).forEach(it => {
-      let margin = it.margin;
-      if (margin == null || margin === '') {
-        if (it.type === 'material') margin = srcGlobalMargin;
-        else if (it.type === 'service' && it.is_outsourced) margin = srcOutsourceMargin;
-      }
-      mergedItems.push({ ...it, id: undefined, quote_id: undefined, section_label: label, margin });
-    });
+    const label = sourceLabels[idx];
+    (items || []).forEach(it => mergedItems.push({ ...it, id: undefined, quote_id: undefined, section_label: label }));
   });
 
   // Combineer fixed_items uit alle offertes
@@ -5085,7 +5277,11 @@ async function mergeSelectedQuotes() {
   // Bouw de samengevoegde extras_json op basis van de basisofferte
   let baseExtras = {};
   try { baseExtras = JSON.parse(base.extras_json || '{}') || {}; } catch {}
-  const mergedExtras = { ...baseExtras, fixed_items: allFixedItems };
+  const mergedExtras = {
+    ...baseExtras,
+    fixed_items: allFixedItems,
+    merged_sections: sourceLabels,
+  };
 
   const names = fullQuotes.map(q => q.name).join(' + ');
   const mergedName = names.length > 80 ? base.name + ' (samengevoegd)' : names;
@@ -5131,6 +5327,9 @@ function _renderQuoteFilterBar() {
     return _quotesSort.dir === 'desc' ? '↓' : '↑';
   };
   return `<div class="ql-controls-bar">
+    <label class="ql-search-wrap" for="ql-search">
+      <span>⌕</span><input id="ql-search" type="search" value="${escHtml(_quotesSearch)}" placeholder="Zoek project of klant…" autocomplete="off" />
+    </label>
     <div class="ql-filters">
       ${FILTERS.map(f => {
         const isAll = f.key === null;
@@ -5145,6 +5344,15 @@ function _renderQuoteFilterBar() {
   </div>`;
 }
 
+function wireQuoteSearch() {
+  const search = document.getElementById('ql-search');
+  if (!search) return;
+  search.oninput = () => {
+    _quotesSearch = search.value;
+    _renderQuoteTable();
+  };
+}
+
 async function renderQuoteList() {
   const ctrl = document.getElementById('toolbar-controls');
   const content = document.getElementById('content');
@@ -5156,7 +5364,7 @@ async function renderQuoteList() {
   _allQuotes = await remoteQuery({
     action: 'select',
     table: 'quotes',
-    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'project_name'],
+    columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'project_name', 'variant_group'],
   });
 
   if (!Array.isArray(_allQuotes) || _allQuotes.length === 0) {
@@ -5166,6 +5374,7 @@ async function renderQuoteList() {
   }
 
   content.innerHTML = `<div id="ql-bar-wrap">${_renderQuoteFilterBar()}</div><div id="ql-table-wrap"></div>`;
+  wireQuoteSearch();
   _renderQuoteTable();
 
   // Event delegation: filter chips and sort buttons bubble up to content
@@ -5182,6 +5391,7 @@ async function renderQuoteList() {
         _quotesFilter.add(key);
       }
       document.getElementById('ql-bar-wrap').innerHTML = _renderQuoteFilterBar();
+      wireQuoteSearch();
       _renderQuoteTable();
     } else if (sortBtn) {
       const field = sortBtn.dataset.sort;
@@ -5189,6 +5399,7 @@ async function renderQuoteList() {
         ? { field, dir: _quotesSort.dir === 'desc' ? 'asc' : 'desc' }
         : { field, dir: 'desc' };
       document.getElementById('ql-bar-wrap').innerHTML = _renderQuoteFilterBar();
+      wireQuoteSearch();
       _renderQuoteTable();
     }
   });
@@ -5449,7 +5660,7 @@ function renderQuoteEditorView() {
     if (!qe.name.trim()) { shake(document.getElementById('qe-name')); toast('Vul een projectnaam in'); return; }
     if (!qe.id || _qeDirty) await performSave();
     const linkName = quoteProjectName();
-    createProjectFromQuote(linkName);
+    await createProjectFromQuote(linkName, true, qe.status === 'accepted' ? 'active' : 'on_hold');
     await linkQuoteToProject(linkName);
   };
   document.getElementById('qe-folder-btn').onclick  = () => openProjectFolder(quoteProjectName());
@@ -5902,7 +6113,7 @@ function renderMatTable() {
   if (!tbody) return;
 
   let _lastMatSection = null;
-  tbody.innerHTML = qe.materials.map((m, i) => {
+  const itemRows = qe.materials.map((m, i) => {
     let header = '';
     if (m.section_label && m.section_label !== _lastMatSection) {
       header = `<tr class="qi-section-hdr"><td colspan="9">${escHtml(m.section_label)}</td></tr>`;
@@ -5920,7 +6131,12 @@ function renderMatTable() {
       <td class="num" id="mat-row-total-${i}">${m.enabled !== 0 ? fmtEur((m.quantity ?? 1) * (m.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="mat" data-i="${i}">✕</button></td>
     </tr>`;
-  }).join('') || `<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
+  }).join('');
+  const emptySections = (qe.merged_sections || [])
+    .filter(label => !qe.materials.some(m => m.section_label === label))
+    .map(label => `<tr class="qi-section-hdr"><td colspan="9">${escHtml(label)} — Materialen</td></tr><tr class="qi-section-empty"><td colspan="9">Geen materialen</td></tr>`)
+    .join('');
+  tbody.innerHTML = itemRows + emptySections || `<tr><td colspan="9" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een materiaal hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('mat');
   wireDragDrop('mat');
@@ -5932,7 +6148,7 @@ function renderSvcTable() {
   if (!tbody) return;
 
   let _lastSvcSection = null;
-  tbody.innerHTML = qe.services.map((s, i) => {
+  const itemRows = qe.services.map((s, i) => {
     let header = '';
     if (s.section_label && s.section_label !== _lastSvcSection) {
       header = `<tr class="qi-section-hdr"><td colspan="10">${escHtml(s.section_label)}</td></tr>`;
@@ -5954,7 +6170,12 @@ function renderSvcTable() {
       <td class="num" id="svc-row-total-${i}">${s.enabled !== 0 ? fmtEur((s.quantity ?? 1) * (s.unit_price ?? 0)) : '—'}</td>
       <td><button class="qi-del" data-t="svc" data-i="${i}">✕</button></td>
     </tr>`;
-  }).join('') || `<tr><td colspan="10" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
+  }).join('');
+  const emptySections = (qe.merged_sections || [])
+    .filter(label => !qe.services.some(s => s.section_label === label))
+    .map(label => `<tr class="qi-section-hdr"><td colspan="10">${escHtml(label)} — Diensten</td></tr><tr class="qi-section-empty"><td colspan="10">Geen diensten</td></tr>`)
+    .join('');
+  tbody.innerHTML = itemRows + emptySections || `<tr><td colspan="10" style="padding:12px;text-align:center;color:var(--text2);font-size:12px">Klik een dienst hierboven om toe te voegen</td></tr>`;
 
   wireTableInputs('svc');
   wireDragDrop('svc');
@@ -6565,11 +6786,13 @@ async function performSave() {
     pdf_opts: qe.pdf_opts,
     outsource_margin: qe.outsource_margin,
     fixed_items: qe.fixed_enabled ? qe.fixed_items : [],
+    merged_sections: qe.merged_sections || [],
   });
   const quoteData = {
     name: qe.name.trim(), client: qe.client.trim(), quote_date: qe.quote_date,
     margin: qe.margin, status: qe.status, notes: qe.notes.trim(),
     project_name: qe.project_name || '',
+    variant_group: qe.variant_group || '',
     created_by: state.config?.name || '',
     image_data: qe.image_data || '',
     extras_json: extrasJson,
@@ -6578,7 +6801,6 @@ async function performSave() {
 
   try {
     let quoteId = qe.id;
-    const isNewQuote = !quoteId;
     if (quoteId) {
       // Veiligheidscheck: als de offerte bij openen items had maar de huidige staat leeg is,
       // blokkeer dan het opslaan. Dit voorkomt dat een laad- of netwerkfout alle regels wist.
@@ -6588,26 +6810,25 @@ async function performSave() {
         _savingQuote = false;
         return false;
       }
-      await remoteQuery({ action: 'update', table: 'quotes', data: quoteData, where: { id: quoteId } });
-      await remoteQuery({ action: 'delete', table: 'quote_items', where: { quote_id: quoteId } });
-    } else {
-      const res = await remoteQuery({ action: 'insert', table: 'quotes', data: quoteData });
-      quoteId = res.id;
-      qe.id = quoteId;
     }
+
+    const allItems = [
+      ...qe.materials.map((m, i) => ({ type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0, enabled: m.enabled !== 0 ? 1 : 0, ...(m.section_label ? { section_label: m.section_label } : {}) })),
+      ...qe.services.map((s, i)  => ({ type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0, enabled: s.enabled !== 0 ? 1 : 0, ...(s.section_label ? { section_label: s.section_label } : {}) })),
+      ...qe.exclusions.map((ex, i) => ({ type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0, enabled: 1 })),
+    ];
+    const saved = await remoteQuery({
+      action: 'save_quote',
+      table: 'quotes',
+      data: { id: quoteId, quote: quoteData, items: allItems },
+    });
+    quoteId = saved.id;
+    qe.id = quoteId;
+
     // Cleanup legacy localStorage entries (now stored in DB)
     if (quoteId) {
       localStorage.removeItem('qimg_' + quoteId);
       localStorage.removeItem('qextra_' + quoteId);
-    }
-
-    const allItems = [
-      ...qe.materials.map((m, i) => ({ quote_id: quoteId, type: 'material', name: m.name, quantity: m.quantity, unit: m.unit || '', unit_price: m.unit_price, sort_order: i, margin: (m.margin == null || m.margin === '') ? null : parseFloat(m.margin), is_outsourced: 0, enabled: m.enabled !== 0 ? 1 : 0, ...(m.section_label ? { section_label: m.section_label } : {}) })),
-      ...qe.services.map((s, i)  => ({ quote_id: quoteId, type: 'service',  name: s.name, quantity: s.quantity, unit: 'uur', unit_price: s.unit_price, sort_order: i, margin: null, is_outsourced: s.is_outsourced ? 1 : 0, enabled: s.enabled !== 0 ? 1 : 0, ...(s.section_label ? { section_label: s.section_label } : {}) })),
-      ...qe.exclusions.map((ex, i) => ({ quote_id: quoteId, type: 'exclusion', name: ex, quantity: 0, unit: '', unit_price: 0, sort_order: i, margin: null, is_outsourced: 0, enabled: 1 })),
-    ];
-    for (const item of allItems) {
-      await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
     }
 
     const delBtn = document.getElementById('qe-delete-btn');
@@ -6620,7 +6841,7 @@ async function performSave() {
     if ((qe.status === 'sent' || qe.status === 'accepted') && qe.name) {
       const linkName = quoteProjectName();
       const existing = state.projects.find(p => p.name.trim().toLowerCase() === linkName.toLowerCase());
-      if (!existing) createProjectFromQuote(linkName, /*silent=*/false);
+      await createProjectFromQuote(linkName, /*silent=*/false, qe.status === 'accepted' ? 'active' : 'on_hold');
       await linkQuoteToProject(linkName);
     }
     return true;
@@ -6647,6 +6868,13 @@ async function deleteQuote() {
 async function duplicateQuote() {
   if (!qe.id) { toast('Sla de offerte eerst op', 'warn'); return; }
   try {
+    // A duplicate is normally an alternative for the same enquiry. Group the
+    // original and its copy immediately, so the pipeline never double-counts it.
+    const variantGroup = qe.variant_group || quoteVariantGroupId();
+    if (!qe.variant_group) {
+      await remoteQuery({ action: 'update', table: 'quotes', data: { variant_group: variantGroup }, where: { id: qe.id } });
+      qe.variant_group = variantGroup;
+    }
     const extrasJson = JSON.stringify({
       client_contact:  qe.client_contact,
       client_address:  qe.client_address,
@@ -6657,10 +6885,12 @@ async function duplicateQuote() {
       pdf_opts:        qe.pdf_opts,
       outsource_margin: qe.outsource_margin,
       fixed_items: qe.fixed_enabled ? qe.fixed_items : [],
+      merged_sections: qe.merged_sections || [],
     });
     const newQuoteData = {
       name:       qe.name + ' (kopie)',
       project_name: quoteProjectName(), // keep linked to the same project/folder as the original
+      variant_group: variantGroup,
       client:     qe.client,
       quote_date: toDateStr(new Date()),
       margin:     qe.margin,
@@ -6681,7 +6911,7 @@ async function duplicateQuote() {
     for (const item of allItems) {
       await remoteQuery({ action: 'insert', table: 'quote_items', data: item });
     }
-    toast('Offerte gedupliceerd');
+    toast('Offerte gedupliceerd als variant — alleen de hoogste open variant telt mee');
     await openQuoteEditor({ id: newId, ...newQuoteData });
   } catch (err) {
     toast('Dupliceren mislukt: ' + (err.message || err), 'error', 4000);
@@ -6918,25 +7148,44 @@ async function computeBusinessSnapshot() {
   const ANNUAL_HOURS      = 2 * 40 * 46; // 3680 uur/jaar (2 man × 40u × 46 weken)
   const hoursYTD          = ANNUAL_HOURS * (dayOfYear / 365);
 
-  const [quotes, invoices, rawPurchaseInvoices, receipts, mbProjects, quoteItemsAll] = await Promise.all([
-    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until', 'margin', 'extras_json'] }),
+  // Haal projecten altijd opnieuw op. De Moneybird-koppeling kan net zijn aangepast
+  // (ook vanaf een andere computer); state.projects is dan nog de oude kopie.
+  // Zonder deze verse bron worden actuele Moneybird-bedragen met een verouderde
+  // projectkoppeling gecombineerd.
+  const [quotes, invoices, rawPurchaseInvoices, receipts, mbProjects, quoteItemsAll, projects] = await Promise.all([
+    remoteQuery({ action: 'select', table: 'quotes', columns: ['id', 'name', 'client', 'quote_date', 'total_price', 'status', 'created_at', 'project_name', 'variant_group', 'later_since', 'later_snoozed_until', 'sent_since', 'sent_snoozed_until', 'margin', 'extras_json'] }),
     fetchAllMoneybirdInvoices().catch(e => { console.warn('Moneybird snapshot fout:', e); return null; }),
     fetchAllMoneybirdPurchaseInvoices().catch(e => { console.warn('Moneybird kosten-snapshot fout:', e); return null; }),
     fetchAllMoneybirdReceipts().catch(e => { console.warn('Moneybird bonnetjes-snapshot fout:', e); return null; }),
     fetchAllMoneybirdProjects().catch(e => { console.warn('Moneybird projecten-snapshot fout:', e); return null; }),
     remoteQuery({ action: 'select', table: 'quote_items' }),
+    remoteQuery({ action: 'select', table: 'projects' }),
   ]);
   // Combineer leveranciersfacturen en bonnetjes — beide hebben dezelfde structuur
   // (details[].project_id, total_price_excl_tax). Alleen null als BEIDE falen (→ costsError).
   const purchaseInvoices = (rawPurchaseInvoices === null && receipts === null)
     ? null
     : [...(rawPurchaseInvoices || []), ...(receipts || [])];
-  const projects = state.projects?.length ? state.projects : await remoteQuery({ action: 'select', table: 'projects' });
+  state.projects = projects;
   const stages    = state.stages?.length    ? state.stages    : await remoteQuery({ action: 'select', table: 'project_stages' });
   const stageSlots = state.stageSlots?.length ? state.stageSlots : await remoteQuery({ action: 'select', table: 'stage_slots' });
 
   // ── Lokale data: offertes & projecten ──
-  const openQuotes     = quotes.filter(q => q.status === 'draft' || q.status === 'sent');
+  const rawOpenQuotes  = quotes.filter(q => q.status === 'draft' || q.status === 'sent');
+  // A variant group represents several alternatives for one enquiry. For pipeline
+  // value, retain the highest-priced open quote in every group; ungrouped quotes
+  // remain independent.
+  const openQuotesByEnquiry = new Map();
+  rawOpenQuotes.forEach(q => {
+    const key = q.variant_group ? `group:${q.variant_group}` : `quote:${q.id}`;
+    const current = openQuotesByEnquiry.get(key);
+    if (!current || Number(q.total_price || 0) > Number(current.total_price || 0)) {
+      openQuotesByEnquiry.set(key, q);
+    }
+  });
+
+  const openQuotes = [...openQuotesByEnquiry.values()];
+  const openQuoteVariantsIgnored = rawOpenQuotes.length - openQuotes.length;
   // "later"-offertes (nog niet relevant, bv. seizoensgebonden) horen niet bij de actieve
   // pijplijn — ze tellen niet mee in openQuotesValue/orderportefeuille, maar worden wel
   // los getoond zodat ze niet uit het zicht verdwijnen.
@@ -7115,7 +7364,14 @@ async function computeBusinessSnapshot() {
     entry.estimatedProfit += computeQuoteProfit(q, quoteItemsByQuoteId.get(q.id) || []);
     quoteValueByProjectName.set(key, entry);
   });
-  const costByProjectName = new Map(costsByProject.map(c => [c.name.toLowerCase(), c.cost]));
+  // Eén lokaal project kan aan meerdere Moneybird-projecten gekoppeld zijn. Tel
+  // daarom alle kostenregels met dezelfde lokale projectnaam op; Map([...]) zou
+  // anders de vorige waarde overschrijven (bijv. €258,59 door €69,00).
+  const costByProjectName = new Map();
+  costsByProject.forEach(c => {
+    const key = c.name.toLowerCase();
+    costByProjectName.set(key, (costByProjectName.get(key) || 0) + c.cost);
+  });
   const marginProjectKeys = new Set([...quoteValueByProjectName.keys(), ...costByProjectName.keys(), ...actualRevenueByProjectName.keys()]);
   const projectMargins = [];
   const activeProjectMargins = [];
@@ -7134,7 +7390,7 @@ async function computeBusinessSnapshot() {
     const actualProfit = actualRevenue - cost;
     const profitRatioPct = (estimatedProfit != null && estimatedProfit > 0) ? (actualProfit / estimatedProfit) * 100 : null;
     const startDate = localProj?.start_date || '';
-    const base = { name, quoteValue, cost, estimatedProfit, actualRevenue, actualProfit, profitRatioPct, revenueIsActual, hasQuote: !!q, hasCost: costByProjectName.has(key), startDate };
+    const base = { name, quoteValue, cost, estimatedProfit, actualRevenue, actualProfit, profitRatioPct, revenueIsActual, hasQuote: !!q, hasCost: costByProjectName.has(key), startDate, projectId: localProj?.id || null, analysisAcknowledged: !!localProj?.analysis_acknowledged, analysisNote: localProj?.analysis_note || '' };
     if (!localProj || localProj.status === 'done') {
       projectMargins.push(base);
     } else if (!localProj.exclude_from_analysis && q) {
@@ -7246,6 +7502,9 @@ async function computeBusinessSnapshot() {
 
   const profitYTD = (revenueYTD !== null && costsYTD !== null) ? revenueYTD - costsYTD : null;
   const effectiveHourlyRate = profitYTD !== null ? profitYTD / hoursYTD : null;
+  const acknowledgedProjectLessons = projects
+    .filter(p => p.analysis_acknowledged && String(p.analysis_note || '').trim())
+    .map(p => ({ name: p.name, note: String(p.analysis_note).trim() }));
 
   return {
     generatedAt: now.toISOString(),
@@ -7254,10 +7513,11 @@ async function computeBusinessSnapshot() {
     revenueYTD, costsYTD, profitYTD, effectiveHourlyRate, hoursYTD,
     hourlyRateTrend6mo,
     outstanding, outstandingLastMonth, overdueCount,
-    costsError, costsByProject, unmatchedProjectCosts, projectMargins, activeProjectMargins,
+    costsError, costsByProject, unmatchedProjectCosts, projectMargins, activeProjectMargins, acknowledgedProjectLessons,
     activeProjects, longRunningProjects,
     currentlyActiveProjects, upcomingProjects, unplannedProjects, explicitMbLinks,
     openQuotes, openQuotesValue,
+    openQuoteVariantsIgnored,
     acceptedQuotes, orderportefeuille,
     fulfilledQuotes, fulfilledQuotesValue,
     laterQuotes, laterQuotesValue, staleLaterQuotes,
@@ -7355,6 +7615,7 @@ Regels:
 - Onderbouw elke uitspraak met de beschikbare cijfers.
 - Geef duidelijk aan wanneer er onvoldoende data is voor een harde conclusie.
 - Vermijd algemene managementclichés.
+- Projecten die in de context als "besproken historische les" zijn gemarkeerd, zijn bekende en verklaarde afwijkingen. Noem ze niet opnieuw als inzicht of hoofdadvies, tenzij de gebruiker er expliciet naar vraagt.
 - Schrijf in het Nederlands, beknopt en concreet.`;
 }
 
@@ -7368,6 +7629,9 @@ function buildSnapshotContextText(snap) {
   }
   lines.push(`Openstaande offertes: ${snap.openQuotes.length} stuks, totale waarde ${fmtEur(snap.openQuotesValue)}`);
   lines.push(`Orderportefeuille (geaccepteerde offertes, nog te factureren): ${fmtEur(snap.orderportefeuille)} (${snap.acceptedQuotes.length} offertes)`);
+  if (snap.acknowledgedProjectLessons.length) {
+    lines.push(`Besproken historische lessen — niet opnieuw als inzicht of hoofdadvies noemen: ${snap.acknowledgedProjectLessons.map(l => `${l.name}: ${l.note}`).join('; ')}`);
+  }
   if (!snap.costsError && (snap.costsByProject.length || snap.unmatchedProjectCosts.length)) {
     lines.push(`Kosten per project (via Moneybird-Project-koppeling op inkoopfacturen, excl. BTW): ${snap.costsByProject.map(c => `${c.name}: ${fmtEur(c.cost)}`).join(', ')}`);
     if (snap.unmatchedProjectCosts.length) {
@@ -7692,6 +7956,24 @@ async function exportQuotePdf(mode = 'internal') {
     </tr>`;
   }).join('');
 
+  // Een samengevoegde offerte blijft intern per brononderdeel leesbaar. De
+  // klantversie hieronder verandert bewust niet: die toont alleen de eindprijs.
+  const groupedInternalBlocks = (qe.merged_sections || []).map(label => {
+    const mats = matRowsEnabled.filter(m => m.section_label === label);
+    const svcs = svcRowsEnabled.filter(s => s.section_label === label);
+    const materialRows = mats.map(m => {
+      const price = t.isFixedPrice ? m.unit_price : m.unit_price * (1 + ((m.margin != null && m.margin !== '') ? parseFloat(m.margin) : t.marginPct) / 100);
+      const unit = escHtml(m.unit || 'st');
+      return `<tr><td>${escHtml(m.name)}</td><td class="r">${m.quantity} ${unit}</td><td class="r">${fmtEur(price)}</td><td class="r">${fmtEur(m.quantity * price)}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="empty-pdf-row">Geen materialen</td></tr>';
+    const serviceRows = svcs.map(s => {
+      const unit = escHtml(s.unit || 'uur');
+      const price = s.is_outsourced ? s.unit_price * (1 + ((s.margin != null && s.margin !== '') ? parseFloat(s.margin) : t.outsourceMarginPct) / 100) : (s.margin != null && s.margin !== '' ? s.unit_price * (1 + parseFloat(s.margin) / 100) : s.unit_price);
+      return `<tr><td>${escHtml(s.name)}</td><td class="r">${s.quantity} ${unit}</td><td class="r">${fmtEur(price)}/${unit}</td><td class="r">${fmtEur(s.quantity * price)}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="empty-pdf-row">Geen diensten</td></tr>';
+    return `<div class="internal-section"><h2>${escHtml(label)}</h2><h3>Materialen</h3><table class="content-table"><thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">${t.isFixedPrice ? 'Inkoopprijs' : 'Stukprijs'}</th><th class="r" style="width:17%">Totaal</th></tr></thead><tbody>${materialRows}</tbody></table>${!t.isFixedPrice ? `<h3>Diensten</h3><table class="content-table"><thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Tarief</th><th class="r" style="width:17%">Totaal</th></tr></thead><tbody>${serviceRows}</tbody></table>` : ''}</div>`;
+  }).join('');
+
   // ── Client PDF: items listed, no individual prices (only enabled items) ──
   const clientItemsList = [
     ...matRowsEnabled.map(m => escHtml(m.name)),
@@ -7834,6 +8116,9 @@ async function exportQuotePdf(mode = 'internal') {
   .client-addr { font-size: 10px; color: #666; line-height: 1.6; margin-top: 4px; }
   .notes-block { margin-top: 4mm; margin-bottom: 6mm; padding: 8px 14px; background: ${bgTint}; border-left: 3px solid ${accent}; border-radius: 0 4px 4px 0; font-size: 10px; color: #666; line-height: 1.6; break-inside: avoid; page-break-inside: avoid; }
   .notes-block .lbl { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 4px; }
+  .internal-section { margin-top: 6mm; break-inside: avoid; page-break-inside: avoid; }
+  .internal-section h2 { font-size: 13px; color: ${accentD}; margin: 0 0 3mm; }
+  .empty-pdf-row { color: #888; font-style: italic; text-align: center; }
 
   /* ── Extra images page ── */
   .extras-page {
@@ -7924,20 +8209,20 @@ ${opts.show_title_page ? `
     </div>
     ` : `
     <!-- Internal PDF: full detail (disabled items excluded) -->
-    ${matRowsEnabled.length > 0 ? `
+    ${groupedInternalBlocks || (matRowsEnabled.length > 0 ? `
     <h3>Materialen</h3>
     <table class="content-table">
       <thead><tr><th style="width:52%">Omschrijving</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">${t.isFixedPrice ? 'Inkoopprijs' : 'Stukprijs'}</th><th class="r" style="width:17%">Totaal</th></tr></thead>
       <tbody>${matRows}</tbody>
     </table>
-    ` : ''}
+    ` : '')}
 
-    ${!t.isFixedPrice && svcRowsEnabled.length > 0 ? `
+    ${groupedInternalBlocks ? '' : (!t.isFixedPrice && svcRowsEnabled.length > 0 ? `
     <h3>Diensten</h3>
     <table class="content-table">
       <thead><tr><th style="width:52%">Dienst</th><th class="r" style="width:14%">Aantal</th><th class="r" style="width:17%">Tarief</th><th class="r" style="width:17%">Totaal</th></tr></thead>
       <tbody>${svcRows}</tbody>
-    </table>` : ''}
+    </table>` : '')}
 
     ${t.isFixedPrice && t.fixedItems?.length > 0 ? `
     <h3>Vaste stuksprijs</h3>

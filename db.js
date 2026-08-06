@@ -81,6 +81,8 @@ function createSchema() {
       color       TEXT DEFAULT '#4f8ef7',
       description TEXT DEFAULT '',
       status      TEXT DEFAULT 'active',
+      analysis_acknowledged INTEGER DEFAULT 0,
+      analysis_note TEXT DEFAULT '',
       start_date  TEXT DEFAULT '',
       end_date    TEXT DEFAULT '',
       created_by  TEXT DEFAULT '',
@@ -116,6 +118,7 @@ function createSchema() {
       status      TEXT DEFAULT 'draft',
       notes       TEXT DEFAULT '',
       project_name TEXT DEFAULT '',
+      variant_group TEXT DEFAULT '',
       created_by  TEXT DEFAULT '',
       created_at  TEXT DEFAULT (datetime('now'))
     );
@@ -171,6 +174,9 @@ function migrateSchema() {
   // Explicit link to the project's name — decouples project linkage from the quote's own
   // (editable, duplicatable) name so a duplicated/renamed quote keeps pointing at the same project.
   if (!quoteCols.includes('project_name')) db.exec("ALTER TABLE quotes ADD COLUMN project_name TEXT DEFAULT ''");
+  // Quotes from one enquiry can be grouped as alternatives. The business analysis
+  // then counts only the highest open variant for that group.
+  if (!quoteCols.includes('variant_group')) db.exec("ALTER TABLE quotes ADD COLUMN variant_group TEXT DEFAULT ''");
   // Wanneer een offerte op status "later" is gezet (los van created_at, dat veel ouder
   // kan zijn) + tot wanneer een follow-up-herinnering is uitgesteld via de snooze-knop.
   if (!quoteCols.includes('later_since'))         db.exec("ALTER TABLE quotes ADD COLUMN later_since TEXT DEFAULT ''");
@@ -195,6 +201,8 @@ function migrateSchema() {
   // Handmatige koppeling met een Moneybird-Project (id), voor wanneer de naam in
   // Moneybird afwijkt van de projectnaam in deze app en automatisch matchen faalt.
   if (!projCols.includes('moneybird_project_id')) db.exec("ALTER TABLE projects ADD COLUMN moneybird_project_id TEXT DEFAULT ''");
+  if (!projCols.includes('analysis_acknowledged')) db.exec("ALTER TABLE projects ADD COLUMN analysis_acknowledged INTEGER DEFAULT 0");
+  if (!projCols.includes('analysis_note')) db.exec("ALTER TABLE projects ADD COLUMN analysis_note TEXT DEFAULT ''");
 
   const qiCols = db.pragma('table_info(quote_items)').map(c => c.name);
   if (!qiCols.includes('is_outsourced'))  db.exec("ALTER TABLE quote_items ADD COLUMN is_outsourced  INTEGER DEFAULT 0");
@@ -251,6 +259,7 @@ function query({ action, table, data, where, columns }) {
     case 'insert': return insertRow(table, data);
     case 'update': return updateRow(table, data, where);
     case 'delete': return deleteRow(table, where);
+    case 'save_quote': return saveQuote(data);
     default: throw new Error(`Unknown action: ${action}`);
   }
 }
@@ -316,6 +325,58 @@ function deleteRow(table, where) {
   const result = db.prepare(sql).run(...Object.values(where));
   checkpoint();
   return { changes: result.changes };
+}
+
+// Replace a quote and all of its line items as one SQLite transaction.  The
+// quote editor used to update the parent, delete every item, then insert items
+// one-by-one from the renderer.  A crash or a failed write in that gap could
+// permanently leave a quote with missing items.
+function saveQuote(payload) {
+  const { id, quote, items } = payload || {};
+  if (!quote || typeof quote !== 'object' || Array.isArray(quote)) {
+    throw new Error('save_quote requires quote data');
+  }
+  if (!Array.isArray(items)) {
+    throw new Error('save_quote requires an items array');
+  }
+
+  const quoteKeys = Object.keys(quote);
+  if (quoteKeys.length === 0) throw new Error('save_quote requires quote fields');
+  const quotePlaceholders = quoteKeys.map(() => '?').join(', ');
+  const insertQuote = db.prepare(
+    `INSERT INTO quotes (${quoteKeys.join(', ')}) VALUES (${quotePlaceholders})`
+  );
+  const updateQuote = db.prepare(
+    `UPDATE quotes SET ${quoteKeys.map(k => `${k} = ?`).join(', ')} WHERE id = ?`
+  );
+  const deleteItems = db.prepare('DELETE FROM quote_items WHERE quote_id = ?');
+  const itemKeys = ['quote_id', 'type', 'name', 'quantity', 'unit', 'unit_price', 'sort_order', 'margin', 'is_outsourced', 'enabled', 'section_label'];
+  const insertItem = db.prepare(
+    `INSERT INTO quote_items (${itemKeys.join(', ')}) VALUES (${itemKeys.map(() => '?').join(', ')})`
+  );
+
+  const transaction = db.transaction(() => {
+    let quoteId = id;
+    if (quoteId) {
+      const result = updateQuote.run(...quoteKeys.map(k => quote[k]), quoteId);
+      if (result.changes !== 1) throw new Error(`Quote not found: ${quoteId}`);
+      deleteItems.run(quoteId);
+    } else {
+      quoteId = insertQuote.run(...quoteKeys.map(k => quote[k])).lastInsertRowid;
+    }
+
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error('save_quote items must be objects');
+      }
+      insertItem.run(...itemKeys.map(k => k === 'quote_id' ? quoteId : (item[k] ?? null)));
+    }
+    return Number(quoteId);
+  });
+
+  const quoteId = transaction();
+  checkpoint();
+  return { id: quoteId, changes: 1 };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

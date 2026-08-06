@@ -107,6 +107,8 @@ def init_db():
                 start_date  TEXT DEFAULT '',
                 end_date    TEXT DEFAULT '',
                 status      TEXT DEFAULT 'active',
+                analysis_acknowledged INTEGER DEFAULT 0,
+                analysis_note TEXT DEFAULT '',
                 color       TEXT DEFAULT '#4f8ef7',
                 created_by  TEXT DEFAULT '',
                 created_at  TEXT DEFAULT (datetime('now'))
@@ -127,6 +129,7 @@ def init_db():
                 quote_date  TEXT DEFAULT (date('now')), margin REAL DEFAULT 20,
                 status      TEXT DEFAULT 'draft', notes TEXT DEFAULT '',
                 project_name TEXT DEFAULT '',
+                variant_group TEXT DEFAULT '',
                 created_by  TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS quote_items (
@@ -179,6 +182,8 @@ def init_db():
         db.execute("ALTER TABLE quotes ADD COLUMN total_price REAL")
     if 'project_name' not in qcols:
         db.execute("ALTER TABLE quotes ADD COLUMN project_name TEXT DEFAULT ''")
+    if 'variant_group' not in qcols:
+        db.execute("ALTER TABLE quotes ADD COLUMN variant_group TEXT DEFAULT ''")
     if 'later_since' not in qcols:
         db.execute("ALTER TABLE quotes ADD COLUMN later_since TEXT DEFAULT ''")
     if 'later_snoozed_until' not in qcols:
@@ -206,6 +211,10 @@ def init_db():
         db.execute("ALTER TABLE projects ADD COLUMN exclude_from_analysis INTEGER DEFAULT 0")
     if 'moneybird_project_id' not in pcols:
         db.execute("ALTER TABLE projects ADD COLUMN moneybird_project_id TEXT DEFAULT ''")
+    if 'analysis_acknowledged' not in pcols:
+        db.execute("ALTER TABLE projects ADD COLUMN analysis_acknowledged INTEGER DEFAULT 0")
+    if 'analysis_note' not in pcols:
+        db.execute("ALTER TABLE projects ADD COLUMN analysis_note TEXT DEFAULT ''")
 
     # One-time migration: consolidate duplicate stages by (project_id, name)
     # and move their date ranges into stage_slots.
@@ -260,6 +269,71 @@ def order_for(table):
 
 # ── Generic query endpoint ──────────────────────────────────────────────────────
 
+QUOTE_COLUMNS = {
+    'name', 'client', 'quote_date', 'margin', 'status', 'notes', 'project_name', 'variant_group',
+    'created_by', 'image_data', 'extras_json', 'total_price',
+}
+QUOTE_ITEM_COLUMNS = {
+    'type', 'name', 'quantity', 'unit', 'unit_price', 'sort_order', 'margin',
+    'is_outsourced', 'enabled', 'section_label',
+}
+
+
+def save_quote_transaction(db, payload):
+    """Atomically replace a quote and all its line items.
+
+    This keeps a failed item insert from committing the preceding quote update
+    and item deletion, which is especially important for network/API saves.
+    """
+    payload = payload or {}
+    quote = payload.get('quote')
+    items = payload.get('items')
+    quote_id = payload.get('id')
+
+    if not isinstance(quote, dict) or not quote:
+        raise ValueError('save_quote requires quote data')
+    if not isinstance(items, list):
+        raise ValueError('save_quote requires an items array')
+    if any(key not in QUOTE_COLUMNS for key in quote):
+        raise ValueError('save_quote contains an invalid quote field')
+    if any(not isinstance(item, dict) or any(key not in QUOTE_ITEM_COLUMNS for key in item) for item in items):
+        raise ValueError('save_quote contains an invalid item field')
+
+    quote_keys = list(quote.keys())
+    db.execute('BEGIN')
+    try:
+        if quote_id:
+            sets = ', '.join(f'{key}=?' for key in quote_keys)
+            cur = db.execute(
+                f'UPDATE quotes SET {sets} WHERE id=?',
+                [quote[key] for key in quote_keys] + [quote_id],
+            )
+            if cur.rowcount != 1:
+                raise ValueError(f'Quote not found: {quote_id}')
+            db.execute('DELETE FROM quote_items WHERE quote_id=?', (quote_id,))
+        else:
+            placeholders = ', '.join('?' for _ in quote_keys)
+            cur = db.execute(
+                f"INSERT INTO quotes ({', '.join(quote_keys)}) VALUES ({placeholders})",
+                [quote[key] for key in quote_keys],
+            )
+            quote_id = cur.lastrowid
+
+        item_keys = ['quote_id', 'type', 'name', 'quantity', 'unit', 'unit_price',
+                     'sort_order', 'margin', 'is_outsourced', 'enabled', 'section_label']
+        placeholders = ', '.join('?' for _ in item_keys)
+        for item in items:
+            values = [quote_id] + [item.get(key) for key in item_keys[1:]]
+            db.execute(
+                f"INSERT INTO quote_items ({', '.join(item_keys)}) VALUES ({placeholders})",
+                values,
+            )
+        db.commit()
+        return quote_id
+    except Exception:
+        db.rollback()
+        raise
+
 @app.route('/api/query', methods=['POST'])
 def handle_query():
     try:
@@ -273,6 +347,12 @@ def handle_query():
             return jsonify({'error': f'Table not allowed: {table}'}), 400
 
         with get_db() as db:
+            if action == 'save_quote':
+                if table != 'quotes':
+                    return jsonify({'error': 'save_quote requires the quotes table'}), 400
+                quote_id = save_quote_transaction(db, data)
+                return jsonify({'id': quote_id}), 201 if not data.get('id') else 200
+
             if action == 'select':
                 columns = body.get('columns')
                 select_cols = '*'
