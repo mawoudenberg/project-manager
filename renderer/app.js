@@ -5283,17 +5283,15 @@ async function mergeSelectedQuotes() {
     });
   });
 
-  // Combineer fixed_items uit alle offertes
-  const allFixedItems = fullQuotes.flatMap(q => {
-    try { return getQuoteFixedItems(JSON.parse(q.extras_json || '{}') || {}); } catch { return []; }
-  });
-
-  // Bouw de samengevoegde extras_json op basis van de basisofferte
+  // Bouw de samengevoegde extras_json op basis van de basisofferte.
+  // fixed_items worden NIET meegenomen: als één bronofferte een vaste stuksprijs had,
+  // mag die niet de totaalprijs van de samengevoegde offerte overnemen — de merged
+  // offerte telt gewoon alle items bij elkaar op via calcQuoteTotals.
   let baseExtras = {};
   try { baseExtras = JSON.parse(base.extras_json || '{}') || {}; } catch {}
   const mergedExtras = {
     ...baseExtras,
-    fixed_items: allFixedItems,
+    fixed_items: [],
     merged_sections: sourceLabels,
   };
 
