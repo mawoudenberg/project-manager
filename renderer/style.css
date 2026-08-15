@@ -1102,26 +1102,8 @@ html[data-theme="dark"] #sidebar-logo {
 .ql-search-wrap span { font-size: 17px; line-height: 1; transform: rotate(-20deg); }
 .ql-search-wrap input { min-width: 0; width: 100%; padding: 8px 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
 .quote-variant-group:hover td { background: rgba(124, 92, 191, .12) !important; }
-.quote-project-group td {
-  background: rgba(79, 142, 247, .05);
-  border-bottom-color: rgba(79, 142, 247, .18);
-  cursor: pointer;
-}
-.quote-project-group:hover td { background: rgba(79, 142, 247, .11) !important; }
-.ql-project-chevron { color: var(--accent) !important; }
-.ql-project-badge {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 2px 5px;
-  border-radius: 4px;
-  background: rgba(79, 142, 247, .14);
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .35px;
-  vertical-align: middle;
-}
+.quote-project-group td { cursor: pointer; }
+.ql-project-chevron { color: var(--text2) !important; font-size: 11px !important; }
 .ql-group-chevron { color: #7c5cbf; font-size: 14px; }
 .ql-group-total-note { color: var(--text2); font-family: inherit; font-size: 10px; }
 .ql-group-status { color: #7c5cbf; font-size: 11px; font-weight: 600; }

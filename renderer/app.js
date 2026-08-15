@@ -5188,7 +5188,7 @@ function _renderQuoteTable() {
         ? `<span class="badge badge-${statuses[0]}">${fmtQuoteStatus(statuses[0])}</span>`
         : `<span class="ql-group-status">${statuses.map(s => fmtQuoteStatus(s)).join(' + ')}</span>`;
       html += `<tr class="quote-project-group" data-project="${escHtml(key)}">
-        <td><span class="ql-group-chevron ql-project-chevron">${expanded ? '▾' : '▸'}</span> <strong>${escHtml(key)}</strong> <span class="ql-project-badge">project</span></td>
+        <td><strong>${escHtml(key)}</strong> <span class="ql-group-chevron ql-project-chevron">${expanded ? '▾' : '▸'}</span></td>
         <td>${escHtml(client)}</td>
         <td>${latestDate}</td>
         <td class="amount">${fmtEur(sum)} <span class="ql-group-total-note">${members.length} delen</span></td>
