@@ -5389,8 +5389,10 @@ async function renderQuoteList() {
   wireQuoteSearch();
   _renderQuoteTable();
 
-  // Event delegation: filter chips and sort buttons bubble up to content
-  content.addEventListener('click', e => {
+  // Event delegation: filter chips and sort buttons bubble up to content.
+  // Gebruik onclick (assignment) zodat herhaalde aanroepen van renderQuoteList()
+  // geen gestapelde listeners veroorzaken die het filter direct terugdraaien.
+  content.onclick = e => {
     const chip    = e.target.closest('.ql-chip');
     const sortBtn = e.target.closest('.ql-sort-btn');
     if (chip) {
