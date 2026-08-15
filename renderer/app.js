@@ -5184,9 +5184,17 @@ function _renderQuoteTable() {
       const latestDate = members.map(m => m.quote_date || '').sort().at(-1) || '—';
       const sum = members.reduce((acc, m) => acc + Number(m.total_price || 0), 0);
       const statuses = [...new Set(members.map(m => m.status))];
-      const statusCell = statuses.length === 1
-        ? `<span class="badge badge-${statuses[0]}">${fmtQuoteStatus(statuses[0])}</span>`
-        : `<span class="ql-group-status">${statuses.map(s => fmtQuoteStatus(s)).join(' + ')}</span>`;
+      let statusCell;
+      if (statuses.includes('accepted')) {
+        statusCell = `<span class="badge badge-accepted">${fmtQuoteStatus('accepted')}</span>`;
+      } else if (statuses.every(s => s === 'rejected')) {
+        statusCell = `<span class="badge badge-rejected">${fmtQuoteStatus('rejected')}</span>`;
+      } else {
+        const visible = [...new Set(members.filter(m => m.status !== 'rejected').map(m => m.status))];
+        statusCell = visible.length === 1
+          ? `<span class="badge badge-${visible[0]}">${fmtQuoteStatus(visible[0])}</span>`
+          : `<span class="ql-group-status">${visible.map(s => fmtQuoteStatus(s)).join(' + ')}</span>`;
+      }
       html += `<tr class="quote-project-group" data-project="${escHtml(key)}">
         <td><strong>${escHtml(key)}</strong> <span class="ql-group-chevron ql-project-chevron">${expanded ? '▾' : '▸'}</span></td>
         <td>${escHtml(client)}</td>
