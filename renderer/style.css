@@ -1125,7 +1125,11 @@ html[data-theme="dark"] #sidebar-logo {
 .ql-group-chevron { color: #7c5cbf; font-size: 14px; }
 .ql-group-total-note { color: var(--text2); font-family: inherit; font-size: 10px; }
 .ql-group-status { color: #7c5cbf; font-size: 11px; font-weight: 600; }
-.ql-variant-child td:first-of-type + td { padding-left: 30px; }
+.ql-variant-child td:first-of-type {
+  padding-left: 22px !important;
+  box-shadow: inset 3px 0 0 var(--border);
+}
+.ql-variant-child td:first-of-type + td { padding-left: 10px; }
 .ql-variant-badge {
   display: inline-block;
   margin-left: 6px;
