@@ -5008,11 +5008,12 @@ function freshQE(quote) {
 
 // ─── Quote List View ──────────────────────────────────────────────────────────
 
-let _quotesFilter  = new Set(); // leeg = alle statussen
-let _quotesSort    = { field: 'date', dir: 'desc' };
-let _quotesSearch  = '';
-let _allQuotes     = []; // cached for client-side filter/sort
-let _selectedQuoteIds = new Set(); // voor samenvoegen / bundelen
+let _quotesFilter       = new Set(); // leeg = alle statussen
+let _quotesSort         = { field: 'date', dir: 'desc' };
+let _quotesSearch       = '';
+let _quotesHideGeleverd = false;
+let _allQuotes          = []; // cached for client-side filter/sort
+let _selectedQuoteIds   = new Set(); // voor samenvoegen / bundelen
 let _expandedVariantGroups = new Set();
 
 function quoteVariantGroupId() {
@@ -5030,6 +5031,12 @@ function _renderQuoteTable() {
   if (needle) {
     list = list.filter(q => [q.name, q.client, q.project_name]
       .some(value => String(value || '').toLowerCase().includes(needle)));
+  }
+  if (_quotesHideGeleverd) {
+    list = list.filter(q => {
+      const linkName = (q.project_name || q.name || '').trim().toLowerCase();
+      return !(q.status === 'accepted' && linkName && state.projects?.find(p => p.name.trim().toLowerCase() === linkName && p.status === 'done'));
+    });
   }
 
   // Sort
@@ -5088,6 +5095,26 @@ function _renderQuoteTable() {
     }
   });
 
+  // Totaal van de gefilterde selectie (variant-groep telt als één — hoogste prijs)
+  let selectionTotal = 0;
+  let selectionCount = 0;
+  const seenGroupsForTotal = new Set();
+  list.forEach(q => {
+    if (q.variant_group) {
+      if (!seenGroupsForTotal.has(q.variant_group)) {
+        seenGroupsForTotal.add(q.variant_group);
+        const grpMembers = groups.get(q.variant_group) || [q];
+        const highest = grpMembers.reduce((best, item) =>
+          Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, grpMembers[0]);
+        selectionTotal += Number(highest.total_price || 0);
+        selectionCount++;
+      }
+    } else {
+      selectionTotal += Number(q.total_price || 0);
+      selectionCount++;
+    }
+  });
+
   document.querySelectorAll('.pm-ack-btn').forEach(btn => {
     btn.onclick = async () => {
       const projectId = Number(btn.dataset.projectId);
@@ -5130,7 +5157,11 @@ function _renderQuoteTable() {
     </tr>`;
     if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
   });
-  html += `</tbody></table>`;
+  html += `</tbody><tfoot><tr>
+    <td colspan="4" class="ql-total-label">${selectionCount} ${selectionCount === 1 ? 'offerte' : 'offertes'}</td>
+    <td class="ql-total-amount">${fmtEur(selectionTotal)}</td>
+    <td colspan="2"></td>
+  </tr></tfoot></table>`;
   document.getElementById('ql-table-wrap').innerHTML = html;
 
   // Checkbox wiring
@@ -5348,6 +5379,7 @@ function _renderQuoteFilterBar() {
         const active = isAll ? _quotesFilter.size === 0 : _quotesFilter.has(f.key);
         return `<button class="ql-chip${f.key ? ' badge-' + f.key : ''}${active ? ' ql-chip-active' : ''}" data-filter="${f.key ?? ''}">${f.label}</button>`;
       }).join('')}
+      <button class="ql-chip${_quotesHideGeleverd ? ' ql-chip-active' : ''}" data-geleverd="1" style="margin-left:6px">Verberg geleverd</button>
     </div>
     <div class="ql-sorts">
       <button class="ql-sort-btn${_quotesSort.field === 'date'  ? ' active' : ''}" data-sort="date">Datum ${sortIcon('date')}</button>
@@ -5393,9 +5425,15 @@ async function renderQuoteList() {
   // Gebruik onclick (assignment) zodat herhaalde aanroepen van renderQuoteList()
   // geen gestapelde listeners veroorzaken die het filter direct terugdraaien.
   content.onclick = e => {
+    const gevBtn  = e.target.closest('[data-geleverd]');
     const chip    = e.target.closest('.ql-chip');
     const sortBtn = e.target.closest('.ql-sort-btn');
-    if (chip) {
+    if (gevBtn) {
+      _quotesHideGeleverd = !_quotesHideGeleverd;
+      document.getElementById('ql-bar-wrap').innerHTML = _renderQuoteFilterBar();
+      wireQuoteSearch();
+      _renderQuoteTable();
+    } else if (chip) {
       const key = chip.dataset.filter || null;
       if (!key) {
         _quotesFilter.clear(); // "Alle" reset

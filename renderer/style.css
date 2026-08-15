@@ -1027,15 +1027,12 @@ html[data-theme="dark"] #sidebar-logo {
   transition: background .12s, color .12s, border-color .12s;
 }
 .ql-chip:hover { background: var(--bg3); color: var(--text); }
-.ql-chip.ql-chip-active {
-  border-color: currentColor;
-  opacity: 1;
-}
-.ql-chip.badge-draft.ql-chip-active    { background: rgba(136,145,170,.2); color: var(--text2); }
-.ql-chip.badge-sent.ql-chip-active     { background: rgba(79,142,247,.2);  color: var(--accent); }
-.ql-chip.badge-accepted.ql-chip-active { background: rgba(62,207,116,.2);  color: var(--green); }
-.ql-chip.badge-rejected.ql-chip-active { background: rgba(247,96,96,.2);   color: var(--red); }
-.ql-chip.badge-later.ql-chip-active    { background: rgba(247,201,72,.2);  color: var(--yellow); }
+.ql-chip.ql-chip-active { opacity: 1; }
+.ql-chip.badge-draft.ql-chip-active    { background: var(--text2);  color: #fff; border-color: var(--text2); }
+.ql-chip.badge-sent.ql-chip-active     { background: var(--accent); color: #fff; border-color: var(--accent); }
+.ql-chip.badge-accepted.ql-chip-active { background: var(--green);  color: #fff; border-color: var(--green); }
+.ql-chip.badge-rejected.ql-chip-active { background: var(--red);    color: #fff; border-color: var(--red); }
+.ql-chip.badge-later.ql-chip-active    { background: var(--yellow); color: #000; border-color: var(--yellow); }
 .ql-chip:not([class*="badge-"]).ql-chip-active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .ql-sorts { display: flex; gap: 6px; }
 .ql-sort-btn {
@@ -1051,6 +1048,13 @@ html[data-theme="dark"] #sidebar-logo {
 }
 .ql-sort-btn:hover { background: var(--bg3); color: var(--text); }
 .ql-sort-btn.active { background: var(--bg3); color: var(--text); border-color: var(--text2); }
+.quotes-table tfoot td {
+  border-top: 2px solid var(--border);
+  padding: 10px 12px 6px;
+  font-size: 12px;
+  color: var(--text2);
+}
+.ql-total-amount { font-weight: 700; color: var(--text); text-align: right; }
 
 .quotes-table {
   width: 100%;
