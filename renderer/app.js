@@ -5127,7 +5127,7 @@ function _renderQuoteTable() {
       if (!seenProjectGroupsForTotal.has(key)) {
         seenProjectGroupsForTotal.add(key);
         const members = projectGroupMap.get(key);
-        selectionTotal += members.reduce((acc, m) => acc + Number(m.total_price || 0), 0);
+        selectionTotal += members.filter(m => m.status !== 'rejected').reduce((acc, m) => acc + Number(m.total_price || 0), 0);
         selectionCount++;
       }
     } else {
@@ -5182,7 +5182,7 @@ function _renderQuoteTable() {
       const expanded = _expandedProjectGroups.has(key);
       const client = [...new Set(members.map(m => m.client).filter(Boolean))].join(', ') || '—';
       const latestDate = members.map(m => m.quote_date || '').sort().at(-1) || '—';
-      const sum = members.reduce((acc, m) => acc + Number(m.total_price || 0), 0);
+      const sum = members.filter(m => m.status !== 'rejected').reduce((acc, m) => acc + Number(m.total_price || 0), 0);
       const statuses = [...new Set(members.map(m => m.status))];
       let statusCell;
       if (statuses.includes('accepted')) {
