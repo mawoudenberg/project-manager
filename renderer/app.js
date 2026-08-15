@@ -5454,7 +5454,7 @@ async function renderQuoteList() {
       wireQuoteSearch();
       _renderQuoteTable();
     }
-  });
+  };
 
   // ── Eenmalige achtergrond-backfill: alleen offertes zonder opgeslagen total_price ──
   // (legacy offertes van vóór de total_price-kolom — na deze keer staat 'ie vast)
