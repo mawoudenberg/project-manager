@@ -1078,7 +1078,7 @@ html[data-theme="dark"] #sidebar-logo {
   vertical-align: middle;
 }
 .quotes-table tr:hover td { background: var(--bg3); cursor: pointer; }
-.ql-cb-col { width: 32px; padding: 0 8px !important; text-align: center; }
+.ql-cb-col { display: none; }
 .ql-row-selected td { background: rgba(79,142,247,.07) !important; }
 .quotes-table td.amount { text-align: right; font-family: monospace; font-size: 13px; }
 .quotes-table td.qt-total.loading { color: var(--text2); }
@@ -1126,10 +1126,9 @@ html[data-theme="dark"] #sidebar-logo {
 .ql-group-total-note { color: var(--text2); font-family: inherit; font-size: 10px; }
 .ql-group-status { color: #7c5cbf; font-size: 11px; font-weight: 600; }
 .ql-variant-child td:first-of-type {
-  padding-left: 22px !important;
+  padding-left: 56px;
   box-shadow: inset 3px 0 0 var(--border);
 }
-.ql-variant-child td:first-of-type + td { padding-left: 10px; }
 .ql-variant-badge {
   display: inline-block;
   margin-left: 6px;

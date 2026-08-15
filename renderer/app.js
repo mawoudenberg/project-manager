@@ -5013,7 +5013,7 @@ let _quotesSort         = { field: 'date', dir: 'desc' };
 let _quotesSearch       = '';
 let _quotesHideGeleverd = false;
 let _allQuotes          = []; // cached for client-side filter/sort
-let _selectedQuoteIds   = new Set(); // voor samenvoegen / bundelen
+let _selectedQuoteIds   = new Set(); // gereserveerd (checkboxes verwijderd)
 let _expandedVariantGroups = new Set();
 let _expandedProjectGroups = new Set();
 
@@ -5061,17 +5061,14 @@ function _renderQuoteTable() {
 
   let html = `<table class="quotes-table">
     <thead><tr>
-      <th class="ql-cb-col"></th>
       <th>Project</th><th>Klant</th><th>Datum</th>
       <th style="text-align:right">Totaal excl. BTW</th><th>Status</th><th></th>
     </tr></thead><tbody>`;
   const renderQuoteRow = (q, isVariantChild = false) => {
     const hasTotal = q.total_price != null;
-    const checked = _selectedQuoteIds.has(q.id);
     const linkName = (q.project_name || q.name || '').trim().toLowerCase();
     const fulfilled = q.status === 'accepted' && linkName && state.projects?.find(p => p.name.trim().toLowerCase() === linkName && p.status === 'done');
-    return `<tr class="quote-row${isVariantChild ? ' ql-variant-child' : ''}${checked ? ' ql-row-selected' : ''}" data-id="${q.id}">
-      <td class="ql-cb-col"><input type="checkbox" class="ql-cb" data-id="${q.id}"${checked ? ' checked' : ''} /></td>
+    return `<tr class="quote-row${isVariantChild ? ' ql-variant-child' : ''}" data-id="${q.id}">
       <td><strong>${escHtml(q.name)}</strong>${q.variant_group ? ` <span class="ql-variant-badge" title="Alternatieve offerte binnen dezelfde aanvraag">variant</span>` : ''}</td>
       <td>${escHtml(q.client)}</td>
       <td>${q.quote_date || '—'}</td>
@@ -5170,7 +5167,6 @@ function _renderQuoteTable() {
       const client = [...new Set(members.map(item => item.client).filter(Boolean))].join(', ') || '—';
       const latestDate = members.map(item => item.quote_date || '').sort().at(-1) || '—';
       html += `<tr class="quote-variant-group" data-group="${escHtml(q.variant_group)}">
-        <td class="ql-cb-col"></td>
         <td><span class="ql-group-chevron">${expanded ? '▾' : '▸'}</span> <strong>${members.length} varianten</strong></td>
         <td>${escHtml(client)}</td>
         <td>${latestDate}</td>
@@ -5192,7 +5188,6 @@ function _renderQuoteTable() {
         ? `<span class="badge badge-${statuses[0]}">${fmtQuoteStatus(statuses[0])}</span>`
         : `<span class="ql-group-status">${statuses.map(s => fmtQuoteStatus(s)).join(' + ')}</span>`;
       html += `<tr class="quote-project-group" data-project="${escHtml(key)}">
-        <td class="ql-cb-col"></td>
         <td><span class="ql-group-chevron ql-project-chevron">${expanded ? '▾' : '▸'}</span> <strong>${escHtml(key)}</strong> <span class="ql-project-badge">project</span></td>
         <td>${escHtml(client)}</td>
         <td>${latestDate}</td>
@@ -5205,22 +5200,11 @@ function _renderQuoteTable() {
     }
   });
   html += `</tbody><tfoot><tr>
-    <td colspan="4" class="ql-total-label">${selectionCount} ${selectionCount === 1 ? 'offerte' : 'offertes'}</td>
+    <td colspan="3" class="ql-total-label">${selectionCount} ${selectionCount === 1 ? 'offerte' : 'offertes'}</td>
     <td class="ql-total-amount">${fmtEur(selectionTotal)}</td>
     <td colspan="2"></td>
   </tr></tfoot></table>`;
   document.getElementById('ql-table-wrap').innerHTML = html;
-
-  // Checkbox wiring
-  document.querySelectorAll('.ql-cb').forEach(cb => {
-    cb.onclick = e => e.stopPropagation();
-    cb.onchange = () => {
-      const id = parseInt(cb.dataset.id);
-      if (cb.checked) _selectedQuoteIds.add(id); else _selectedQuoteIds.delete(id);
-      cb.closest('tr').classList.toggle('ql-row-selected', cb.checked);
-      _updateQuoteSelectionActions();
-    };
-  });
 
   document.querySelectorAll('.quote-status-select').forEach(select => {
     select.onclick = e => e.stopPropagation();
@@ -5238,7 +5222,7 @@ function _renderQuoteTable() {
 
   document.querySelectorAll('.quote-row').forEach(row => {
     row.onclick = async (e) => {
-      if (e.target.closest('.ql-cb-col, .quote-delete-btn, .quote-status-select')) return;
+      if (e.target.closest('.quote-delete-btn, .quote-status-select')) return;
       const [full] = await remoteQuery({ action: 'select', table: 'quotes', where: { id: row.dataset.id } });
       if (full) openQuoteEditor(full);
     };
@@ -5270,7 +5254,6 @@ function _renderQuoteTable() {
       if (!confirm(`Verwijder offerte "${quote.name}"?`)) return;
       await remoteQuery({ action: 'delete', table: 'quotes', where: { id: quote.id } });
       _allQuotes = _allQuotes.filter(q => q.id !== quote.id);
-      _selectedQuoteIds.delete(quote.id);
       toast(`Offerte "${quote.name}" verwijderd`);
       _renderQuoteTable();
     };
