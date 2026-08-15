@@ -5015,6 +5015,7 @@ let _quotesHideGeleverd = false;
 let _allQuotes          = []; // cached for client-side filter/sort
 let _selectedQuoteIds   = new Set(); // voor samenvoegen / bundelen
 let _expandedVariantGroups = new Set();
+let _expandedProjectGroups = new Set();
 
 function quoteVariantGroupId() {
   // Timestamp + random suffix is sufficient here: this is an opaque local grouping
@@ -5095,10 +5096,25 @@ function _renderQuoteTable() {
     }
   });
 
-  // Totaal van de gefilterde selectie (variant-groep telt als één — hoogste prijs)
+  // Project groups: quotes sharing the same project_name (≥ 2) collapse into one row
+  const projectGroupMap = new Map();
+  list.forEach(q => {
+    const key = q.project_name ? q.project_name.trim() : '';
+    if (key && !q.variant_group) {
+      const arr = projectGroupMap.get(key) || [];
+      arr.push(q);
+      projectGroupMap.set(key, arr);
+    }
+  });
+  for (const [key, arr] of projectGroupMap) {
+    if (arr.length < 2) projectGroupMap.delete(key);
+  }
+
+  // Totaal van de gefilterde selectie (variant-groep = hoogste prijs; project-groep = som van delen)
   let selectionTotal = 0;
   let selectionCount = 0;
   const seenGroupsForTotal = new Set();
+  const seenProjectGroupsForTotal = new Set();
   list.forEach(q => {
     if (q.variant_group) {
       if (!seenGroupsForTotal.has(q.variant_group)) {
@@ -5107,6 +5123,14 @@ function _renderQuoteTable() {
         const highest = grpMembers.reduce((best, item) =>
           Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, grpMembers[0]);
         selectionTotal += Number(highest.total_price || 0);
+        selectionCount++;
+      }
+    } else if (q.project_name && projectGroupMap.has(q.project_name.trim())) {
+      const key = q.project_name.trim();
+      if (!seenProjectGroupsForTotal.has(key)) {
+        seenProjectGroupsForTotal.add(key);
+        const members = projectGroupMap.get(key);
+        selectionTotal += members.reduce((acc, m) => acc + Number(m.total_price || 0), 0);
         selectionCount++;
       }
     } else {
@@ -5134,28 +5158,51 @@ function _renderQuoteTable() {
     };
   });
   const renderedGroups = new Set();
+  const renderedProjectGroups = new Set();
   list.forEach(q => {
-    if (!q.variant_group) {
+    if (q.variant_group) {
+      if (renderedGroups.has(q.variant_group)) return;
+      renderedGroups.add(q.variant_group);
+      const members = groups.get(q.variant_group) || [q];
+      const highest = members.reduce((best, item) =>
+        Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, members[0]);
+      const expanded = _expandedVariantGroups.has(q.variant_group);
+      const client = [...new Set(members.map(item => item.client).filter(Boolean))].join(', ') || '—';
+      const latestDate = members.map(item => item.quote_date || '').sort().at(-1) || '—';
+      html += `<tr class="quote-variant-group" data-group="${escHtml(q.variant_group)}">
+        <td class="ql-cb-col"></td>
+        <td><span class="ql-group-chevron">${expanded ? '▾' : '▸'}</span> <strong>${members.length} varianten</strong></td>
+        <td>${escHtml(client)}</td>
+        <td>${latestDate}</td>
+        <td class="amount">${fmtEur(highest.total_price)} <span class="ql-group-total-note">hoogste</span></td>
+        <td><span class="ql-group-status">één aanvraag</span></td><td></td>
+      </tr>`;
+      if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
+    } else if (q.project_name && projectGroupMap.has(q.project_name.trim())) {
+      const key = q.project_name.trim();
+      if (renderedProjectGroups.has(key)) return;
+      renderedProjectGroups.add(key);
+      const members = projectGroupMap.get(key);
+      const expanded = _expandedProjectGroups.has(key);
+      const client = [...new Set(members.map(m => m.client).filter(Boolean))].join(', ') || '—';
+      const latestDate = members.map(m => m.quote_date || '').sort().at(-1) || '—';
+      const sum = members.reduce((acc, m) => acc + Number(m.total_price || 0), 0);
+      const statuses = [...new Set(members.map(m => m.status))];
+      const statusCell = statuses.length === 1
+        ? `<span class="badge badge-${statuses[0]}">${fmtQuoteStatus(statuses[0])}</span>`
+        : `<span class="ql-group-status">${statuses.map(s => fmtQuoteStatus(s)).join(' + ')}</span>`;
+      html += `<tr class="quote-project-group" data-project="${escHtml(key)}">
+        <td class="ql-cb-col"></td>
+        <td><span class="ql-group-chevron ql-project-chevron">${expanded ? '▾' : '▸'}</span> <strong>${escHtml(key)}</strong> <span class="ql-project-badge">project</span></td>
+        <td>${escHtml(client)}</td>
+        <td>${latestDate}</td>
+        <td class="amount">${fmtEur(sum)} <span class="ql-group-total-note">${members.length} delen</span></td>
+        <td>${statusCell}</td><td></td>
+      </tr>`;
+      if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
+    } else {
       html += renderQuoteRow(q);
-      return;
     }
-    if (renderedGroups.has(q.variant_group)) return;
-    renderedGroups.add(q.variant_group);
-    const members = groups.get(q.variant_group) || [q];
-    const highest = members.reduce((best, item) =>
-      Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, members[0]);
-    const expanded = _expandedVariantGroups.has(q.variant_group);
-    const client = [...new Set(members.map(item => item.client).filter(Boolean))].join(', ') || '—';
-    const latestDate = members.map(item => item.quote_date || '').sort().at(-1) || '—';
-    html += `<tr class="quote-variant-group" data-group="${escHtml(q.variant_group)}">
-      <td class="ql-cb-col"></td>
-      <td><span class="ql-group-chevron">${expanded ? '▾' : '▸'}</span> <strong>${members.length} varianten</strong></td>
-      <td>${escHtml(client)}</td>
-      <td>${latestDate}</td>
-      <td class="amount">${fmtEur(highest.total_price)} <span class="ql-group-total-note">hoogste</span></td>
-      <td><span class="ql-group-status">één aanvraag</span></td><td></td>
-    </tr>`;
-    if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
   });
   html += `</tbody><tfoot><tr>
     <td colspan="4" class="ql-total-label">${selectionCount} ${selectionCount === 1 ? 'offerte' : 'offertes'}</td>
@@ -5202,6 +5249,15 @@ function _renderQuoteTable() {
       const group = row.dataset.group;
       if (_expandedVariantGroups.has(group)) _expandedVariantGroups.delete(group);
       else _expandedVariantGroups.add(group);
+      _renderQuoteTable();
+    };
+  });
+
+  document.querySelectorAll('.quote-project-group').forEach(row => {
+    row.onclick = () => {
+      const key = row.dataset.project;
+      if (_expandedProjectGroups.has(key)) _expandedProjectGroups.delete(key);
+      else _expandedProjectGroups.add(key);
       _renderQuoteTable();
     };
   });
