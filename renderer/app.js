@@ -5117,8 +5117,9 @@ function _renderQuoteTable() {
       if (!seenGroupsForTotal.has(q.variant_group)) {
         seenGroupsForTotal.add(q.variant_group);
         const grpMembers = groups.get(q.variant_group) || [q];
-        const highest = grpMembers.reduce((best, item) =>
-          Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, grpMembers[0]);
+        const grpBase = grpMembers.filter(m => m.status !== 'rejected');
+        const highest = (grpBase.length > 0 ? grpBase : grpMembers).reduce((best, item) =>
+          Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, (grpBase.length > 0 ? grpBase : grpMembers)[0]);
         selectionTotal += Number(highest.total_price || 0);
         selectionCount++;
       }
@@ -5161,17 +5162,32 @@ function _renderQuoteTable() {
       if (renderedGroups.has(q.variant_group)) return;
       renderedGroups.add(q.variant_group);
       const members = groups.get(q.variant_group) || [q];
-      const highest = members.reduce((best, item) =>
-        Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, members[0]);
+      const nonRejected = members.filter(m => m.status !== 'rejected');
+      const priceBase = nonRejected.length > 0 ? nonRejected : members;
+      const highest = priceBase.reduce((best, item) =>
+        Number(item.total_price || 0) > Number(best.total_price || 0) ? item : best, priceBase[0]);
       const expanded = _expandedVariantGroups.has(q.variant_group);
       const client = [...new Set(members.map(item => item.client).filter(Boolean))].join(', ') || '—';
       const latestDate = members.map(item => item.quote_date || '').sort().at(-1) || '—';
+      const groupName = members[0].project_name?.trim() || members[0].name || '—';
+      const vStatuses = [...new Set(members.map(m => m.status))];
+      let vStatusCell;
+      if (vStatuses.includes('accepted')) {
+        vStatusCell = `<span class="badge badge-accepted">${fmtQuoteStatus('accepted')}</span>`;
+      } else if (vStatuses.every(s => s === 'rejected')) {
+        vStatusCell = `<span class="badge badge-rejected">${fmtQuoteStatus('rejected')}</span>`;
+      } else {
+        const vis = [...new Set(nonRejected.map(m => m.status))];
+        vStatusCell = vis.length === 1
+          ? `<span class="badge badge-${vis[0]}">${fmtQuoteStatus(vis[0])}</span>`
+          : `<span class="ql-group-status">${vis.map(s => fmtQuoteStatus(s)).join(' + ')}</span>`;
+      }
       html += `<tr class="quote-variant-group" data-group="${escHtml(q.variant_group)}">
-        <td><span class="ql-group-chevron">${expanded ? '▾' : '▸'}</span> <strong>${members.length} varianten</strong></td>
+        <td><strong>${escHtml(groupName)}</strong> <span class="ql-group-chevron">${expanded ? '▾' : '▸'}</span></td>
         <td>${escHtml(client)}</td>
         <td>${latestDate}</td>
-        <td class="amount">${fmtEur(highest.total_price)} <span class="ql-group-total-note">hoogste</span></td>
-        <td><span class="ql-group-status">één aanvraag</span></td><td></td>
+        <td class="amount">${fmtEur(highest.total_price)} <span class="ql-group-total-note">${members.length} varianten</span></td>
+        <td>${vStatusCell}</td><td></td>
       </tr>`;
       if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
     } else if (q.project_name && projectGroupMap.has(q.project_name.trim())) {
