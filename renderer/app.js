@@ -8411,13 +8411,13 @@ ${extraImagesPage}
 </td></tr></tbody></table>
 </body></html>`;
 
-  const suffix = isClient ? '_klant' : '_intern';
+  const suffix = isClient ? '' : '_intern';
   const sanitize = s => (s || '').replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   const clientName  = sanitize(qe.client);
   const projectPart = sanitize(quoteProjectName());
   const d = qe.quote_date ? new Date(qe.quote_date) : new Date();
-  const datePart = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
-  const nrPart = `NR-${String(qe.id).padStart(2,'0')}`;
+  const datePart = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const nrPart = `NR-${String(qe.id).padStart(3,'0')}`;
   const pdfFilename = `${datePart}_${projectPart}_${clientName || 'offerte'}_${nrPart}${suffix}.pdf`;
 
   if (state.config?.mode === 'api') {
