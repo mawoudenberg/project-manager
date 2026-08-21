@@ -8429,7 +8429,7 @@ ${extraImagesPage}
       const result = await api.savePdfLocal(pdfBase64, localDir, projectName, pdfFilename);
       if (result?.ok) {
         toast(`📄 PDF opgeslagen in Offertes map van "${projectName}"`);
-        api.openPdfBytes?.(pdfBase64, pdfFilename);
+        api.openPath?.(result.path);
       } else {
         toast(`PDF lokaal opslaan mislukt: ${result?.error || 'onbekende fout'}`, 'error', 4000);
       }
