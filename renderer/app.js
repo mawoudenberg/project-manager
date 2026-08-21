@@ -5282,6 +5282,7 @@ function _renderQuoteTable() {
       const quote = _allQuotes.find(q => q.id == btn.dataset.id);
       if (!quote) return;
       if (!confirm(`Verwijder offerte "${quote.name}"?`)) return;
+      await cleanupVariantGroup(quote.id, quote.variant_group);
       await remoteQuery({ action: 'delete', table: 'quotes', where: { id: quote.id } });
       _allQuotes = _allQuotes.filter(q => q.id !== quote.id);
       toast(`Offerte "${quote.name}" verwijderd`);
@@ -6975,9 +6976,19 @@ async function performSave() {
   }
 }
 
+async function cleanupVariantGroup(deletedId, variantGroup) {
+  if (!variantGroup) return;
+  const remaining = _allQuotes.filter(q => q.id !== deletedId && q.variant_group === variantGroup);
+  if (remaining.length === 1) {
+    await remoteQuery({ action: 'update', table: 'quotes', data: { variant_group: null }, where: { id: remaining[0].id } });
+    remaining[0].variant_group = null;
+  }
+}
+
 async function deleteQuote() {
   if (!qe.id) return;
   if (!confirm(`Offerte "${qe.name}" verwijderen?`)) return;
+  await cleanupVariantGroup(qe.id, qe.variant_group);
   await remoteQuery({ action: 'delete', table: 'quotes', where: { id: qe.id } });
   qe = null;
   toast('Offerte verwijderd');
@@ -8412,19 +8423,22 @@ ${extraImagesPage}
     const projectName = quoteProjectName();
     if (!projectName) { toast('Geen projectnaam — sla de offerte eerst op', 'error'); return; }
 
-    const r = await api.apiFetch({
+    // Open locally first (instant), then save to server in background
+    api.openPdfBytes?.(pdfBase64, pdfFilename);
+    toast(`📄 PDF opgeslagen in Offertes map van "${projectName}"`);
+    api.apiFetch({
       method: 'POST',
       url:    `${state.config.apiUrl}/api/save-quote-pdf`,
       body:   { project_name: projectName, filename: pdfFilename, pdf_base64: pdfBase64 },
+    }).then(r => {
+      if (r.data?.no_folder) {
+        toast(`Projectmap "${projectName}" niet gevonden op server`, 'warn', 5000);
+      } else if (!r.data?.ok) {
+        toast(`PDF opslaan op server mislukt: ${r.data?.error || 'onbekende fout'}`, 'error', 4000);
+      }
+    }).catch(err => {
+      toast(`PDF opslaan op server mislukt: ${err.message || err}`, 'error', 4000);
     });
-    if (r.data?.ok) {
-      toast(`📄 PDF opgeslagen in Offertes map van "${projectName}"`);
-      api.openPdfBytes?.(pdfBase64, pdfFilename);
-    } else if (r.data?.no_folder) {
-      toast(`Projectmap "${projectName}" niet gevonden op server`, 'warn', 5000);
-    } else {
-      toast(`PDF opslaan mislukt: ${r.data?.error || 'onbekende fout'}`, 'error', 4000);
-    }
   } else {
     // ── File mode: local save dialog ──
     await api.exportPdf(html, pdfFilename);
