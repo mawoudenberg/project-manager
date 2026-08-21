@@ -228,8 +228,6 @@ async function createProjectFromQuote(quoteName, askFirst = true, initialStatus 
       existing.status = 'active';
       moveProjectFolder(name, 'active');
       toast(`Project "${name}" is nu actief — offerte geaccepteerd`);
-    } else {
-      toast(`Project "${name}" bestaat al`);
     }
     return existing;
   }
@@ -333,6 +331,14 @@ async function changeQuoteStatus(quote, newStatus) {
     await persistQuoteProjectLink(quote.id, linkName);
   }
   if (newStatus === 'rejected') {
+    // Only move/delete when ALL quotes for this project are rejected
+    const otherActive = _allQuotes.filter(q =>
+      q.id !== quote.id &&
+      (q.project_name || q.name || '').trim().toLowerCase() === linkName.toLowerCase() &&
+      q.status !== 'rejected'
+    );
+    if (otherActive.length > 0) return; // other parts still active, leave folder alone
+
     moveProjectFolder(linkName, 'rejected');
     const proj = state.projects?.find(p => p.name.trim().toLowerCase() === linkName.toLowerCase());
     if (proj) {
@@ -8413,6 +8419,7 @@ ${extraImagesPage}
     });
     if (r.data?.ok) {
       toast(`📄 PDF opgeslagen in Offertes map van "${projectName}"`);
+      api.openPdfBytes?.(pdfBase64, pdfFilename);
     } else if (r.data?.no_folder) {
       toast(`Projectmap "${projectName}" niet gevonden op server`, 'warn', 5000);
     } else {

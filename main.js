@@ -212,6 +212,12 @@ ipcMain.handle('shell:openPath', (_e, p) => {
   shell.openPath(p);
 });
 
+ipcMain.handle('pdf:open-bytes', (_e, { base64, filename }) => {
+  const tmpPath = path.join(os.tmpdir(), filename || 'offerte.pdf');
+  fs.writeFileSync(tmpPath, Buffer.from(base64, 'base64'));
+  shell.openPath(tmpPath);
+});
+
 ipcMain.handle('app:download-url', (_e, url) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.session.once('will-download', (_ev, item) => {
@@ -255,7 +261,7 @@ ipcMain.handle('pdf:export', async (_e, { html, filename, defaultDir }) => {
     });
     await win.loadFile(tmpFile);
     // Small delay to ensure any webfonts / images are rendered
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 100));
 
     const pdfData = await win.webContents.printToPDF({
       pageSize: 'A4',
@@ -298,7 +304,7 @@ ipcMain.handle('pdf:generate', async (_e, { html }) => {
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
     await win.loadFile(tmpFile);
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 100));
     const pdfData = await win.webContents.printToPDF({
       pageSize: 'A4',
       printBackground: true,
