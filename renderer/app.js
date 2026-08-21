@@ -8202,7 +8202,6 @@ async function exportProjectGroupPdf(projectKey, members) {
   <div class="title-client">${escHtml(client)}</div>
   <div class="title-pname">${escHtml(projectKey)}</div>
   ${imagesGrid || '<div style="flex:1"></div>'}
-  <div class="title-footer-txt">${footerHtml}</div>
 </div>
 
 <!-- Pagina 2+: omschrijvingen + prijzen -->
