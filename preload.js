@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('api', {
   exportPdf:    (html, filename, defaultDir) => ipcRenderer.invoke('pdf:export',    { html, filename, defaultDir }),
   generatePdf:  (html)                       => ipcRenderer.invoke('pdf:generate',  { html }),
   openPdfBytes: (base64, filename)           => ipcRenderer.invoke('pdf:open-bytes', { base64, filename }),
+  savePdfLocal: (base64, projectsDir, projectName, filename) => ipcRenderer.invoke('pdf:save-local', { base64, projectsDir, projectName, filename }),
   getLogoDataUrl: () => ipcRenderer.invoke('logo:get'),
 
   // Auto-update

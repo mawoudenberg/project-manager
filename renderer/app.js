@@ -8423,22 +8423,34 @@ ${extraImagesPage}
     const projectName = quoteProjectName();
     if (!projectName) { toast('Geen projectnaam — sla de offerte eerst op', 'error'); return; }
 
-    // Open locally first (instant), then save to server in background
-    api.openPdfBytes?.(pdfBase64, pdfFilename);
-    toast(`📄 PDF opgeslagen in Offertes map van "${projectName}"`);
-    api.apiFetch({
-      method: 'POST',
-      url:    `${state.config.apiUrl}/api/save-quote-pdf`,
-      body:   { project_name: projectName, filename: pdfFilename, pdf_base64: pdfBase64 },
-    }).then(r => {
-      if (r.data?.no_folder) {
-        toast(`Projectmap "${projectName}" niet gevonden op server`, 'warn', 5000);
-      } else if (!r.data?.ok) {
-        toast(`PDF opslaan op server mislukt: ${r.data?.error || 'onbekende fout'}`, 'error', 4000);
+    const localDir = state.config?.localProjectsDir;
+    if (localDir && api.savePdfLocal) {
+      // Write directly from Mac to the NAS mount — Finder sees it instantly
+      const result = await api.savePdfLocal(pdfBase64, localDir, projectName, pdfFilename);
+      if (result?.ok) {
+        toast(`📄 PDF opgeslagen in Offertes map van "${projectName}"`);
+        api.openPdfBytes?.(pdfBase64, pdfFilename);
+      } else {
+        toast(`PDF lokaal opslaan mislukt: ${result?.error || 'onbekende fout'}`, 'error', 4000);
       }
-    }).catch(err => {
-      toast(`PDF opslaan op server mislukt: ${err.message || err}`, 'error', 4000);
-    });
+    } else {
+      // Fallback: save via Pi (no localProjectsDir configured)
+      api.openPdfBytes?.(pdfBase64, pdfFilename);
+      toast(`📄 PDF opgeslagen in Offertes map van "${projectName}"`);
+      api.apiFetch({
+        method: 'POST',
+        url:    `${state.config.apiUrl}/api/save-quote-pdf`,
+        body:   { project_name: projectName, filename: pdfFilename, pdf_base64: pdfBase64 },
+      }).then(r => {
+        if (r.data?.no_folder) {
+          toast(`Projectmap "${projectName}" niet gevonden op server`, 'warn', 5000);
+        } else if (!r.data?.ok) {
+          toast(`PDF opslaan op server mislukt: ${r.data?.error || 'onbekende fout'}`, 'error', 4000);
+        }
+      }).catch(err => {
+        toast(`PDF opslaan op server mislukt: ${err.message || err}`, 'error', 4000);
+      });
+    }
   } else {
     // ── File mode: local save dialog ──
     await api.exportPdf(html, pdfFilename);

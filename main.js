@@ -218,6 +218,19 @@ ipcMain.handle('pdf:open-bytes', (_e, { base64, filename }) => {
   shell.openPath(tmpPath);
 });
 
+ipcMain.handle('pdf:save-local', (_e, { base64, projectsDir, projectName, filename }) => {
+  try {
+    const safe = projectName.replace(/[\\/:*?"<>|]/g, '').trim();
+    const offerteDir = path.join(projectsDir, safe, 'Offertes');
+    fs.mkdirSync(offerteDir, { recursive: true });
+    const dest = path.join(offerteDir, filename);
+    fs.writeFileSync(dest, Buffer.from(base64, 'base64'));
+    return { ok: true, path: dest };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('app:download-url', (_e, url) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.session.once('will-download', (_ev, item) => {
