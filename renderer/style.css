@@ -1089,6 +1089,11 @@ html[data-theme="dark"] #sidebar-logo {
   transition: opacity .15s;
 }
 .quotes-table tr:hover .quote-delete-btn { opacity: 1; }
+.quote-group-pdf-btn {
+  opacity: 0; background: none; border: none; font-size: 14px; cursor: pointer;
+  padding: 4px 6px; border-radius: 4px; transition: opacity .15s;
+}
+.quotes-table tr:hover .quote-group-pdf-btn { opacity: 1; }
 .quote-variant-group td { cursor: pointer; }
 .ql-search-wrap {
   display: flex; align-items: center; gap: 7px; flex: 1; min-width: 180px; max-width: 300px;

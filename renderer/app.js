@@ -5222,7 +5222,8 @@ function _renderQuoteTable() {
         <td>${escHtml(client)}</td>
         <td>${latestDate}</td>
         <td class="amount">${fmtEur(sum)} <span class="ql-group-total-note">${members.length} delen</span></td>
-        <td>${statusCell}</td><td></td>
+        <td>${statusCell}</td>
+        <td><button class="quote-group-pdf-btn" data-project="${escHtml(key)}" title="Bundel PDF exporteren">📄</button></td>
       </tr>`;
       if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
     } else {
@@ -5268,11 +5269,21 @@ function _renderQuoteTable() {
   });
 
   document.querySelectorAll('.quote-project-group').forEach(row => {
-    row.onclick = () => {
+    row.onclick = (e) => {
+      if (e.target.closest('.quote-group-pdf-btn')) return;
       const key = row.dataset.project;
       if (_expandedProjectGroups.has(key)) _expandedProjectGroups.delete(key);
       else _expandedProjectGroups.add(key);
       _renderQuoteTable();
+    };
+  });
+
+  document.querySelectorAll('.quote-group-pdf-btn').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const key = btn.dataset.project;
+      const members = projectGroupMap.get(key);
+      if (members) await exportProjectGroupPdf(key, members);
     };
   });
 
@@ -8028,6 +8039,223 @@ function buildQuoteNum(id, dateStr) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}${m}${day}-${String(id).padStart(2, '0')}`;
+}
+
+async function exportProjectGroupPdf(projectKey, members) {
+  try {
+    const active = members.filter(m => m.status !== 'rejected');
+    if (!active.length) { toast('Geen niet-afgewezen delen om te exporteren', 'warn'); return; }
+
+    toast('Bundel PDF wordt aangemaakt…', 'info', 3000);
+
+    const logoDataUrl = await api.getLogoDataUrl().catch(() => null);
+    const client = [...new Set(active.map(m => m.client).filter(Boolean))].join(', ') || '';
+    const grandTotal = active.reduce((s, m) => s + Number(m.total_price || 0), 0);
+    const latestDate = active.map(m => m.quote_date || '').sort().at(-1) || '';
+    const dateFmt = latestDate
+      ? new Date(latestDate).toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' })
+      : '';
+    const d = latestDate ? new Date(latestDate) : new Date();
+    const datePart = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+    // Load items for each active member
+    const memberItems = await Promise.all(active.map(async m => {
+      const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: m.id } });
+      let extras = {};
+      try { extras = JSON.parse(m.extras_json || '{}'); } catch (_) {}
+      return { quote: m, items, extras };
+    }));
+
+    const accent  = '#13ABBD';
+    const accentD = '#0D8B9B';
+    const bgTint  = '#f0f9fb';
+
+    const headerHtml = logoDataUrl
+      ? `<div class="hf-header"><img src="${logoDataUrl}" alt="Logo" /><div class="hf-right">${escHtml(projectKey)}<br/>${dateFmt}</div></div>`
+      : `<div class="hf-header"><div></div><div class="hf-right">${escHtml(projectKey)}<br/>${dateFmt}</div></div>`;
+
+    const sectionBlocks = memberItems.map(({ quote, items, extras }) => {
+      const enabledItems = items.filter(i => i.enabled !== 0 && i.type !== 'exclusion');
+      const fixedItems = (extras.fixed_items || []);
+      const marginPct = Number(quote.margin || 20);
+      const outsourcePct = Number(extras.outsource_margin || 15);
+
+      let rows = '';
+      if (enabledItems.length > 0) {
+        rows = enabledItems.map(i => {
+          let price = i.unit_price;
+          if (i.type === 'material') {
+            const m = (i.margin != null && i.margin !== '') ? parseFloat(i.margin) : marginPct;
+            price = i.unit_price * (1 + m / 100);
+          } else if (i.type === 'service' && i.is_outsourced) {
+            const m = (i.margin != null && i.margin !== '') ? parseFloat(i.margin) : outsourcePct;
+            price = i.unit_price * (1 + m / 100);
+          }
+          const unit = escHtml(i.unit || (i.type === 'service' ? 'uur' : 'st'));
+          return `<tr>
+            <td>${escHtml(i.name)}</td>
+            <td class="r">${i.quantity} ${unit}</td>
+            <td class="r">${fmtEur(i.quantity * price)}</td>
+          </tr>`;
+        }).join('');
+      } else if (fixedItems.length > 0) {
+        rows = fixedItems.map(fi => `<tr>
+          <td>${escHtml(fi.name)}</td>
+          <td class="r">${fi.quantity || 1} st</td>
+          <td class="r">${fmtEur((fi.quantity || 1) * fi.unit_price)}</td>
+        </tr>`).join('');
+      } else {
+        rows = `<tr><td colspan="3" style="color:#bbb;font-style:italic">Geen regels</td></tr>`;
+      }
+
+      const exclusions = items.filter(i => i.type === 'exclusion');
+      const exclHtml = exclusions.length
+        ? `<div class="excl-block"><span class="excl-label">Niet inbegrepen:</span> ${exclusions.map(e => escHtml(e.name)).join(' · ')}</div>`
+        : '';
+
+      return `
+        <div class="section-block">
+          <div class="section-header">
+            <span class="section-name">${escHtml(quote.name)}</span>
+            <span class="section-total">${fmtEur(quote.total_price)}</span>
+          </div>
+          <table class="items-table">
+            <thead><tr><th>Omschrijving</th><th class="r">Aantal</th><th class="r">Totaal</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          ${exclHtml}
+        </div>`;
+    }).join('');
+
+    const firstMember = active[0];
+    let extras0 = {};
+    try { extras0 = JSON.parse(firstMember.extras_json || '{}'); } catch (_) {}
+    const clientAddr = [extras0.client_contact, extras0.client_address, extras0.client_postcode, extras0.client_email, extras0.client_phone]
+      .filter(Boolean).map(l => escHtml(l)).join('<br/>');
+
+    const footerHtml = `${COMPANY.name} &nbsp;·&nbsp; ${COMPANY.address} &nbsp;·&nbsp; ${COMPANY.email} &nbsp;·&nbsp; ${COMPANY.kvk} &nbsp;·&nbsp; ${COMPANY.btw}`;
+
+    const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8">
+<style>
+  @page { size: A4; margin: 18mm 18mm 18mm 18mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page-wrap { width: 100%; border-collapse: collapse; }
+  .page-wrap > thead { display: table-header-group; }
+  .page-wrap > tfoot { display: table-footer-group; }
+  .page-wrap > tbody { display: table-row-group; }
+  .page-wrap > thead td, .page-wrap > tfoot td, .page-wrap > tbody td { padding: 0; border: none; vertical-align: top; }
+  .hf-header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; margin-bottom: 4mm; border-bottom: 1px solid #eee; }
+  .hf-header img { max-height: 44px; max-width: 160px; }
+  .hf-right { font-size: 8px; color: #bbb; text-align: right; line-height: 1.4; }
+  .fixed-footer { position: fixed; bottom: 0; left: 0; right: 0; border-top: 1px solid #eee; padding-top: 6px; font-size: 7.5px; color: #bbb; line-height: 1.7; text-align: center; }
+  .title-page { width: 100%; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; break-after: page; page-break-after: always; }
+  .title-bottom-footer { position: absolute; bottom: 0; left: 0; right: 0; text-align: center; font-size: 7.5px; line-height: 1.8; color: #ccc; border-top: 1px solid #eee; padding-top: 8px; }
+  .title-logo-wrap { display: flex; flex-direction: column; align-items: center; margin-bottom: 28px; }
+  .title-logo-wrap img { max-width: 300px; max-height: 160px; object-fit: contain; }
+  .title-wordmark { font-size: 32px; font-weight: 300; letter-spacing: 8px; color: #1c1917; text-transform: uppercase; }
+  .title-divider { width: 40px; height: 2px; background: ${accent}; margin: 12px auto; }
+  .title-quote-label { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: #bbb; }
+  .title-client-block { margin-top: 0; text-align: center; }
+  .title-client-block .for { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #ccc; margin-bottom: 6px; }
+  .title-client-block .cname { font-size: 22px; font-weight: 300; color: #1c1917; margin-bottom: 4px; }
+  .title-client-block .pname { font-size: 13px; color: #999; }
+  .qp-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8mm; }
+  .qp-meta .title { font-size: 22px; font-weight: 700; color: #1c1917; }
+  .qp-meta .sub { font-size: 11px; color: #999; margin-top: 3px; }
+  .client-block { background: ${bgTint}; border-left: 3px solid ${accent}; padding: 8px 14px; margin-bottom: 6mm; border-radius: 0 4px 4px 0; }
+  .client-block .lbl { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 3px; }
+  .client-block .val { font-size: 15px; font-weight: 600; color: #1c1917; }
+  .client-block .proj { font-size: 11px; color: #555; margin-top: 3px; }
+  .client-block .client-addr { font-size: 9px; color: #999; line-height: 1.5; margin-top: 4px; }
+  .section-block { margin-bottom: 7mm; break-inside: avoid; page-break-inside: avoid; }
+  .section-header { display: flex; justify-content: space-between; align-items: baseline; background: ${bgTint}; border-left: 3px solid ${accent}; padding: 5px 10px; margin-bottom: 2mm; border-radius: 0 3px 3px 0; }
+  .section-name { font-size: 12px; font-weight: 600; color: #1c1917; }
+  .section-total { font-size: 12px; font-weight: 700; color: ${accentD}; }
+  .items-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  .items-table th { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: ${accentD}; border-bottom: 1px solid #e5e7eb; padding: 3px 4px; text-align: left; }
+  .items-table td { padding: 4px 4px; border-bottom: 1px solid #f3f4f6; color: #374151; vertical-align: top; }
+  .items-table tr:last-child td { border-bottom: none; }
+  .r { text-align: right !important; }
+  .grand-total { display: flex; justify-content: space-between; align-items: center; border-top: 2px solid ${accent}; margin-top: 8mm; padding-top: 4mm; }
+  .grand-total .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; }
+  .grand-total .amount { font-size: 20px; font-weight: 700; color: #1c1917; }
+  .excl-block { margin-top: 2mm; font-size: 9px; color: #999; }
+  .excl-label { font-weight: 600; color: #bbb; }
+  .validity { margin-top: 8mm; font-size: 9px; color: #bbb; text-align: center; }
+</style>
+</head><body>
+<div class="fixed-footer">${footerHtml}</div>
+
+<div class="title-page">
+  <div class="title-logo-wrap">
+    ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Logo" />` : `<div class="title-wordmark">${escHtml(COMPANY.name)}</div>`}
+  </div>
+  <div class="title-divider"></div>
+  <div class="title-quote-label">Offerte</div>
+  <div style="height:12px"></div>
+  <div class="title-client-block">
+    <div class="for">Voor</div>
+    <div class="cname">${escHtml(client)}</div>
+    <div class="pname">${escHtml(projectKey)}</div>
+  </div>
+  <div class="title-bottom-footer">${footerHtml}</div>
+</div>
+
+<table class="page-wrap"><thead><td>${headerHtml}</td></thead>
+<tfoot><td><div style="height:6mm"></div></td></tfoot>
+<tbody><td>
+
+<div class="quote-page">
+  <div class="qp-header">
+    <div class="client-block">
+      <div class="lbl">Opdrachtgever</div>
+      <div class="val">${escHtml(client)}</div>
+      <div class="proj">${escHtml(projectKey)}</div>
+      ${clientAddr ? `<div class="client-addr">${clientAddr}</div>` : ''}
+    </div>
+    <div class="qp-meta">
+      <div class="title">Offerte</div>
+      <div class="sub">${dateFmt}</div>
+      <div class="sub">${active.length} onderdelen</div>
+    </div>
+  </div>
+
+  ${sectionBlocks}
+
+  <div class="grand-total">
+    <span class="lbl">Totaal excl. BTW</span>
+    <span class="amount">${fmtEur(grandTotal)}</span>
+  </div>
+  <div class="validity">Offerte geldig voor 30 dagen na dagtekening · Alle bedragen excl. BTW</div>
+</div>
+
+</td></tbody></table>
+</body></html>`;
+
+    const sanitize = s => (s || '').replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    const pdfFilename = `${datePart}_${sanitize(projectKey)}_${sanitize(client)}_bundel.pdf`;
+
+    const pdfBase64 = await api.generatePdf(html);
+    if (!pdfBase64) { toast('PDF genereren mislukt', 'error'); return; }
+
+    const localDir = state.config?.localProjectsDir;
+    if (localDir && api.savePdfLocal) {
+      const result = await api.savePdfLocal(pdfBase64, localDir, projectKey, pdfFilename);
+      if (result?.ok) {
+        toast(`📄 Bundel PDF opgeslagen: ${pdfFilename}`);
+        api.openPath?.(result.path);
+      } else {
+        toast(`PDF opslaan mislukt: ${result?.error || 'onbekende fout'}`, 'error', 4000);
+      }
+    } else {
+      api.openPdfBytes?.(pdfBase64, pdfFilename);
+      toast(`📄 Bundel PDF aangemaakt: ${pdfFilename}`);
+    }
+  } catch (err) {
+    toast('Bundel PDF mislukt: ' + (err.message || err), 'error', 4000);
+    console.error('exportProjectGroupPdf error:', err);
+  }
 }
 
 async function exportQuotePdf(mode = 'internal') {
