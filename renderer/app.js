@@ -8058,179 +8058,198 @@ async function exportProjectGroupPdf(projectKey, members) {
     const d = latestDate ? new Date(latestDate) : new Date();
     const datePart = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
-    // Load items for each active member
-    const memberItems = await Promise.all(active.map(async m => {
-      const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: m.id } });
+    // Fetch full data (image_data, extras_json, notes not in lightweight list query)
+    const fullData = await Promise.all(active.map(m =>
+      remoteQuery({ action: 'select', table: 'quotes', where: { id: m.id },
+        columns: ['id', 'image_data', 'extras_json', 'notes', 'margin'] })
+        .then(rows => rows[0] || {})
+    ));
+
+    const memberData = active.map((m, i) => {
+      const full = fullData[i];
       let extras = {};
-      try { extras = JSON.parse(m.extras_json || '{}'); } catch (_) {}
-      return { quote: m, items, extras };
-    }));
+      try { extras = JSON.parse(full.extras_json || '{}'); } catch (_) {}
+      const imageData = full.image_data || localStorage.getItem('qimg_' + m.id) || '';
+      return { quote: { ...m, notes: full.notes || '', image_data: imageData, margin: full.margin }, extras };
+    });
 
-    const accent  = '#13ABBD';
-    const accentD = '#0D8B9B';
-    const bgTint  = '#f0f9fb';
+    // Collect all images: main image + extra_images from all members
+    const allImages = [];
+    memberData.forEach(({ quote, extras }) => {
+      if (quote.image_data) allImages.push(quote.image_data);
+      (extras.extra_images || []).forEach(img => { if (img) allImages.push(img); });
+    });
+    // Deduplicate
+    const uniqueImages = [...new Set(allImages)];
 
-    const headerHtml = logoDataUrl
-      ? `<div class="hf-header"><img src="${logoDataUrl}" alt="Logo" /><div class="hf-right">${escHtml(projectKey)}<br/>${dateFmt}</div></div>`
-      : `<div class="hf-header"><div></div><div class="hf-right">${escHtml(projectKey)}<br/>${dateFmt}</div></div>`;
+    const imagesGrid = uniqueImages.length
+      ? `<div class="title-images">${uniqueImages.map(src =>
+          `<div class="title-img-wrap"><img src="${src}" onerror="this.parentNode.style.display='none'" /></div>`
+        ).join('')}</div>`
+      : '';
 
-    const sectionBlocks = memberItems.map(({ quote, items, extras }) => {
-      const enabledItems = items.filter(i => i.enabled !== 0 && i.type !== 'exclusion');
-      const fixedItems = (extras.fixed_items || []);
-      const marginPct = Number(quote.margin || 20);
-      const outsourcePct = Number(extras.outsource_margin || 15);
+    // Client address from first member
+    const { extras: extras0 } = memberData[0];
+    const clientAddr = [extras0.client_contact, extras0.client_address, extras0.client_postcode, extras0.client_email, extras0.client_phone]
+      .filter(Boolean).map(l => escHtml(l)).join('<br/>');
 
-      let rows = '';
-      if (enabledItems.length > 0) {
-        rows = enabledItems.map(i => {
-          let price = i.unit_price;
-          if (i.type === 'material') {
-            const m = (i.margin != null && i.margin !== '') ? parseFloat(i.margin) : marginPct;
-            price = i.unit_price * (1 + m / 100);
-          } else if (i.type === 'service' && i.is_outsourced) {
-            const m = (i.margin != null && i.margin !== '') ? parseFloat(i.margin) : outsourcePct;
-            price = i.unit_price * (1 + m / 100);
-          }
-          const unit = escHtml(i.unit || (i.type === 'service' ? 'uur' : 'st'));
-          return `<tr>
-            <td>${escHtml(i.name)}</td>
-            <td class="r">${i.quantity} ${unit}</td>
-            <td class="r">${fmtEur(i.quantity * price)}</td>
-          </tr>`;
-        }).join('');
-      } else if (fixedItems.length > 0) {
-        rows = fixedItems.map(fi => `<tr>
-          <td>${escHtml(fi.name)}</td>
-          <td class="r">${fi.quantity || 1} st</td>
-          <td class="r">${fmtEur((fi.quantity || 1) * fi.unit_price)}</td>
-        </tr>`).join('');
-      } else {
-        rows = `<tr><td colspan="3" style="color:#bbb;font-style:italic">Geen regels</td></tr>`;
-      }
-
-      const exclusions = items.filter(i => i.type === 'exclusion');
-      const exclHtml = exclusions.length
-        ? `<div class="excl-block"><span class="excl-label">Niet inbegrepen:</span> ${exclusions.map(e => escHtml(e.name)).join(' · ')}</div>`
+    // Section blocks: sub-quote name + notes + price only (no line items)
+    const sectionBlocks = memberData.map(({ quote, extras }) => {
+      const notes = (quote.notes || '').trim();
+      const notesHtml = notes
+        ? `<div class="section-notes">${notes.replace(/\n/g, '<br/>')}</div>`
         : '';
-
+      const exclItems = (extras.fixed_items || []).length === 0
+        ? '' // fixed_items are the spec, not exclusions — skip here
+        : '';
       return `
         <div class="section-block">
           <div class="section-header">
             <span class="section-name">${escHtml(quote.name)}</span>
-            <span class="section-total">${fmtEur(quote.total_price)}</span>
+            <span class="section-price">${fmtEur(quote.total_price)}</span>
           </div>
-          <table class="items-table">
-            <thead><tr><th>Omschrijving</th><th class="r">Aantal</th><th class="r">Totaal</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-          ${exclHtml}
+          ${notesHtml}
         </div>`;
     }).join('');
 
-    const firstMember = active[0];
-    let extras0 = {};
-    try { extras0 = JSON.parse(firstMember.extras_json || '{}'); } catch (_) {}
-    const clientAddr = [extras0.client_contact, extras0.client_address, extras0.client_postcode, extras0.client_email, extras0.client_phone]
-      .filter(Boolean).map(l => escHtml(l)).join('<br/>');
-
+    const accent  = '#13ABBD';
+    const accentD = '#0D8B9B';
+    const bgTint  = '#f0f9fb';
     const footerHtml = `${COMPANY.name} &nbsp;·&nbsp; ${COMPANY.address} &nbsp;·&nbsp; ${COMPANY.email} &nbsp;·&nbsp; ${COMPANY.kvk} &nbsp;·&nbsp; ${COMPANY.btw}`;
+    const headerHtml = `<div class="hf-header">
+      ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Logo" />` : ''}
+      <div class="hf-right">${escHtml(projectKey)}<br/>${dateFmt}</div>
+    </div>`;
 
     const html = `<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8">
 <style>
-  @page { size: A4; margin: 18mm 18mm 18mm 18mm; }
+  @page { size: A4; margin: 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* ── Title page: centered, matching individual quote style ── */
+  .title-page {
+    width: 210mm; height: 297mm;
+    display: flex; flex-direction: column; align-items: center;
+    position: relative;
+    break-after: page; page-break-after: always;
+    overflow: hidden;
+    padding: 0 18mm 12mm;
+  }
+  .title-logo { max-height: 130px; max-width: 270px; object-fit: contain; margin-top: 24mm; }
+  .title-wordmark { font-size: 28px; font-weight: 300; letter-spacing: 6px; text-transform: uppercase; color: #1c1917; margin-top: 24mm; }
+  .title-divider { width: 36px; height: 2px; background: ${accent}; margin: 10px 0 6px; }
+  .title-label { font-size: 9px; letter-spacing: 3px; text-transform: uppercase; color: #bbb; margin-bottom: 10px; }
+  .title-for { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: #ccc; margin-bottom: 4px; }
+  .title-client { font-size: 22px; font-weight: 600; color: #1c1917; text-align: center; margin-bottom: 3px; }
+  .title-pname { font-size: 13px; color: #999; text-align: center; }
+  .title-images {
+    flex: 1; margin-top: 10mm; align-self: stretch;
+    display: grid; gap: 3mm;
+    grid-template-columns: repeat(auto-fill, minmax(65mm, 1fr));
+    align-content: start; overflow: hidden;
+  }
+  .title-img-wrap { aspect-ratio: 4/3; overflow: hidden; border-radius: 3px; }
+  .title-img-wrap img { width: 100%; height: 100%; object-fit: cover; }
+  .title-footer-txt { position: absolute; bottom: 0; left: 18mm; right: 18mm; text-align: center; font-size: 7.5px; color: #ccc; border-top: 1px solid #eee; padding-top: 5px; line-height: 1.7; }
+
+  /* ── Content pages ── */
   .page-wrap { width: 100%; border-collapse: collapse; }
   .page-wrap > thead { display: table-header-group; }
   .page-wrap > tfoot { display: table-footer-group; }
   .page-wrap > tbody { display: table-row-group; }
   .page-wrap > thead td, .page-wrap > tfoot td, .page-wrap > tbody td { padding: 0; border: none; vertical-align: top; }
-  .hf-header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; margin-bottom: 4mm; border-bottom: 1px solid #eee; }
-  .hf-header img { max-height: 44px; max-width: 160px; }
+  .content-pad { padding: 0 18mm; }
+  .hf-header { display: flex; align-items: center; justify-content: space-between; padding: 8mm 18mm 5mm; border-bottom: 1px solid #eee; margin-bottom: 7mm; }
+  .hf-header img { max-height: 40px; max-width: 140px; }
   .hf-right { font-size: 8px; color: #bbb; text-align: right; line-height: 1.4; }
-  .fixed-footer { position: fixed; bottom: 0; left: 0; right: 0; border-top: 1px solid #eee; padding-top: 6px; font-size: 7.5px; color: #bbb; line-height: 1.7; text-align: center; }
-  .title-page { width: 100%; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; break-after: page; page-break-after: always; }
-  .title-bottom-footer { position: absolute; bottom: 0; left: 0; right: 0; text-align: center; font-size: 7.5px; line-height: 1.8; color: #ccc; border-top: 1px solid #eee; padding-top: 8px; }
-  .title-logo-wrap { display: flex; flex-direction: column; align-items: center; margin-bottom: 28px; }
-  .title-logo-wrap img { max-width: 300px; max-height: 160px; object-fit: contain; }
-  .title-wordmark { font-size: 32px; font-weight: 300; letter-spacing: 8px; color: #1c1917; text-transform: uppercase; }
-  .title-divider { width: 40px; height: 2px; background: ${accent}; margin: 12px auto; }
-  .title-quote-label { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: #bbb; }
-  .title-client-block { margin-top: 0; text-align: center; }
-  .title-client-block .for { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #ccc; margin-bottom: 6px; }
-  .title-client-block .cname { font-size: 22px; font-weight: 300; color: #1c1917; margin-bottom: 4px; }
-  .title-client-block .pname { font-size: 13px; color: #999; }
-  .qp-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8mm; }
-  .qp-meta .title { font-size: 22px; font-weight: 700; color: #1c1917; }
-  .qp-meta .sub { font-size: 11px; color: #999; margin-top: 3px; }
-  .client-block { background: ${bgTint}; border-left: 3px solid ${accent}; padding: 8px 14px; margin-bottom: 6mm; border-radius: 0 4px 4px 0; }
+  .fixed-footer { position: fixed; bottom: 0; left: 0; right: 0; border-top: 1px solid #eee; padding: 5px 18mm 6mm; font-size: 7.5px; color: #bbb; text-align: center; }
+
+  .intro-block { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8mm; }
+  .client-block { background: ${bgTint}; border-left: 3px solid ${accent}; padding: 8px 14px; border-radius: 0 4px 4px 0; max-width: 60%; }
   .client-block .lbl { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: #aaa; margin-bottom: 3px; }
-  .client-block .val { font-size: 15px; font-weight: 600; color: #1c1917; }
-  .client-block .proj { font-size: 11px; color: #555; margin-top: 3px; }
-  .client-block .client-addr { font-size: 9px; color: #999; line-height: 1.5; margin-top: 4px; }
-  .section-block { margin-bottom: 7mm; break-inside: avoid; page-break-inside: avoid; }
-  .section-header { display: flex; justify-content: space-between; align-items: baseline; background: ${bgTint}; border-left: 3px solid ${accent}; padding: 5px 10px; margin-bottom: 2mm; border-radius: 0 3px 3px 0; }
-  .section-name { font-size: 12px; font-weight: 600; color: #1c1917; }
-  .section-total { font-size: 12px; font-weight: 700; color: ${accentD}; }
-  .items-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
-  .items-table th { font-size: 8px; text-transform: uppercase; letter-spacing: .8px; color: ${accentD}; border-bottom: 1px solid #e5e7eb; padding: 3px 4px; text-align: left; }
-  .items-table td { padding: 4px 4px; border-bottom: 1px solid #f3f4f6; color: #374151; vertical-align: top; }
-  .items-table tr:last-child td { border-bottom: none; }
-  .r { text-align: right !important; }
-  .grand-total { display: flex; justify-content: space-between; align-items: center; border-top: 2px solid ${accent}; margin-top: 8mm; padding-top: 4mm; }
-  .grand-total .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; }
-  .grand-total .amount { font-size: 20px; font-weight: 700; color: #1c1917; }
-  .excl-block { margin-top: 2mm; font-size: 9px; color: #999; }
-  .excl-label { font-weight: 600; color: #bbb; }
-  .validity { margin-top: 8mm; font-size: 9px; color: #bbb; text-align: center; }
+  .client-block .val { font-size: 14px; font-weight: 600; color: #1c1917; }
+  .client-block .proj { font-size: 11px; color: #555; margin-top: 2px; }
+  .client-block .addr { font-size: 9px; color: #999; line-height: 1.5; margin-top: 4px; }
+  .doc-meta { text-align: right; }
+  .doc-meta .title { font-size: 20px; font-weight: 700; color: #1c1917; }
+  .doc-meta .sub { font-size: 10px; color: #999; margin-top: 3px; }
+
+  .section-block { margin-bottom: 5mm; break-inside: avoid; page-break-inside: avoid; }
+  .section-header { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0; border-bottom: 1.5px solid ${accent}; margin-bottom: 2mm; }
+  .section-name { font-size: 12px; font-weight: 700; color: #1c1917; }
+  .section-price { font-size: 13px; font-weight: 700; color: ${accentD}; }
+  .section-notes { font-size: 10.5px; color: #374151; line-height: 1.6; padding: 0 2px; }
+
+  .price-summary { margin-top: 8mm; border-top: 1px solid #e5e7eb; padding-top: 4mm; display: flex; flex-direction: column; gap: 2mm; }
+  .price-row { display: flex; justify-content: space-between; font-size: 11px; color: #555; }
+  .price-row.subtotal { font-size: 18px; font-weight: 700; color: #1c1917; margin-top: 2mm; border-top: 2px solid ${accent}; padding-top: 2mm; }
+  .price-row.btw-row { color: #999; }
+  .price-row.total { font-size: 11px; font-weight: 600; color: #555; margin-top: 1mm; }
+  .price-row .lbl { }
+  .price-row .amt { }
+  .validity { margin-top: 6mm; font-size: 9px; color: #bbb; text-align: center; }
 </style>
 </head><body>
 <div class="fixed-footer">${footerHtml}</div>
 
+<!-- Pagina 1: titelblad met alle afbeeldingen -->
 <div class="title-page">
-  <div class="title-logo-wrap">
-    ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Logo" />` : `<div class="title-wordmark">${escHtml(COMPANY.name)}</div>`}
-  </div>
+  ${logoDataUrl ? `<img class="title-logo" src="${logoDataUrl}" alt="Logo" />` : `<div class="title-wordmark">${escHtml(COMPANY.name)}</div>`}
   <div class="title-divider"></div>
-  <div class="title-quote-label">Offerte</div>
-  <div style="height:12px"></div>
-  <div class="title-client-block">
-    <div class="for">Voor</div>
-    <div class="cname">${escHtml(client)}</div>
-    <div class="pname">${escHtml(projectKey)}</div>
-  </div>
-  <div class="title-bottom-footer">${footerHtml}</div>
+  <div class="title-label">Offerte</div>
+  <div class="title-for">Opgesteld voor</div>
+  <div class="title-client">${escHtml(client)}</div>
+  <div class="title-pname">${escHtml(projectKey)}</div>
+  ${imagesGrid || '<div style="flex:1"></div>'}
+  <div class="title-footer-txt">${footerHtml}</div>
 </div>
 
-<table class="page-wrap"><thead><td>${headerHtml}</td></thead>
-<tfoot><td><div style="height:6mm"></div></td></tfoot>
-<tbody><td>
+<!-- Pagina 2+: omschrijvingen + prijzen -->
+<table class="page-wrap">
+  <thead><td>${headerHtml}</td></thead>
+  <tfoot><td><div style="height:14mm"></div></td></tfoot>
+  <tbody><td><div class="content-pad">
 
-<div class="quote-page">
-  <div class="qp-header">
-    <div class="client-block">
-      <div class="lbl">Opdrachtgever</div>
-      <div class="val">${escHtml(client)}</div>
-      <div class="proj">${escHtml(projectKey)}</div>
-      ${clientAddr ? `<div class="client-addr">${clientAddr}</div>` : ''}
+    <div class="intro-block">
+      <div class="client-block">
+        <div class="lbl">Opdrachtgever</div>
+        <div class="val">${escHtml(client)}</div>
+        <div class="proj">${escHtml(projectKey)}</div>
+        ${clientAddr ? `<div class="addr">${clientAddr}</div>` : ''}
+      </div>
+      <div class="doc-meta">
+        <div class="title">Offerte</div>
+        <div class="sub">${dateFmt}</div>
+        <div class="sub">${active.length} onderdelen</div>
+      </div>
     </div>
-    <div class="qp-meta">
-      <div class="title">Offerte</div>
-      <div class="sub">${dateFmt}</div>
-      <div class="sub">${active.length} onderdelen</div>
+
+    ${sectionBlocks}
+
+    <div class="price-summary">
+      ${active.map(m => `
+        <div class="price-row">
+          <span class="lbl">${escHtml(m.name)}</span>
+          <span class="amt">${fmtEur(m.total_price)}</span>
+        </div>`).join('')}
+      <div class="price-row subtotal">
+        <span class="lbl">Subtotaal excl. BTW</span>
+        <span class="amt">${fmtEur(grandTotal)}</span>
+      </div>
+      <div class="price-row btw-row">
+        <span class="lbl">BTW 21%</span>
+        <span class="amt">${fmtEur(grandTotal * 0.21)}</span>
+      </div>
+      <div class="price-row total">
+        <span class="lbl">Totaal incl. BTW</span>
+        <span class="amt">${fmtEur(grandTotal * 1.21)}</span>
+      </div>
     </div>
-  </div>
+    <div class="validity">Offerte geldig voor 30 dagen na dagtekening</div>
 
-  ${sectionBlocks}
-
-  <div class="grand-total">
-    <span class="lbl">Totaal excl. BTW</span>
-    <span class="amount">${fmtEur(grandTotal)}</span>
-  </div>
-  <div class="validity">Offerte geldig voor 30 dagen na dagtekening · Alle bedragen excl. BTW</div>
-</div>
-
-</td></tbody></table>
+  </div></td></tbody>
+</table>
 </body></html>`;
 
     const sanitize = s => (s || '').replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
