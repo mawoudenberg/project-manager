@@ -145,6 +145,19 @@ function createSchema() {
       notes       TEXT DEFAULT '',
       created_at  TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS time_entries (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_date  TEXT NOT NULL,
+      hours       REAL NOT NULL CHECK (hours > 0 AND hours * 2 = CAST(hours * 2 AS INTEGER)),
+      project_id  INTEGER NOT NULL REFERENCES projects(id),
+      employee    TEXT NOT NULL,
+      created_at  TEXT DEFAULT (datetime('now')),
+      updated_at  TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(entry_date);
+    CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id);
   `);
 }
 
@@ -381,7 +394,7 @@ function saveQuote(payload) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages', 'stage_slots', 'clients']);
+const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages', 'stage_slots', 'clients', 'time_entries']);
 
 function validateTable(table) {
   if (!ALLOWED_TABLES.has(table)) throw new Error(`Table not allowed: ${table}`);
@@ -398,6 +411,7 @@ function orderFor(table) {
   if (table === 'project_stages')  return ' ORDER BY sort_order ASC, id ASC';
   if (table === 'clients')         return ' ORDER BY name ASC';
   if (table === 'stage_slots')     return ' ORDER BY start_date ASC, id ASC';
+  if (table === 'time_entries')    return ' ORDER BY entry_date DESC, created_at ASC, id ASC';
   return '';
 }
 

@@ -44,6 +44,12 @@ let state = {
   editingStage: null,
   editingClient: null,
   clients: [],
+  teamMembers: [],
+  timeEntries: [],
+  timeTrackingAvailable: true,
+  hoursDate: '',
+  hoursShowInactive: false,
+  editingTimeEntry: null,
   activeProject: null,
   expandedProjects: new Set(),
   ganttMode: 'week',   // 'week' | 'day'
@@ -446,13 +452,15 @@ function startApiPolling() {
         .some(id => !document.getElementById(id)?.classList.contains('hidden'));
       if (modalOpen || calDragInProgress) return;
 
-      const [tasks, projects, stages, stageSlots, todoLists, clients] = await Promise.all([
+      const [tasks, projects, stages, stageSlots, todoLists, clients, teamMembers, timeEntries] = await Promise.all([
         remoteQuery({ action: 'select', table: 'tasks' }),
         remoteQuery({ action: 'select', table: 'projects' }),
         remoteQuery({ action: 'select', table: 'project_stages' }),
         remoteQuery({ action: 'select', table: 'stage_slots' }),
         remoteQuery({ action: 'select', table: 'todo_lists' }),
         remoteQuery({ action: 'select', table: 'clients' }),
+        remoteQuery({ action: 'select', table: 'team_members' }),
+        remoteQuery({ action: 'select', table: 'time_entries' }),
       ]);
 
       if (!Array.isArray(tasks) || !Array.isArray(projects)) return; // bad response
@@ -463,7 +471,9 @@ function startApiPolling() {
         JSON.stringify(stages)     !== JSON.stringify(state.stages)    ||
         JSON.stringify(stageSlots) !== JSON.stringify(state.stageSlots) ||
         JSON.stringify(todoLists)  !== JSON.stringify(state.todoLists)  ||
-        JSON.stringify(clients)    !== JSON.stringify(state.clients);
+        JSON.stringify(clients)    !== JSON.stringify(state.clients)    ||
+        JSON.stringify(teamMembers) !== JSON.stringify(state.teamMembers) ||
+        JSON.stringify(timeEntries) !== JSON.stringify(state.timeEntries);
 
       if (!changed) return;
 
@@ -473,6 +483,8 @@ function startApiPolling() {
       state.stageSlots = stageSlots;
       state.todoLists  = todoLists;
       state.clients    = clients;
+      state.teamMembers = teamMembers;
+      state.timeEntries = timeEntries;
       for (const list of state.todoLists) {
         state.todoItems[list.id] = await remoteQuery({
           action: 'select', table: 'todo_items', where: { list_id: list.id },
@@ -491,7 +503,25 @@ function startApiPolling() {
 
 /* ─── Data Loading ─────────────────────────────────────────────────────────── */
 async function loadAll() {
-  await Promise.all([loadTasks(), loadTodoLists(), loadProjects(), loadStages(), loadClients()]);
+  await Promise.all([loadTasks(), loadTodoLists(), loadProjects(), loadStages(), loadClients(), loadTeamMembers(), loadTimeEntries()]);
+}
+
+async function loadTeamMembers() {
+  state.teamMembers = await remoteQuery({ action: 'select', table: 'team_members' });
+}
+
+async function loadTimeEntries() {
+  try {
+    state.timeEntries = await remoteQuery({ action: 'select', table: 'time_entries' });
+    state.timeTrackingAvailable = true;
+  } catch (error) {
+    if (String(error.message).includes('Table not allowed') || String(error.message).includes('no such table')) {
+      state.timeEntries = [];
+      state.timeTrackingAvailable = false;
+      return;
+    }
+    throw error;
+  }
 }
 
 async function loadClients() {
@@ -563,6 +593,7 @@ function renderView() {
     projects: renderProjectsView,
     klanten:  renderKlanten,
     analyse:  renderBedrijfsanalyse,
+    hours:    renderHours,
     'quote-editor': renderQuoteEditorView,
   };
   (views[state.view] || renderMonthly)();
@@ -633,7 +664,7 @@ function setView(view) {
     const isActive = b.dataset.view === view || (b.dataset.view === 'calendar' && CAL_VIEWS.has(view));
     b.classList.toggle('active', isActive);
   });
-  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten', klanten:'Klanten', analyse:'Bedrijfsanalyse' };
+  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten', klanten:'Klanten', analyse:'Bedrijfsanalyse', hours:'Uren' };
   const titleEl = document.getElementById('toolbar-title');
   titleEl.className = '';
   titleEl.textContent = titles[view] ?? '';
@@ -2408,6 +2439,8 @@ function renderProjectDetail(proj) {
   document.getElementById('toolbar-title').textContent = proj.name;
 
   const projTasks = state.tasks.filter(t => t.project_id == proj.id);
+  const projTimeEntries = state.timeEntries.filter(entry => Number(entry.project_id) === Number(proj.id));
+  const projectHours = projTimeEntries.reduce((sum, entry) => sum + Number(entry.hours), 0);
   const doneCount = projTasks.filter(t => t.status === 'done').length;
   const pct       = projTasks.length ? Math.round(doneCount / projTasks.length * 100) : 0;
   const dateRange = (proj.start_date && proj.end_date)
@@ -2419,6 +2452,7 @@ function renderProjectDetail(proj) {
     <div class="proj-detail-meta">
       <span class="badge badge-proj-${proj.status}">${fmtProjStatus(proj.status)}</span>
       ${dateRange ? `<span class="proj-card-dates">📅 ${dateRange}</span>` : ''}
+      <span class="proj-hours-total"><span>Gewerkte uren</span><strong>${formatHours(projectHours)}</strong></span>
     </div>
     ${proj.description ? `<div class="proj-card-desc">${escHtml(proj.description)}</div>` : ''}
     <div class="proj-progress" style="margin-top:8px">
@@ -2735,6 +2769,12 @@ function wireProjectModal() {
 
   document.getElementById('proj-delete').onclick = async () => {
     if (!state.editingProject) return;
+    const bookedEntries = state.timeEntries.filter(entry => Number(entry.project_id) === Number(state.editingProject.id));
+    if (bookedEntries.length) {
+      const bookedHours = bookedEntries.reduce((sum, entry) => sum + Number(entry.hours), 0);
+      toast(`Dit project heeft ${formatHours(bookedHours)} geboekte uren en kan daarom niet worden verwijderd. Zet het project op Afgerond.`, 'warn', 6000);
+      return;
+    }
     if (!confirm(`Project "${state.editingProject.name}" verwijderen?`)) return;
     await remoteQuery({ action: 'delete', table: 'projects', where: { id: state.editingProject.id } });
     // Unlink tasks from this project
@@ -4023,6 +4063,120 @@ function wireNav() {
 }
 
 /* ─── Color Swatches ───────────────────────────────────────────────────────── */
+function formatHours(value) {
+  return Number(value).toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+function hoursDateLabel(dateStr) {
+  return new Date(`${dateStr}T12:00:00`).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function renderHours() {
+  if (!state.hoursDate) state.hoursDate = toDateStr(state.today);
+  const content = document.getElementById('content');
+  const entries = state.timeEntries.filter(e => e.entry_date === state.hoursDate);
+  const projectsById = new Map(state.projects.map(p => [Number(p.id), p]));
+  const activeProjects = state.projects.filter(p => p.status === 'active');
+  const editing = state.editingTimeEntry;
+  const editProject = editing ? projectsById.get(Number(editing.project_id)) : null;
+  const inactiveProjects = state.projects.filter(p => p.status !== 'active');
+  let availableProjects = state.hoursShowInactive ? [...activeProjects, ...inactiveProjects] : [...activeProjects];
+  if (editProject && !availableProjects.some(p => Number(p.id) === Number(editProject.id))) availableProjects.unshift(editProject);
+  const statusLabels = { done: 'afgerond', on_hold: 'in de wacht', rejected: 'afgewezen' };
+  const dayTotal = entries.reduce((sum, e) => sum + Number(e.hours), 0);
+  const myName = state.config?.name || '';
+  const selectedEmployee = editing?.employee || myName;
+  const employeeNames = [...new Set([myName, ...state.teamMembers.map(member => member.name), ...state.timeEntries.map(entry => entry.employee)].filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'nl'));
+  const myTotal = entries.filter(e => e.employee === myName).reduce((sum, e) => sum + Number(e.hours), 0);
+  const groups = new Map();
+  entries.forEach(entry => {
+    if (!groups.has(entry.employee)) groups.set(entry.employee, []);
+    groups.get(entry.employee).push(entry);
+  });
+
+  content.innerHTML = `
+    <div class="hours-page">
+      ${state.timeTrackingAvailable ? '' : '<div class="hours-server-warning"><strong>Urenregistratie is nog niet beschikbaar op deze server.</strong><span>Werk eerst de Raspberry Pi-server bij en klik daarna op Refresh.</span></div>'}
+      <section class="hours-entry-card">
+        <div class="hours-date-nav">
+          <button class="hours-date-step" id="hours-prev" aria-label="Vorige dag">←</button>
+          <div><div class="hours-eyebrow">Uren voor</div><label class="hours-date-label" for="hours-date">${escHtml(hoursDateLabel(state.hoursDate))}</label></div>
+          <input id="hours-date" type="date" value="${state.hoursDate}" aria-label="Datum" />
+          <button class="hours-date-step" id="hours-next" aria-label="Volgende dag">→</button>
+          <button class="btn btn-ghost btn-sm" id="hours-today">Vandaag</button>
+        </div>
+        <div class="hours-total-strip"><div><span>Jij</span><strong>${formatHours(myTotal)} uur</strong></div><div><span>Team vandaag</span><strong>${formatHours(dayTotal)} uur</strong></div></div>
+        <form id="hours-form" class="hours-form"${state.timeTrackingAvailable ? '' : ' aria-disabled="true"'}>
+          <div class="hours-form-heading">${editing ? 'Boeking aanpassen' : 'Nieuwe boeking'}</div>
+          <div class="hours-field"><label for="hours-employee">Medewerker</label><select id="hours-employee" required>${employeeNames.map(name => `<option value="${escHtml(name)}"${name === selectedEmployee ? ' selected' : ''}>${escHtml(name)}${name === myName ? ' (jij)' : ''}</option>`).join('')}</select></div>
+          <div class="hours-field hours-project-field"><label for="hours-project">Project</label><select id="hours-project" required><option value="">Kies een project…</option>${availableProjects.map(p => `<option value="${p.id}"${Number(editing?.project_id) === Number(p.id) ? ' selected' : ''}>${escHtml(p.name)}${p.status !== 'active' ? ` — ${statusLabels[p.status] || 'niet actief'}` : ''}</option>`).join('')}</select><label class="hours-inactive-toggle"><input id="hours-show-inactive" type="checkbox"${state.hoursShowInactive ? ' checked' : ''} /> Toon ook niet-actieve projecten</label></div>
+          <div class="hours-field"><label for="hours-amount">Aantal uren</label><input id="hours-amount" type="number" min="0.5" step="0.5" inputmode="decimal" placeholder="7,5" value="${editing ? Number(editing.hours) : ''}" required /></div>
+          <button class="btn btn-primary hours-save" type="submit"${state.timeTrackingAvailable ? '' : ' disabled'}>${editing ? 'Wijziging opslaan' : 'Uren opslaan'}</button>
+          ${editing ? '<button class="btn btn-ghost" type="button" id="hours-cancel">Annuleren</button>' : ''}
+        </form>
+      </section>
+      <section class="hours-list-card">
+        <div class="hours-list-header"><div><span class="hours-eyebrow">Overzicht</span><h3>${entries.length ? `${entries.length} boeking${entries.length === 1 ? '' : 'en'}` : 'Nog niets geboekt'}</h3></div><strong>${formatHours(dayTotal)} uur totaal</strong></div>
+        <div>${entries.length ? [...groups.entries()].map(([employee, employeeEntries]) => {
+          const employeeTotal = employeeEntries.reduce((sum, e) => sum + Number(e.hours), 0);
+          return `<div class="hours-person-group"><div class="hours-person-heading"><span>${escHtml(employee)}</span><strong>${formatHours(employeeTotal)} uur</strong></div>${employeeEntries.map(entry => {
+            const project = projectsById.get(Number(entry.project_id));
+            const color = /^#[0-9a-f]{6}$/i.test(project?.color || '') ? project.color : '#13ABBD';
+            return `<div class="hours-row"><span class="hours-project-dot" style="background:${color}"></span><span class="hours-project-name">${escHtml(project?.name || 'Verwijderd project')}</span><strong>${formatHours(entry.hours)} uur</strong><button class="hours-row-action" data-hours-edit="${entry.id}">Wijzig</button><button class="hours-row-action danger" data-hours-delete="${entry.id}">Verwijder</button></div>`;
+          }).join('')}</div>`;
+        }).join('') : '<div class="hours-empty">Kies een project en vul je eerste uren van deze dag in.</div>'}</div>
+      </section>
+    </div>`;
+
+  const moveDate = days => {
+    const d = new Date(`${state.hoursDate}T12:00:00`); d.setDate(d.getDate() + days);
+    state.hoursDate = toDateStr(d); state.editingTimeEntry = null; renderHours();
+  };
+  document.getElementById('hours-prev').onclick = () => moveDate(-1);
+  document.getElementById('hours-next').onclick = () => moveDate(1);
+  document.getElementById('hours-today').onclick = () => { state.hoursDate = toDateStr(state.today); state.editingTimeEntry = null; renderHours(); };
+  document.getElementById('hours-date').onchange = e => { if (e.target.value) { state.hoursDate = e.target.value; state.editingTimeEntry = null; renderHours(); } };
+  document.getElementById('hours-cancel')?.addEventListener('click', () => { state.editingTimeEntry = null; renderHours(); });
+  document.getElementById('hours-show-inactive').onchange = event => {
+    const draft = {
+      employee: document.getElementById('hours-employee').value,
+      project: document.getElementById('hours-project').value,
+      hours: document.getElementById('hours-amount').value,
+    };
+    state.hoursShowInactive = event.target.checked;
+    renderHours();
+    document.getElementById('hours-employee').value = draft.employee;
+    document.getElementById('hours-project').value = draft.project;
+    document.getElementById('hours-amount').value = draft.hours;
+  };
+  document.getElementById('hours-form').onsubmit = async event => {
+    event.preventDefault();
+    if (!state.timeTrackingAvailable) return;
+    const projectId = Number(document.getElementById('hours-project').value);
+    const hours = Number(document.getElementById('hours-amount').value);
+    if (!projectId || !Number.isFinite(hours) || hours <= 0 || !Number.isInteger(hours * 2)) { toast('Kies een project en vul uren in per half uur', 'warn', 3500); return; }
+    const employee = document.getElementById('hours-employee').value;
+    const otherHours = entries.filter(e => e.employee === employee && Number(e.id) !== Number(editing?.id)).reduce((sum, e) => sum + Number(e.hours), 0);
+    if (otherHours + hours > 12 && !window.confirm(`${employee} komt hiermee op ${formatHours(otherHours + hours)} uur voor deze dag. Toch opslaan?`)) return;
+    const data = { entry_date: state.hoursDate, hours, project_id: projectId, employee, updated_at: new Date().toISOString() };
+    try {
+      if (editing) await remoteQuery({ action: 'update', table: 'time_entries', data, where: { id: editing.id } });
+      else await remoteQuery({ action: 'insert', table: 'time_entries', data });
+      state.editingTimeEntry = null; await loadTimeEntries(); renderHours(); toast(editing ? 'Uren aangepast' : 'Uren opgeslagen');
+    } catch (error) { toast(`Opslaan mislukt: ${error.message}`, 'error', 5000); }
+  };
+  content.querySelectorAll('[data-hours-edit]').forEach(button => { button.onclick = () => { state.editingTimeEntry = state.timeEntries.find(e => Number(e.id) === Number(button.dataset.hoursEdit)) || null; renderHours(); document.getElementById('hours-project')?.focus(); }; });
+  content.querySelectorAll('[data-hours-delete]').forEach(button => {
+    button.onclick = async () => {
+      const entry = state.timeEntries.find(e => Number(e.id) === Number(button.dataset.hoursDelete));
+      if (!entry || !window.confirm(`Boeking van ${entry.employee} (${formatHours(entry.hours)} uur) verwijderen?`)) return;
+      try { await remoteQuery({ action: 'delete', table: 'time_entries', where: { id: entry.id } }); if (Number(state.editingTimeEntry?.id) === Number(entry.id)) state.editingTimeEntry = null; await loadTimeEntries(); renderHours(); toast('Boeking verwijderd'); }
+      catch (error) { toast(`Verwijderen mislukt: ${error.message}`, 'error', 5000); }
+    };
+  });
+}
+
 function buildColorSwatches() {
   const container = document.getElementById('task-color-swatches');
   COLORS.forEach((color, i) => {

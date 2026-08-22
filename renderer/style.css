@@ -218,6 +218,59 @@ html[data-theme="dark"] #sidebar-logo {
 .btn-icon { padding: 7px 9px; background: var(--bg3); border: 1px solid var(--border); color: var(--text2); border-radius: 7px; font-size: 16px; line-height: 1; }
 .btn-icon:hover { color: var(--text); }
 
+/* ─── Hours ─────────────────────────────────────────────────────────────────────────────── */
+.hours-page { max-width: 980px; margin: 8px auto 40px; display: grid; gap: 18px; }
+.hours-server-warning { padding: 12px 16px; display: flex; flex-direction: column; border: 1px solid var(--yellow); border-radius: 9px; background: color-mix(in srgb, var(--yellow) 10%, var(--bg2)); }
+.hours-server-warning span { color: var(--text2); font-size: 12px; }
+.hours-save:disabled { opacity: .45; cursor: not-allowed; }
+.hours-entry-card, .hours-list-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.hours-date-nav { min-height: 82px; padding: 16px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
+.hours-date-nav > div { flex: 1; }
+.hours-eyebrow { color: var(--text2); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.hours-date-label { color: var(--text); font-size: 18px; font-weight: 650; text-transform: capitalize; margin: 1px 0 0; }
+.hours-date-nav input[type="date"] { width: 142px; color-scheme: light; }
+html[data-theme="dark"] .hours-date-nav input[type="date"] { color-scheme: dark; }
+.hours-date-step { width: 34px; height: 34px; border: 1px solid var(--border); border-radius: 50%; background: var(--bg); color: var(--text); font-size: 16px; }
+.hours-date-step:hover { border-color: var(--accent); color: var(--accent); }
+.hours-total-strip { display: grid; grid-template-columns: repeat(2, 1fr); background: var(--bg); border-bottom: 1px solid var(--border); }
+.hours-total-strip > div { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 20px; }
+.hours-total-strip > div + div { border-left: 1px solid var(--border); }
+.hours-total-strip span { font-size: 12px; color: var(--text2); }
+.hours-total-strip strong { font-size: 16px; font-variant-numeric: tabular-nums; }
+.hours-form { padding: 20px; display: grid; grid-template-columns: 150px minmax(220px, 1fr) 130px auto auto; gap: 12px; align-items: start; }
+.hours-form-heading { grid-column: 1 / -1; font-size: 12px; color: var(--text2); }
+.hours-field select, .hours-field input { height: 40px; width: 100%; background: var(--bg); }
+.hours-inactive-toggle { margin: 7px 0 -4px; display: flex; align-items: center; gap: 7px; cursor: pointer; }
+.hours-inactive-toggle input { width: 14px; height: 14px; accent-color: var(--accent); }
+.hours-save { height: 40px; justify-content: center; }
+.hours-form > .btn { margin-top: 22px; }
+.hours-list-header { padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+.hours-list-header h3 { font-size: 17px; margin-top: 2px; }
+.hours-list-header > strong { color: var(--accent2); font-size: 18px; font-variant-numeric: tabular-nums; }
+.hours-person-group + .hours-person-group { border-top: 1px solid var(--border); }
+.hours-person-heading { padding: 10px 20px; display: flex; justify-content: space-between; background: var(--bg); color: var(--text2); font-size: 12px; }
+.hours-person-heading span { font-weight: 700; color: var(--text); }
+.hours-row { min-height: 54px; padding: 9px 20px; display: grid; grid-template-columns: 10px minmax(180px, 1fr) 80px auto auto; gap: 10px; align-items: center; }
+.hours-row + .hours-row { border-top: 1px solid var(--border); }
+.hours-project-dot { width: 8px; height: 8px; border-radius: 50%; }
+.hours-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hours-row > strong { text-align: right; font-variant-numeric: tabular-nums; }
+.hours-row-action { border: 0; background: transparent; color: var(--text2); font-size: 11px; padding: 5px; }
+.hours-row-action:hover { color: var(--accent); }
+.hours-row-action.danger:hover { color: var(--red); }
+.hours-empty { padding: 42px 20px; text-align: center; color: var(--text2); }
+@media (max-width: 760px) {
+  .hours-form { grid-template-columns: 1fr 110px; }
+  .hours-save { grid-column: 1 / -1; }
+  .hours-date-nav { flex-wrap: wrap; }
+  .hours-date-nav > div { min-width: calc(100% - 92px); }
+  .hours-date-nav input[type="date"] { flex: 1; }
+  .hours-row { grid-template-columns: 10px minmax(100px, 1fr) 70px; }
+  .hours-row-action { grid-row: 2; }
+  .hours-row-action[data-hours-edit] { grid-column: 2; justify-self: start; }
+  .hours-row-action[data-hours-delete] { grid-column: 3; }
+}
+
 /* ─── Calendar — Monthly ───────────────────────────────────────────────────── */
 .cal-nav { display: flex; align-items: center; gap: 12px; }
 .cal-nav span:not(.gpf-name) { font-size: 16px; font-weight: 600; min-width: 160px; text-align: center; }
@@ -1784,6 +1837,9 @@ tr:hover .qi-del { opacity: 1; }
   margin-bottom: 16px;
 }
 .proj-detail-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.proj-hours-total { margin-left: auto; display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); }
+.proj-hours-total span { color: var(--text2); font-size: 11px; }
+.proj-hours-total strong { color: var(--accent2); font-size: 18px; font-variant-numeric: tabular-nums; }
 .proj-done-divider {
   font-size: 11px;
   font-weight: 600;
