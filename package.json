@@ -1,6 +1,6 @@
 {
   "name": "project-manager",
-  "version": "2.1.19",
+  "version": "2.2.0",
   "description": "Shared project management app for teams",
   "main": "main.js",
   "scripts": {

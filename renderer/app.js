@@ -754,47 +754,61 @@ function buildMonthGrid(year, month, todayStr) {
   for (let day = 1; day <= remaining; day++) {
     allCells.push({ dayNum: day, dateStr: toDateStr(new Date(year, month + 1, day)), other: true });
   }
+  allCells.forEach((cell, index) => {
+    if (cell.dayNum !== 1 && !(cell.other && index === 0)) return;
+    const cellDate = new Date(`${cell.dateStr}T12:00:00`);
+    cell.monthLabel = cellDate.toLocaleDateString('nl-NL', { month: 'long' });
+  });
 
   // Group cells into weeks
-  const weeks = [];
+  let weeks = [];
   for (let i = 0; i < allCells.length; i += 7) weeks.push(allCells.slice(i, i + 7));
+  // Assign a boundary week to the month containing its Sunday. Adjacent
+  // scrolling month pages then meet without duplicating the same ISO week.
+  weeks = weeks.filter(week => {
+    const sunday = new Date(`${week[6].dateStr}T12:00:00`);
+    return sunday.getFullYear() === year && sunday.getMonth() === month;
+  });
 
   // Compute once for all weeks
   const monthVisStages = visibleStages();
 
-  let html = '<div class="monthly-grid">';
+  // Explicit row sizing prevents CSS Grid from stretching empty stage lanes
+  // differently in four-, five- and six-week months. Only day rows may grow.
+  const weekLayouts = weeks.map(week => {
+    const weekStart = week[0].dateStr;
+    const weekEnd = week[6].dateStr;
+    const weekStages = monthVisStages.filter(s =>
+      s.start_date && s.end_date &&
+      s.start_date <= weekEnd && s.end_date >= weekStart
+    );
+    const laned = weekStages.length ? _assignLanes(weekStages, weekStart, weekEnd) : [];
+    const numLanes = laned.length ? Math.max(...laned.map(item => item.lane)) + 1 : 0;
+    const stageRowHeight = numLanes > 0 ? Math.min(numLanes, 3) * 20 + 6 : 7;
+    return { week, weekStart, weekEnd, laned, numLanes, stageRowHeight };
+  });
+  const gridRows = ['auto', ...weekLayouts.flatMap(layout => [`${layout.stageRowHeight}px`, 'minmax(80px,1fr)'])].join(' ');
+
+  let html = `<div class="monthly-grid" style="grid-template-rows:${gridRows}">`;
   html += '<div class="cal-week-num-header">Wk</div>';
   ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach((d, i) => {
     html += `<div class="cal-header-cell${i >= 5 ? ' weekend' : ''}">${d}</div>`;
   });
 
-  weeks.forEach(week => {
-    const weekStart = week[0].dateStr;
-    const weekEnd   = week[6].dateStr;
+  weekLayouts.forEach(({ week, weekStart, weekEnd, laned, numLanes, stageRowHeight }, weekIndex) => {
     const weekNum   = getISOWeek(new Date(weekStart));
 
-    // Stages overlapping this week (must have both start and end)
-    const weekStages = monthVisStages.filter(s =>
-      s.start_date && s.end_date &&
-      s.start_date <= weekEnd && s.end_date >= weekStart
-    );
-
-    const laned = weekStages.length ? _assignLanes(weekStages, weekStart, weekEnd) : [];
-    const numLanes = laned.length ? Math.max(...laned.map(l => l.lane)) + 1 : 0;
-
     // Week-num cell spans 2 grid rows (stage bar row + day cells row)
-    html += `<div class="cal-week-num" style="grid-row: span 2">${weekNum}</div>`;
+    const weekToneClass = weekNum % 2 === 0 ? ' week-alt' : '';
+    html += `<div class="cal-week-num${weekToneClass}" style="grid-row: span 2">${weekNum}</div>`;
 
     // Stage bars row (grid-column 2/9 = all 7 day columns)
     if (numLanes > 0) {
-      const rowH = Math.min(numLanes, 3) * 20 + 4;
-      html += `<div class="month-stage-bar-row" style="height:${rowH}px">`;
+      html += `<div class="month-stage-bar-row${weekToneClass}${weekIndex === 0 ? ' first-week' : ''}" style="height:${stageRowHeight}px;grid-template-rows:repeat(${Math.min(numLanes, 3)},20px)">`;
       laned.slice(0, 21).forEach(({ s, lane, start, end }) => {
         if (lane >= 3) return; // max 3 lanes
         const startDow = (new Date(start + 'T00:00:00').getDay() + 6) % 7;
         const endDow   = (new Date(end   + 'T00:00:00').getDay() + 6) % 7;
-        const left  = (startDow / 7 * 100).toFixed(2);
-        const width = ((endDow - startDow + 1) / 7 * 100).toFixed(2);
         const isStart = s.start_date >= weekStart;
         const isEnd   = s.end_date   <= weekEnd;
         const br = `${isStart ? '3px' : '0'} ${isEnd ? '3px' : '0'} ${isEnd ? '3px' : '0'} ${isStart ? '3px' : '0'}`;
@@ -802,16 +816,16 @@ function buildMonthGrid(year, month, todayStr) {
         const label = proj ? `${proj.name} · ${s.name}` : s.name;
         const sBarBg = s.color || '#4f8ef7';
         html += `<div class="month-sbar" data-stage-id="${s.stage_id}"
-          style="left:${left}%;width:${width}%;top:${lane * 20 + 2}px;background:${sBarBg};color:${contrastColor(sBarBg)};border-radius:${br}"
-          title="${escHtml(label)}">${isStart ? escHtml(label) : ''}</div>`;
+          style="grid-column:${startDow + 1}/${endDow + 2};grid-row:${lane + 1};background:${sBarBg};color:${contrastColor(sBarBg)};border-radius:${br}"
+          title="${escHtml(label)}">${escHtml(label)}</div>`;
       });
       html += `</div>`;
     } else {
-      html += `<div class="month-stage-bar-row month-stage-bar-row-empty"></div>`;
+      html += `<div class="month-stage-bar-row month-stage-bar-row-empty${weekToneClass}${weekIndex === 0 ? ' first-week' : ''}"></div>`;
     }
 
     // 7 day cells
-    week.forEach(c => { html += calCell(c.dayNum, c.dateStr, c.other, todayStr); });
+    week.forEach(c => { html += calCell(c.dayNum, c.dateStr, c.other, todayStr, weekToneClass.trim(), c.monthLabel || ''); });
   });
 
   html += '</div>';
@@ -1068,13 +1082,13 @@ function stagesActiveOnDate(dateStr) {
     });
 }
 
-function calCell(dayNum, dateStr, otherMonth, todayStr) {
+function calCell(dayNum, dateStr, otherMonth, todayStr, weekToneClass = '', monthLabel = '') {
   const dayTasks = state.tasks.filter(t => t.date === dateStr && calTaskVisible(t));
   const isToday = dateStr === todayStr;
   const dow = new Date(dateStr + 'T00:00:00').getDay(); // 0=Sun,6=Sat
   const isWeekend = dow === 0 || dow === 6;
   const holiday = !otherMonth ? getDutchHolidays(parseInt(dateStr.slice(0,4)))[dateStr] : null;
-  const classes = ['cal-cell', otherMonth && 'other-month', isToday && 'today', isWeekend && 'weekend', holiday && 'holiday']
+  const classes = ['cal-cell', weekToneClass, otherMonth && 'other-month', isToday && 'today', isWeekend && 'weekend', holiday && 'holiday']
     .filter(Boolean).join(' ');
 
   let chips = dayTasks.slice(0, 3).map(t => {
@@ -1090,7 +1104,7 @@ function calCell(dayNum, dateStr, otherMonth, todayStr) {
   }
 
   return `<div class="${classes}" data-date="${dateStr}">
-    <div class="cal-day-num">${dayNum}${holiday ? `<span class="cal-holiday-name">${escHtml(holiday)}</span>` : ''}</div>
+    <div class="cal-day-num">${dayNum}${monthLabel ? `<span class="cal-month-shift">${escHtml(monthLabel)}</span>` : ''}${holiday ? `<span class="cal-holiday-name">${escHtml(holiday)}</span>` : ''}</div>
     <div class="cal-chips">${chips}</div>
   </div>`;
 }
@@ -4111,7 +4125,7 @@ function renderHours() {
           <div class="hours-form-heading">${editing ? 'Boeking aanpassen' : 'Nieuwe boeking'}</div>
           <div class="hours-field"><label for="hours-employee">Medewerker</label><select id="hours-employee" required>${employeeNames.map(name => `<option value="${escHtml(name)}"${name === selectedEmployee ? ' selected' : ''}>${escHtml(name)}${name === myName ? ' (jij)' : ''}</option>`).join('')}</select></div>
           <div class="hours-field hours-project-field"><label for="hours-project">Project</label><select id="hours-project" required><option value="">Kies een project…</option>${availableProjects.map(p => `<option value="${p.id}"${Number(editing?.project_id) === Number(p.id) ? ' selected' : ''}>${escHtml(p.name)}${p.status !== 'active' ? ` — ${statusLabels[p.status] || 'niet actief'}` : ''}</option>`).join('')}</select><label class="hours-inactive-toggle"><input id="hours-show-inactive" type="checkbox"${state.hoursShowInactive ? ' checked' : ''} /> Toon ook niet-actieve projecten</label></div>
-          <div class="hours-field"><label for="hours-amount">Aantal uren</label><input id="hours-amount" type="number" min="0.5" step="0.5" inputmode="decimal" placeholder="7,5" value="${editing ? Number(editing.hours) : ''}" required /></div>
+          <div class="hours-field"><label for="hours-amount">Aantal uren</label><input id="hours-amount" type="number" min="0.5" step="0.5" inputmode="decimal" placeholder="0" value="${editing ? Number(editing.hours) : ''}" required /></div>
           <button class="btn btn-primary hours-save" type="submit"${state.timeTrackingAvailable ? '' : ' disabled'}>${editing ? 'Wijziging opslaan' : 'Uren opslaan'}</button>
           ${editing ? '<button class="btn btn-ghost" type="button" id="hours-cancel">Annuleren</button>' : ''}
         </form>

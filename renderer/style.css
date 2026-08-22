@@ -18,6 +18,7 @@
   --cal-today-bg: #e6f7fa;
   --cal-holiday-bg: #f0fbfc;
   --cal-holiday-badge-bg: #c8eef4;
+  --week-alt-bg: #f0ede7;
 }
 
 html[data-theme="dark"] {
@@ -36,6 +37,7 @@ html[data-theme="dark"] {
   --cal-today-bg: #0a2d33;
   --cal-holiday-bg: #0e2e32;
   --cal-holiday-badge-bg: rgba(34,196,216,.15);
+  --week-alt-bg: #303137;
 }
 
 /* ─── Reset / Base ─────────────────────────────────────────────────────────── */
@@ -349,13 +351,18 @@ html[data-theme="dark"] .hours-date-nav input[type="date"] { color-scheme: dark;
   overflow: hidden;
 }
 .cal-cell:hover { background: var(--bg3); }
+.cal-cell.week-alt:not(.today):not(.holiday) { background: var(--week-alt-bg); }
+.cal-cell.week-alt:hover { background: var(--bg3); }
 .cal-cell.today { background: var(--cal-today-bg); }
 .cal-cell.today .cal-day-num { color: var(--accent); font-weight: 700; }
-.cal-cell.other-month { opacity: .4; }
-.cal-cell.weekend { background: var(--bg); }
+.cal-cell.other-month { opacity: 1; }
+.cal-cell.weekend:not(.week-alt):not(.today):not(.holiday) { background: var(--bg2); }
 .cal-header-cell.weekend { color: var(--text2); opacity: .6; }
-.cal-cell.other-month .cal-day-num { color: var(--text2); }
+.cal-cell.other-month .cal-day-num { color: var(--text); }
 .cal-cell.holiday { background: var(--cal-holiday-bg); }
+.cal-week-num { background: var(--bg2); }
+.cal-week-num.week-alt { background: var(--week-alt-bg); }
+.cal-month-shift { margin-left: 7px; color: var(--text2); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .cal-holiday-name {
   display: inline-block;
   margin-left: 5px;
@@ -396,23 +403,26 @@ html[data-theme="dark"] .hours-date-nav input[type="date"] { color-scheme: dark;
 /* ─── Monthly stage spanning bars ─────────────────────────────────────────── */
 .month-stage-bar-row {
   grid-column: 2 / 9;
-  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1.2fr)) repeat(2, minmax(0, 0.7fr));
+  grid-auto-flow: row;
+  column-gap: 1px;
   overflow: hidden;
   min-height: 4px;
-  background: var(--bg2);       /* same bg as day cells → they read as one unit */
+  background: var(--bg2);
   padding-top: 3px;
+  border-top: 3px solid var(--border);
 }
-.month-stage-bar-row-empty { min-height: 0; height: 4px; }
+.month-stage-bar-row.week-alt { background: var(--week-alt-bg); }
+.month-stage-bar-row-empty { min-height: 0; height: 7px; padding: 0; }
 
 /* Week separator: a clear horizontal rule before each week group */
-.cal-week-num          { border-top: 1px solid var(--border); }
-.month-stage-bar-row   { border-top: 1px solid var(--border); }
+.cal-week-num          { border-top: 3px solid var(--border); }
+.month-stage-bar-row.first-week { border-top-width: 1px; }
 
 /* Suppress the top border on the very first week (sits right under the header) */
-.monthly-grid > .cal-week-num:nth-child(9),
-.monthly-grid > .month-stage-bar-row:nth-child(10) { border-top: none; }
+.monthly-grid > .cal-week-num:nth-child(9) { border-top-width: 1px; }
 .month-sbar {
-  position: absolute;
   height: 17px;
   font-size: 10px;
   line-height: 17px;
@@ -423,6 +433,9 @@ html[data-theme="dark"] .hours-date-nav input[type="date"] { color-scheme: dark;
   text-overflow: ellipsis;
   cursor: pointer;
   transition: filter .12s;
+  align-self: start;
+  margin-top: 1px;
+  min-width: 0;
 }
 .month-sbar:hover { filter: brightness(1.15); }
 
