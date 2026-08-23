@@ -595,6 +595,7 @@ function renderView() {
     analyse:  renderBedrijfsanalyse,
     hours:    renderHours,
     'quote-editor': renderQuoteEditorView,
+    'quote-bundle': renderQuoteBundleView,
   };
   (views[state.view] || renderMonthly)();
 }
@@ -661,10 +662,12 @@ function setView(view) {
   state.view = view;
   state.activeProject = null;
   document.querySelectorAll('.nav-btn[data-view]').forEach(b => {
-    const isActive = b.dataset.view === view || (b.dataset.view === 'calendar' && CAL_VIEWS.has(view));
+    const isActive = b.dataset.view === view
+      || (b.dataset.view === 'calendar' && CAL_VIEWS.has(view))
+      || (b.dataset.view === 'quotes' && view === 'quote-bundle');
     b.classList.toggle('active', isActive);
   });
-  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten', klanten:'Klanten', analyse:'Bedrijfsanalyse', hours:'Uren' };
+  const titles = { monthly:'', weekly:'', daily:'', yearly:'Kalender', mytasks:'Mijn Taken', todo:'Takenlijsten', quotes:'Offertes', gantt:'Gantt', projects:'Projecten', klanten:'Klanten', analyse:'Bedrijfsanalyse', hours:'Uren', 'quote-bundle':'Offertebundel' };
   const titleEl = document.getElementById('toolbar-title');
   titleEl.className = '';
   titleEl.textContent = titles[view] ?? '';
@@ -5119,6 +5122,8 @@ function wireBizChatPanel() {
 // qe = quoteEditor live state (in-memory while editing)
 let qe = null;
 let _qeDirty = false;
+let _quoteBundle = null;
+let _qeAcceptedEditConfirmed = false;
 function markQEDirty() { _qeDirty = true; }
 
 // Vaste-stuksprijs-regels uit extras_json, met terugval op het oude formaat (één
@@ -5149,6 +5154,8 @@ function freshQE(quote) {
     client_postcode: stored.client_postcode ?? '',
     client_email: stored.client_email ?? '',
     client_phone: stored.client_phone ?? '',
+    po_number: stored.po_number ?? '',
+    bundle_po_number: stored.bundle_po_number ?? '',
     quote_date: quote?.quote_date ?? toDateStr(new Date()),
     margin:     quote?.margin     ?? 20,
     outsource_margin: stored.outsource_margin ?? 15,
@@ -5252,7 +5259,7 @@ function _renderQuoteTable() {
           ${quoteStatusOptionsHtml(q.status)}
         </select>${fulfilled ? `<span title="Gekoppeld project is afgerond — al geleverd" style="font-size:10px;color:var(--text2);opacity:0.7">✓ geleverd</span>` : ''}
       </div></td>
-      <td><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></td>
+      <td><div class="quote-row-actions"><span class="quote-open-arrow" aria-hidden="true">→</span><button class="quote-delete-btn" data-id="${q.id}" title="Verwijder">✕</button></div></td>
     </tr>`;
   };
 
@@ -5369,7 +5376,6 @@ function _renderQuoteTable() {
       if (renderedProjectGroups.has(key)) return;
       renderedProjectGroups.add(key);
       const members = projectGroupMap.get(key);
-      const expanded = _expandedProjectGroups.has(key);
       const client = [...new Set(members.map(m => m.client).filter(Boolean))].join(', ') || '—';
       const latestDate = members.map(m => m.quote_date || '').sort().at(-1) || '—';
       const sum = members.filter(m => m.status !== 'rejected').reduce((acc, m) => acc + Number(m.total_price || 0), 0);
@@ -5386,14 +5392,13 @@ function _renderQuoteTable() {
           : `<span class="ql-group-status">${visible.map(s => fmtQuoteStatus(s)).join(' + ')}</span>`;
       }
       html += `<tr class="quote-project-group" data-project="${escHtml(key)}">
-        <td><strong>${escHtml(key)}</strong> <span class="ql-group-chevron ql-project-chevron">${expanded ? '▾' : '▸'}</span></td>
+        <td><strong>${escHtml(key)}</strong></td>
         <td>${escHtml(client)}</td>
         <td>${latestDate}</td>
         <td class="amount">${fmtEur(sum)} <span class="ql-group-total-note">${members.length} delen</span></td>
         <td>${statusCell}</td>
-        <td><button class="quote-group-pdf-btn" data-project="${escHtml(key)}" title="Bundel PDF exporteren">📄</button></td>
+        <td><span class="quote-open-arrow" aria-hidden="true">→</span></td>
       </tr>`;
-      if (expanded) members.forEach(member => { html += renderQuoteRow(member, true); });
     } else {
       html += renderQuoteRow(q);
     }
@@ -5437,21 +5442,10 @@ function _renderQuoteTable() {
   });
 
   document.querySelectorAll('.quote-project-group').forEach(row => {
-    row.onclick = (e) => {
-      if (e.target.closest('.quote-group-pdf-btn')) return;
+    row.onclick = async () => {
       const key = row.dataset.project;
-      if (_expandedProjectGroups.has(key)) _expandedProjectGroups.delete(key);
-      else _expandedProjectGroups.add(key);
-      _renderQuoteTable();
-    };
-  });
-
-  document.querySelectorAll('.quote-group-pdf-btn').forEach(btn => {
-    btn.onclick = async (e) => {
-      e.stopPropagation();
-      const key = btn.dataset.project;
       const members = projectGroupMap.get(key);
-      if (members) await exportProjectGroupPdf(key, members);
+      if (members) await openQuoteBundle(key, members);
     };
   });
 
@@ -5912,6 +5906,7 @@ function qwLoadImage(file) {
 async function openQuoteEditor(quote) {
   qe = freshQE(quote);
   _qeDirty = false;
+  _qeAcceptedEditConfirmed = false;
   state.view = 'quote-editor';   // so setView() can detect unsaved changes on back
 
   // Load existing items if editing
@@ -5925,6 +5920,121 @@ async function openQuoteEditor(quote) {
   }
 
   renderQuoteEditorView();
+}
+
+async function openQuoteBundle(projectKey, members) {
+  const active = members.filter(m => m.status !== 'rejected');
+  if (!active.length) { toast('Deze bundel bevat alleen afgewezen offertes', 'warn'); return; }
+  const fullMembers = await Promise.all(active.map(async member => {
+    const [full] = await remoteQuery({ action: 'select', table: 'quotes', where: { id: member.id } });
+    const quote = full || member;
+    const items = await remoteQuery({ action: 'select', table: 'quote_items', where: { quote_id: member.id } });
+    return { ...quote, _bundleProfit: computeQuoteProfit(quote, items) };
+  }));
+  const explicitBundlePos = [...new Set(fullMembers.map(quoteBundlePoNumber).filter(Boolean))];
+  const legacyPos = [...new Set(fullMembers.map(quotePoNumber).filter(Boolean))];
+  _quoteBundle = {
+    projectKey,
+    members: fullMembers,
+    allMemberIds: members.map(member => member.id),
+    bundlePoNumber: explicitBundlePos[0] || (legacyPos.length === 1 ? legacyPos[0] : ''),
+  };
+  setView('quote-bundle');
+}
+
+function renderQuoteBundleView() {
+  if (!_quoteBundle) { setView('quotes'); return; }
+  const { projectKey, members, bundlePoNumber } = _quoteBundle;
+  const ctrl = document.getElementById('toolbar-controls');
+  const total = members.reduce((sum, member) => sum + Number(member.total_price || 0), 0);
+  const profit = members.reduce((sum, member) => sum + Number(member._bundleProfit || 0), 0);
+  const clients = [...new Set(members.map(member => (member.client || '').trim()).filter(Boolean))];
+
+  document.getElementById('toolbar-title').textContent = projectKey;
+  ctrl.innerHTML = `
+    <button class="btn btn-ghost btn-sm" id="qb-back">← Offertes</button>
+    <button class="btn btn-secondary btn-sm" id="qb-pdf">📄 PDF</button>
+    <div class="pdf-dropdown" id="qb-mb-dropdown">
+      <button class="btn btn-secondary btn-sm" id="qb-mb-btn">💶 Moneybird ▾</button>
+      <div class="pdf-dropdown-menu hidden" id="qb-mb-menu">
+        <button class="pdf-dropdown-item" data-qb-mode="onderdelen">📋 Eén regel per onderdeel</button>
+        <button class="pdf-dropdown-item" data-qb-mode="totaal">💰 Eén totaalregel</button>
+      </div>
+    </div>`;
+
+  document.getElementById('content').innerHTML = `
+    <div class="qb-shell">
+      <div class="qb-summary">
+        <div>
+          <span class="qb-kicker">Samengestelde offerte</span>
+          <h2>${escHtml(projectKey)}</h2>
+          <p>${escHtml(clients.join(', ') || 'Geen klant ingevuld')} · ${members.length} onderdelen</p>
+          <div class="qb-po-row">
+            <label for="qb-po">PO-nummer bundel</label>
+            <input class="qi-input" id="qb-po" value="${escHtml(bundlePoNumber || '')}" placeholder="Bijv. PO-2026-1042" />
+            <button class="btn btn-secondary btn-sm" id="qb-po-save">Opslaan</button>
+          </div>
+        </div>
+        <div class="qb-figures">
+          <div class="qb-earning"><span>Eigen verdiensten</span><strong>${fmtEur(profit)}</strong><small>${total ? Math.round(profit / total * 100) : 0}% van offertebedrag</small></div>
+          <div class="qb-total"><span>Totaal excl. BTW</span><strong>${fmtEur(total)}</strong><small>${fmtEur(total * 1.21)} incl. BTW</small></div>
+        </div>
+      </div>
+      <div class="qb-list">
+        ${members.map((member, index) => `
+          <button class="qb-part" data-quote-id="${member.id}">
+            <span class="qb-index">${String(index + 1).padStart(2, '0')}</span>
+            <span class="qb-part-main"><strong>${escHtml(member.name)}</strong><small>${member.quote_date || 'Geen datum'}</small></span>
+            <span class="badge badge-${member.status}">${fmtQuoteStatus(member.status)}</span>
+            <span class="qb-price"><strong>${fmtEur(member.total_price)}</strong><small>${fmtEur(member._bundleProfit)} verdiensten</small></span>
+            <span class="qb-arrow">→</span>
+          </button>`).join('')}
+      </div>
+      <p class="qb-note">Afgewezen offertes zijn niet opgenomen in deze bundel, de PDF of de Moneybird-factuur.</p>
+    </div>`;
+
+  document.getElementById('qb-back').onclick = () => { _quoteBundle = null; setView('quotes'); };
+  document.getElementById('qb-pdf').onclick = () => exportProjectGroupPdf(projectKey, members);
+  document.getElementById('qb-po-save').onclick = saveQuoteBundlePoNumber;
+  document.getElementById('qb-mb-btn').onclick = e => { e.stopPropagation(); document.getElementById('qb-mb-menu').classList.toggle('hidden'); };
+  document.querySelectorAll('[data-qb-mode]').forEach(btn => {
+    btn.onclick = () => {
+      document.getElementById('qb-mb-menu').classList.add('hidden');
+      chooseMoneybirdPayment(btn.dataset.qbMode, () => exportQuoteBundleToMoneybird(btn.dataset.qbMode), () => exportQuoteBundle50ToMoneybird(btn.dataset.qbMode));
+    };
+  });
+  document.querySelectorAll('.qb-part').forEach(part => {
+    part.onclick = async () => {
+      const member = members.find(item => item.id == part.dataset.quoteId);
+      if (member) await openQuoteEditor(member);
+    };
+  });
+}
+
+async function saveQuoteBundlePoNumber() {
+  if (!_quoteBundle) return;
+  const value = (document.getElementById('qb-po')?.value || '').trim();
+  try {
+    const ids = _quoteBundle.allMemberIds || _quoteBundle.members.map(member => member.id);
+    for (const id of ids) {
+      const [quote] = await remoteQuery({ action: 'select', table: 'quotes', where: { id }, columns: ['id', 'extras_json'] });
+      if (!quote) continue;
+      let extras = {};
+      try { extras = JSON.parse(quote.extras_json || '{}') || {}; } catch (_) {}
+      extras.bundle_po_number = value;
+      await remoteQuery({ action: 'update', table: 'quotes', data: { extras_json: JSON.stringify(extras) }, where: { id } });
+    }
+    _quoteBundle.bundlePoNumber = value;
+    _quoteBundle.members.forEach(member => {
+      let extras = {};
+      try { extras = JSON.parse(member.extras_json || '{}') || {}; } catch (_) {}
+      extras.bundle_po_number = value;
+      member.extras_json = JSON.stringify(extras);
+    });
+    toast(value ? 'PO-nummer voor de hele bundel opgeslagen' : 'PO-nummer van bundel verwijderd');
+  } catch (err) {
+    toast('PO-nummer opslaan mislukt: ' + (err.message || err), 'error', 5000);
+  }
 }
 
 function renderQuoteEditorView() {
@@ -5946,7 +6056,7 @@ function renderQuoteEditorView() {
     <div class="pdf-dropdown" id="mb-dropdown">
       <button class="btn btn-secondary btn-sm" id="qe-mb-btn" ${!qe.id ? 'style="display:none"' : ''} title="Factuur aanmaken in Moneybird">💶 Moneybird ▾</button>
       <div class="pdf-dropdown-menu hidden" id="mb-dropdown-menu">
-        <button class="pdf-dropdown-item" id="mb-gespec">📋 Gespecificeerde factuur</button>
+        <button class="pdf-dropdown-item" id="mb-gespec">📋 Per regel</button>
         <button class="pdf-dropdown-item" id="mb-totaal">💰 Totaalfactuur</button>
       </div>
     </div>`;
@@ -5975,8 +6085,14 @@ function renderQuoteEditorView() {
     document.getElementById('pdf-dropdown-menu')?.classList.add('hidden');
     document.getElementById('mb-dropdown-menu').classList.toggle('hidden');
   });
-  document.getElementById('mb-gespec')?.addEventListener('click', () => { document.getElementById('mb-dropdown-menu').classList.add('hidden'); exportToMoneybird('gespecificeerd'); });
-  document.getElementById('mb-totaal')?.addEventListener('click',  () => { document.getElementById('mb-dropdown-menu').classList.add('hidden'); exportToMoneybird('totaal'); });
+  document.getElementById('mb-gespec')?.addEventListener('click', () => {
+    document.getElementById('mb-dropdown-menu').classList.add('hidden');
+    chooseMoneybirdPayment('gespecificeerd', () => exportToMoneybird('gespecificeerd'), () => exportQuote50ToMoneybird('gespecificeerd'));
+  });
+  document.getElementById('mb-totaal')?.addEventListener('click',  () => {
+    document.getElementById('mb-dropdown-menu').classList.add('hidden');
+    chooseMoneybirdPayment('totaal', () => exportToMoneybird('totaal'), () => exportQuote50ToMoneybird('totaal'));
+  });
   document.addEventListener('click', e => {
     if (!e.target.closest('#pdf-dropdown')) document.getElementById('pdf-dropdown-menu')?.classList.add('hidden');
     if (!e.target.closest('#mb-dropdown'))  document.getElementById('mb-dropdown-menu')?.classList.add('hidden');
@@ -5990,11 +6106,14 @@ function renderQuoteEditorView() {
       <div class="qe-fields">
         <input class="qi-input qe-name"   id="qe-name"   value="${escHtml(qe.name)}"       placeholder="Projectnaam *" />
         <input class="qi-input qe-date"   id="qe-date"   type="date" value="${qe.quote_date}" />
+        <input class="qi-input qe-po" id="qe-po" value="${escHtml(qe.po_number)}" placeholder="PO-nummer" title="Inkoop- of purchaseordernummer van de klant" />
         <select class="qi-input qe-status" id="qe-status">
           ${quoteStatusOptionsHtml(qe.status)}
         </select>
       </div>
     </div>
+
+    ${qe.status === 'accepted' ? `<div class="qe-accepted-warning">✓ Deze offerte is geaccepteerd. Bij de eerste wijziging vragen we om bevestiging.</div>` : ''}
 
     <!-- Project link row -->
     <div class="qe-project-link-row">
@@ -6185,6 +6304,24 @@ function renderQuoteEditorView() {
     <div class="qe-totals-panel" id="qe-totals-panel"></div>
   `;
 
+  // Geaccepteerde offertes blijven bewerkbaar, maar nooit per ongeluk: de eerste
+  // interactie met een bewerkbaar element wordt afgevangen en vraagt bevestiging.
+  if (qe.status === 'accepted' && !_qeAcceptedEditConfirmed) {
+    const editableSelector = 'input, textarea, select, .qe-add-btn, .qe-img-btn, .qe-extra-del, .qe-extra-add-btn, #qe-ai-gen-btn, #qe-project-link-clear, #qe-save-as-client';
+    const guardAcceptedEdit = e => {
+      if (_qeAcceptedEditConfirmed || !e.target.closest?.(editableSelector)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (confirm('Deze offerte is al geaccepteerd. Weet je zeker dat je haar wilt wijzigen?')) {
+        _qeAcceptedEditConfirmed = true;
+        document.querySelector('.qe-accepted-warning')?.classList.add('editing');
+        toast('Bewerken van geaccepteerde offerte ontgrendeld', 'warn', 3500);
+      }
+    };
+    content.addEventListener('pointerdown', guardAcceptedEdit, true);
+    content.addEventListener('beforeinput', guardAcceptedEdit, true);
+  }
+
   // Wire preset dropdown menus
   wirePresetMenus();
 
@@ -6196,6 +6333,7 @@ function renderQuoteEditorView() {
   document.getElementById('qe-client-postcode').addEventListener('input', e => { qe.client_postcode = e.target.value; markQEDirty(); });
   document.getElementById('qe-client-email').addEventListener('input', e => { qe.client_email = e.target.value; markQEDirty(); });
   document.getElementById('qe-client-phone').addEventListener('input', e => { qe.client_phone = e.target.value; markQEDirty(); });
+  document.getElementById('qe-po').addEventListener('input', e => { qe.po_number = e.target.value; markQEDirty(); });
 
   // Client picker — selecting an existing client fills the fields
   document.getElementById('qe-client-select').addEventListener('change', e => {
@@ -6304,6 +6442,10 @@ function renderQuoteEditorView() {
     if (qe.id) {
       await changeQuoteStatus(qe, e.target.value);
       toast('Status opgeslagen');
+      if (qe.status === 'accepted') {
+        _qeAcceptedEditConfirmed = false;
+        renderQuoteEditorView();
+      }
     } else {
       qe.status = e.target.value;
       markQEDirty();
@@ -7083,6 +7225,8 @@ async function performSave() {
     client_postcode: qe.client_postcode,
     client_email: qe.client_email,
     client_phone: qe.client_phone,
+    po_number: qe.po_number,
+    bundle_po_number: qe.bundle_po_number,
     extra_images: qe.extra_images,
     pdf_opts: qe.pdf_opts,
     outsource_margin: qe.outsource_margin,
@@ -7192,6 +7336,8 @@ async function duplicateQuote() {
       client_postcode: qe.client_postcode,
       client_email:    qe.client_email,
       client_phone:    qe.client_phone,
+      po_number:       qe.po_number,
+      bundle_po_number: qe.bundle_po_number,
       extra_images:    qe.extra_images,
       pdf_opts:        qe.pdf_opts,
       outsource_margin: qe.outsource_margin,
@@ -8070,32 +8216,186 @@ async function getMoneybirdTaxRateId() {
   return rate.id;
 }
 
-async function findOrCreateMoneybirdContact() {
-  const name = (qe.client || '').trim();
+async function findOrCreateMoneybirdContact(quote = qe) {
+  const name = (quote.client || '').trim();
   if (!name) throw new Error('Vul eerst een klantnaam in');
+
+  const contactName = (quote.client_contact || '').trim();
+  const contactEmail = (quote.client_email || '').trim();
+  const nameParts = contactName.split(/\s+/).filter(Boolean);
+  const parts = (quote.client_postcode || '').trim().split(/\s+/);
+  const zipcode = parts[0] || '';
+  const city = parts.slice(1).join(' ');
+  // Alleen gevulde offertevelden synchroniseren: lege velden mogen bestaande
+  // klantgegevens in Moneybird nooit onbedoeld wissen.
+  const syncedFields = {
+    ...(contactName ? {
+      firstname: nameParts[0] || '',
+      lastname: nameParts.slice(1).join(' '),
+      attention: contactName,
+      send_invoices_to_attention: contactName,
+    } : {}),
+    ...(contactEmail ? {
+      email: contactEmail,
+      send_invoices_to_email: contactEmail,
+    } : {}),
+    ...(quote.client_address ? { address1: quote.client_address } : {}),
+    ...(zipcode ? { zipcode } : {}),
+    ...(city ? { city } : {}),
+    ...(quote.client_phone ? { phone: quote.client_phone } : {}),
+  };
 
   // Search existing contacts
   const results = await moneybirdFetch('GET', `contacts.json?query=${encodeURIComponent(name)}`);
-  if (Array.isArray(results) && results.length > 0) return results[0].id;
+  if (Array.isArray(results) && results.length > 0) {
+    const existing = results[0];
+    if (Object.keys(syncedFields).length) {
+      await moneybirdFetch('PATCH', `contacts/${existing.id}.json`, { contact: syncedFields });
+    }
+    return existing.id;
+  }
 
   // Create new contact
-  const parts = (qe.client_postcode || '').trim().split(/\s+/);
-  const zipcode = parts[0] || '';
-  const city    = parts.slice(1).join(' ');
-  const nameParts = (qe.client_contact || '').trim().split(/\s+/);
   const newContact = await moneybirdFetch('POST', 'contacts.json', {
     contact: {
       company_name: name,
-      firstname:    nameParts[0] || '',
-      lastname:     nameParts.slice(1).join(' '),
-      address1:     qe.client_address || '',
-      zipcode,
-      city,
-      email:        qe.client_email   || '',
-      phone:        qe.client_phone   || '',
+      ...syncedFields,
     },
   });
   return newContact.id;
+}
+
+function chooseMoneybirdPayment(lineMode, onFull, onSplit) {
+  const label = lineMode === 'totaal' ? 'één totaalregel' : (lineMode === 'onderdelen' ? 'één regel per onderdeel' : 'gespecificeerde regels');
+  const overlay = document.createElement('div');
+  overlay.className = 'qe-unsaved-overlay';
+  overlay.innerHTML = `
+    <div class="qe-unsaved-box mb-payment-box">
+      <p class="qe-unsaved-msg"><strong>Facturering kiezen</strong><br><span>Opbouw: ${label}</span></p>
+      <div class="qe-unsaved-btns">
+        <button class="btn btn-secondary btn-sm" data-payment="full">100% · één concept</button>
+        <button class="btn btn-primary btn-sm" data-payment="split">50/50 · twee concepten</button>
+        <button class="btn btn-ghost btn-sm" data-payment="cancel">Annuleren</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-payment="full"]').onclick = () => { overlay.remove(); onFull(); };
+  overlay.querySelector('[data-payment="split"]').onclick = () => { overlay.remove(); onSplit(); };
+  overlay.querySelector('[data-payment="cancel"]').onclick = () => overlay.remove();
+}
+
+async function exportQuoteBundleToMoneybird(mode) {
+  if (!_quoteBundle) return;
+  const { projectKey, members } = _quoteBundle;
+  const clients = [...new Set(members.map(member => (member.client || '').trim()).filter(Boolean))];
+  if (clients.length > 1) {
+    toast('Factuur niet aangemaakt: de onderdelen hebben verschillende klanten', 'error', 6000);
+    return;
+  }
+  try {
+    toast('Bundelfactuur aanmaken in Moneybird…', 'info', 8000);
+    const contactQuote = freshQE(members[0]);
+    const taxRateId = await getMoneybirdTaxRateId();
+    const contactId = await findOrCreateMoneybirdContact(contactQuote);
+    const projectId = await findOrCreateMoneybirdProject(projectKey);
+    const total = members.reduce((sum, member) => sum + Number(member.total_price || 0), 0);
+    const bundlePo = (_quoteBundle.bundlePoNumber || '').trim();
+    const poNumbers = bundlePo ? [bundlePo] : [...new Set(members.map(quotePoNumber).filter(Boolean))];
+    const invoiceReference = poNumbers.length ? `${projectKey} · PO ${poNumbers.join(' / ')}` : projectKey;
+    const details = mode === 'totaal'
+      ? [{ description: projectKey, price: total.toFixed(2), amount: '1 stuks', tax_rate_id: taxRateId, project_id: projectId }]
+      : members.map(member => ({ description: member.name, price: Number(member.total_price || 0).toFixed(2), amount: '1 stuks', tax_rate_id: taxRateId, project_id: projectId }));
+
+    const invoice = await moneybirdFetch('POST', 'sales_invoices.json', {
+      sales_invoice: { contact_id: contactId, reference: invoiceReference, details_attributes: details },
+    });
+    await persistMoneybirdProjectLink(projectKey, projectId);
+    toast('Bundelfactuur aangemaakt! Opening in Moneybird…', 'success', 4000);
+    const mbUrl = `https://moneybird.com/${_moneybirdAdminId}/sales_invoices/${invoice.id}`;
+    if (api.openUrl) api.openUrl(mbUrl); else window.open(mbUrl, '_blank');
+  } catch (err) {
+    toast('Bundelfactuur mislukt: ' + err.message, 'error', 6000);
+    console.error('exportQuoteBundleToMoneybird error:', err);
+  }
+}
+
+async function createMoneybird50Pair({ projectName, contactQuote, lines, referenceBase }) {
+  const taxRateId = await getMoneybirdTaxRateId();
+  const contactId = await findOrCreateMoneybirdContact(contactQuote);
+  const projectId = await findOrCreateMoneybirdProject(projectName);
+  const definitions = ['Aanbetaling 50%', 'Slotbetaling 50%'];
+  const invoices = [];
+  for (const label of definitions) {
+    try {
+      invoices.push(await moneybirdFetch('POST', 'sales_invoices.json', {
+        sales_invoice: {
+          contact_id: contactId,
+          reference: `${referenceBase} · ${label}`,
+          details_attributes: lines.map(line => ({
+            description: line.description,
+            price: Number(line.price || 0).toFixed(2),
+            amount: '50%',
+            tax_rate_id: taxRateId,
+            project_id: projectId,
+          })),
+        },
+      }));
+    } catch (err) {
+      if (invoices.length) err.message += ' De aanbetalingsfactuur kan al zijn aangemaakt; controleer Moneybird voordat je opnieuw probeert.';
+      throw err;
+    }
+  }
+  await persistMoneybirdProjectLink(projectName, projectId);
+  invoices.forEach(invoice => {
+    const url = `https://moneybird.com/${_moneybirdAdminId}/sales_invoices/${invoice.id}`;
+    if (api.openUrl) api.openUrl(url); else window.open(url, '_blank');
+  });
+  return invoices;
+}
+
+async function exportQuoteBundle50ToMoneybird(lineMode) {
+  if (!_quoteBundle) return;
+  const { projectKey, members } = _quoteBundle;
+  const clients = [...new Set(members.map(member => (member.client || '').trim()).filter(Boolean))];
+  if (clients.length > 1) {
+    toast('Facturen niet aangemaakt: de onderdelen hebben verschillende klanten', 'error', 6000);
+    return;
+  }
+  try {
+    toast('Twee 50/50-conceptfacturen aanmaken…', 'info', 10000);
+    const total = members.reduce((sum, member) => sum + Number(member.total_price || 0), 0);
+    const lines = lineMode === 'totaal'
+      ? [{ description: projectKey, price: total }]
+      : members.map(member => ({ description: member.name, price: Number(member.total_price || 0) }));
+    const bundlePo = (_quoteBundle.bundlePoNumber || '').trim();
+    const poNumbers = bundlePo ? [bundlePo] : [...new Set(members.map(quotePoNumber).filter(Boolean))];
+    const referenceBase = poNumbers.length ? `${projectKey} · PO ${poNumbers.join(' / ')}` : projectKey;
+    await createMoneybird50Pair({ projectName: projectKey, contactQuote: freshQE(members[0]), lines, referenceBase });
+    toast('Aanbetaling en slotbetaling staan als concept klaar in Moneybird', 'success', 5000);
+  } catch (err) {
+    toast('50/50-facturen mislukt: ' + err.message, 'error', 7000);
+    console.error('exportQuoteBundle50ToMoneybird error:', err);
+  }
+}
+
+function quotePoNumber(quote) {
+  if (quote?.po_number != null) return String(quote.po_number).trim();
+  try { return String(JSON.parse(quote?.extras_json || '{}').po_number || '').trim(); } catch (_) { return ''; }
+}
+
+function quoteBundlePoNumber(quote) {
+  try { return String(JSON.parse(quote?.extras_json || '{}').bundle_po_number || '').trim(); } catch (_) { return ''; }
+}
+
+async function persistMoneybirdProjectLink(projectName, projectId) {
+  const localProj = state.projects.find(p => p.name.trim().toLowerCase() === projectName.trim().toLowerCase());
+  if (!localProj) return;
+  const ids = mbIdsOf(localProj);
+  if (ids.includes(String(projectId))) return;
+  ids.push(String(projectId));
+  const newVal = ids.join(',');
+  await remoteQuery({ action: 'update', table: 'projects', data: { moneybird_project_id: newVal }, where: { id: localProj.id } });
+  localProj.moneybird_project_id = newVal;
 }
 
 async function findOrCreateMoneybirdProject(name) {
@@ -8160,7 +8460,7 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
     const invoice = await moneybirdFetch('POST', 'sales_invoices.json', {
       sales_invoice: {
         contact_id:         contactId,
-        reference:          qe.name,
+        reference:          qe.po_number ? `${qe.name} · PO ${qe.po_number}` : qe.name,
         details_attributes: details,
       },
     });
@@ -8168,16 +8468,7 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
     // Persist the Moneybird project ID on the local project so the analysis can match by ID.
     // Toevoegen aan de lijst (niet alleen als 'ie leeg is), zodat extra Moneybird-projecten
     // die bij dezelfde klus horen er ook bij komen.
-    const localProj = state.projects.find(p => p.name.trim().toLowerCase() === quoteProjectName().toLowerCase());
-    if (localProj) {
-      const ids = mbIdsOf(localProj);
-      if (!ids.includes(String(projectId))) {
-        ids.push(String(projectId));
-        const newVal = ids.join(',');
-        await remoteQuery({ action: 'update', table: 'projects', data: { moneybird_project_id: newVal }, where: { id: localProj.id } });
-        localProj.moneybird_project_id = newVal;
-      }
-    }
+    await persistMoneybirdProjectLink(quoteProjectName(), projectId);
 
     toast('Factuur aangemaakt! Opening in Moneybird…', 'success', 4000);
     const mbUrl = `https://moneybird.com/${_moneybirdAdminId}/sales_invoices/${invoice.id}`;
@@ -8186,6 +8477,49 @@ async function exportToMoneybird(mode) { // mode: 'gespecificeerd' | 'totaal'
   } catch (err) {
     toast('Factuur mislukt: ' + err.message, 'error', 6000);
     console.error('exportToMoneybird error:', err);
+  }
+}
+
+function moneybird50LinesForQuote(mode) {
+  const totals = calcQETotals();
+  if (mode === 'totaal') return [{ description: qe.name, price: totals.subtotal }];
+  if (qe.fixed_enabled && qe.fixed_items?.length) {
+    return qe.fixed_items.map(item => ({
+      description: `${item.name || qe.name}${item.quantity ? ` (${item.quantity}×)` : ''}`,
+      price: Number(item.quantity ?? 1) * Number(item.unit_price || 0),
+    }));
+  }
+  const globalMgn = parseFloat(qe.margin || 20);
+  const outMgn = parseFloat(qe.outsource_margin || 15);
+  const materialLines = qe.materials.filter(item => item.enabled !== 0).map(item => {
+    const pct = (item.margin != null && item.margin !== '') ? parseFloat(item.margin) : globalMgn;
+    return {
+      description: `${item.name}${item.quantity ? ` (${item.quantity}${item.unit ? ' ' + item.unit : '×'})` : ''}`,
+      price: Number(item.quantity ?? 1) * Number(item.unit_price || 0) * (1 + pct / 100),
+    };
+  });
+  const serviceLines = qe.services.filter(item => item.enabled !== 0).map(item => {
+    const unitPrice = item.is_outsourced ? Number(item.unit_price || 0) * (1 + outMgn / 100) : Number(item.unit_price || 0);
+    return {
+      description: `${item.name}${item.quantity ? ` (${item.quantity} uur)` : ''}`,
+      price: Number(item.quantity ?? 1) * unitPrice,
+    };
+  });
+  const lines = [...materialLines, ...serviceLines];
+  return lines.length ? lines : [{ description: qe.name, price: totals.subtotal }];
+}
+
+async function exportQuote50ToMoneybird(lineMode) {
+  if (!qe.id) { toast('Sla de offerte eerst op', 'warn'); return; }
+  try {
+    toast('Twee 50/50-conceptfacturen aanmaken…', 'info', 10000);
+    const referenceBase = qe.po_number ? `${qe.name} · PO ${qe.po_number}` : qe.name;
+    const lines = moneybird50LinesForQuote(lineMode);
+    await createMoneybird50Pair({ projectName: quoteProjectName(), contactQuote: qe, lines, referenceBase });
+    toast('Aanbetaling en slotbetaling staan als concept klaar in Moneybird', 'success', 5000);
+  } catch (err) {
+    toast('50/50-facturen mislukt: ' + err.message, 'error', 7000);
+    console.error('exportQuote50ToMoneybird error:', err);
   }
 }
 
@@ -8240,6 +8574,10 @@ async function exportProjectGroupPdf(projectKey, members) {
       const imageData = full.image_data || localStorage.getItem('qimg_' + m.id) || '';
       return { quote: { ...m, notes: full.notes || '', image_data: imageData, margin: full.margin }, extras };
     });
+    const explicitBundlePos = [...new Set(memberData.map(({ extras }) => String(extras.bundle_po_number || '').trim()).filter(Boolean))];
+    const bundlePoNumbers = explicitBundlePos.length
+      ? [explicitBundlePos[0]]
+      : [...new Set(memberData.map(({ quote, extras }) => quotePoNumber({ ...quote, extras_json: JSON.stringify(extras) })).filter(Boolean))];
 
     // Collect all images: main image + extra_images from all members
     const allImages = [];
@@ -8389,6 +8727,7 @@ async function exportProjectGroupPdf(projectKey, members) {
         <div class="title">Offerte</div>
         <div class="sub">${dateFmt}</div>
         <div class="sub">${active.length} onderdelen</div>
+        ${bundlePoNumbers.length ? `<div class="sub">PO ${escHtml(bundlePoNumbers.join(' / '))}</div>` : ''}
       </div>
     </div>
 
@@ -8729,6 +9068,7 @@ ${opts.show_title_page ? `
         <div class="title">OFFERTE</div>
         <div class="num">${quoteNum}</div>
         <div class="date">${dateFmt}</div>
+        ${qe.po_number ? `<div class="date">PO ${escHtml(qe.po_number)}</div>` : ''}
       </div>
     </div>
 
