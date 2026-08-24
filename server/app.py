@@ -108,6 +108,7 @@ def init_db():
                 start_date  TEXT DEFAULT '',
                 end_date    TEXT DEFAULT '',
                 status      TEXT DEFAULT 'active',
+                hours_monitoring INTEGER DEFAULT 1,
                 analysis_acknowledged INTEGER DEFAULT 0,
                 analysis_note TEXT DEFAULT '',
                 color       TEXT DEFAULT '#4f8ef7',
@@ -236,6 +237,8 @@ def init_db():
         db.execute("ALTER TABLE projects ADD COLUMN analysis_acknowledged INTEGER DEFAULT 0")
     if 'analysis_note' not in pcols:
         db.execute("ALTER TABLE projects ADD COLUMN analysis_note TEXT DEFAULT ''")
+    if 'hours_monitoring' not in pcols:
+        db.execute("ALTER TABLE projects ADD COLUMN hours_monitoring INTEGER DEFAULT 1")
     time_cols = db.execute("PRAGMA table_info(time_entries)").fetchall()
     time_project_col = next((r for r in time_cols if r[1] == 'project_id'), None)
     if not any(r[1] == 'category_id' for r in time_cols) or (time_project_col and time_project_col[3]):

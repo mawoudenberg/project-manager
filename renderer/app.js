@@ -51,6 +51,12 @@ let state = {
   timeCategoriesAvailable: true,
   hoursDate: '',
   hoursShowInactive: false,
+  hoursView: 'entry',
+  hoursInsightPeriod: 'month',
+  hoursInsightStart: '',
+  hoursInsightEnd: '',
+  hoursBudgetByProject: null,
+  hoursBudgetLoading: false,
   editingTimeEntry: null,
   activeProject: null,
   expandedProjects: new Set(),
@@ -4168,7 +4174,180 @@ function hoursDateLabel(dateStr) {
   return new Date(`${dateStr}T12:00:00`).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+function hoursViewControls() {
+  return `<div class="hours-view-toggle" role="tablist" aria-label="Urenweergave">
+    <button class="${state.hoursView === 'entry' ? 'active' : ''}" data-hours-view="entry">Invoeren</button>
+    <button class="${state.hoursView === 'insight' ? 'active' : ''}" data-hours-view="insight">Inzicht</button>
+  </div>`;
+}
+
+function wireHoursViewControls() {
+  document.querySelectorAll('[data-hours-view]').forEach(button => {
+    button.onclick = () => {
+      state.hoursView = button.dataset.hoursView;
+      state.editingTimeEntry = null;
+      renderHours();
+    };
+  });
+}
+
+function hoursInsightRange(period = state.hoursInsightPeriod) {
+  const today = new Date(state.today);
+  let start;
+  let end;
+  if (period === 'week') {
+    const day = today.getDay();
+    start = new Date(today); start.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
+    end = new Date(start); end.setDate(start.getDate() + 6);
+  } else if (period === 'year') {
+    start = new Date(today.getFullYear(), 0, 1);
+    end = new Date(today.getFullYear(), 11, 31);
+  } else if (period === 'custom') {
+    return {
+      start: state.hoursInsightStart || toDateStr(new Date(today.getFullYear(), today.getMonth(), 1)),
+      end: state.hoursInsightEnd || toDateStr(today),
+    };
+  } else {
+    start = new Date(today.getFullYear(), today.getMonth(), 1);
+    end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  }
+  return { start: toDateStr(start), end: toDateStr(end) };
+}
+
+async function loadHoursBudgets() {
+  if (state.hoursBudgetByProject || state.hoursBudgetLoading) return;
+  state.hoursBudgetLoading = true;
+  try {
+    const [quotes, items] = await Promise.all([
+      remoteQuery({ action: 'select', table: 'quotes', where: { status: 'accepted' } }),
+      remoteQuery({ action: 'select', table: 'quote_items' }),
+    ]);
+    const quoteProjectNames = new Map((quotes || []).map(quote => [
+      Number(quote.id),
+      (quote.project_name || quote.name || '').trim().toLowerCase(),
+    ]));
+    const budgets = new Map();
+    (items || []).forEach(item => {
+      const projectName = quoteProjectNames.get(Number(item.quote_id));
+      if (!projectName || item.type !== 'service' || item.enabled === 0 || item.is_outsourced) return;
+      const hours = Number(item.quantity);
+      if (!Number.isFinite(hours)) return;
+      budgets.set(projectName, (budgets.get(projectName) || 0) + hours);
+    });
+    state.hoursBudgetByProject = budgets;
+  } catch (error) {
+    console.warn('Begrote projecturen laden mislukt:', error);
+    state.hoursBudgetByProject = new Map();
+    toast('Begrote projecturen konden niet worden geladen', 'warn', 4000);
+  } finally {
+    state.hoursBudgetLoading = false;
+    if (state.view === 'hours' && state.hoursView === 'insight') renderHours();
+  }
+}
+
+function renderHoursInsight() {
+  loadHoursBudgets();
+  const content = document.getElementById('content');
+  const range = hoursInsightRange();
+  const entries = state.timeEntries.filter(entry => entry.entry_date >= range.start && entry.entry_date <= range.end);
+  const total = entries.reduce((sum, entry) => sum + Number(entry.hours), 0);
+  const billable = entries.filter(entry => entry.project_id != null).reduce((sum, entry) => sum + Number(entry.hours), 0);
+  const nonBillable = entries.filter(entry => entry.category_id != null).reduce((sum, entry) => sum + Number(entry.hours), 0);
+  const utilization = total ? billable / total * 100 : 0;
+  const projectsById = new Map(state.projects.map(project => [Number(project.id), project]));
+  const categoriesById = new Map(state.timeCategories.map(category => [Number(category.id), category]));
+  const projectHours = new Map();
+  const categoryHours = new Map();
+  const lifetimeProjectHours = new Map();
+  state.timeEntries.forEach(entry => {
+    if (entry.project_id != null) lifetimeProjectHours.set(Number(entry.project_id), (lifetimeProjectHours.get(Number(entry.project_id)) || 0) + Number(entry.hours));
+  });
+  entries.forEach(entry => {
+    if (entry.project_id != null) projectHours.set(Number(entry.project_id), (projectHours.get(Number(entry.project_id)) || 0) + Number(entry.hours));
+    if (entry.category_id != null) categoryHours.set(Number(entry.category_id), (categoryHours.get(Number(entry.category_id)) || 0) + Number(entry.hours));
+  });
+  const projectRows = [...projectHours.entries()].sort((a, b) => b[1] - a[1]);
+  const categoryRows = [...categoryHours.entries()].sort((a, b) => b[1] - a[1]);
+  const dateFmt = date => new Date(`${date}T12:00:00`).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' });
+
+  content.innerHTML = `<div class="hours-insight-page">
+    <section class="hours-insight-filter">
+      <div><span class="hours-eyebrow">Periode</span><strong>${dateFmt(range.start)} – ${dateFmt(range.end)}</strong></div>
+      <div class="hours-period-chips">
+        ${[['week','Deze week'],['month','Deze maand'],['year','Dit jaar'],['custom','Eigen periode']].map(([key, label]) => `<button class="${state.hoursInsightPeriod === key ? 'active' : ''}" data-hours-period="${key}">${label}</button>`).join('')}
+      </div>
+      ${state.hoursInsightPeriod === 'custom' ? `<div class="hours-custom-range"><label>Van <input type="date" id="hours-insight-start" value="${range.start}" /></label><label>Tot <input type="date" id="hours-insight-end" value="${range.end}" /></label></div>` : ''}
+    </section>
+
+    <section class="hours-kpis">
+      <article><span>Totaal gewerkt</span><strong>${formatHours(total)}</strong><small>uur</small></article>
+      <article class="billable"><span>Declarabel</span><strong>${formatHours(billable)}</strong><small>uur op klantprojecten</small></article>
+      <article><span>Niet declarabel</span><strong>${formatHours(nonBillable)}</strong><small>uur intern</small></article>
+      <article class="utilization"><span>Declarabiliteit</span><strong>${Math.round(utilization)}%</strong><small>van alle gewerkte uren</small></article>
+    </section>
+
+    <div class="hours-insight-grid">
+      <section class="hours-insight-card">
+        <header><div><span class="hours-eyebrow">Declarabel</span><h3>Uren per project</h3></div><strong>${formatHours(billable)} uur</strong></header>
+        ${projectRows.length ? `<div class="hours-insight-rows">${projectRows.map(([id, hours]) => {
+          const project = projectsById.get(id);
+          const monitoring = project?.hours_monitoring !== 0;
+          const budget = monitoring ? state.hoursBudgetByProject?.get((project?.name || '').trim().toLowerCase()) : null;
+          const workedAgainstBudget = lifetimeProjectHours.get(Number(id)) || 0;
+          const budgetProgress = monitoring && Number(budget) > 0 ? workedAgainstBudget / Number(budget) * 100 : null;
+          const remaining = budget != null ? Number(budget) - workedAgainstBudget : null;
+          const budgetHtml = !monitoring
+            ? '<span>Niet bewaakt</span>'
+            : state.hoursBudgetLoading
+            ? '<span>Laden…</span>'
+            : (budget != null
+              ? `<span>${formatHours(budget)} u begroot</span><small class="${remaining < 0 ? 'over-budget' : ''}">${remaining < 0 ? `${formatHours(Math.abs(remaining))} u over budget` : `${formatHours(remaining)} u over`}</small>`
+              : '<span>Geen begroting</span>');
+          const color = /^#[0-9a-f]{6}$/i.test(project?.color || '') ? project.color : '#13ABBD';
+          return `<div class="hours-insight-row hours-insight-project-row${monitoring ? '' : ' monitoring-off'}"><span class="hours-project-dot" style="background:${color}"></span><div class="name"><span>${escHtml(project?.name || 'Verwijderd project')}</span>${project ? `<button class="hours-monitoring-toggle" data-hours-monitoring="${project.id}" role="switch" aria-checked="${monitoring}" title="${monitoring ? 'Uitschakelen: dit project niet vergelijken met begrote uren' : 'Inschakelen: dit project vergelijken met begrote uren'}"><i></i> Urenbewaking</button>` : ''}</div><span class="share" title="${budgetProgress != null ? `${formatHours(workedAgainstBudget)} van ${formatHours(budget)} begrote uren gebruikt, over alle periodes` : 'Geen percentage zonder actieve urenbegroting'}">${budgetProgress != null ? `${Math.round(budgetProgress)}%` : '—'}</span><span class="budget" title="${monitoring ? 'Begrote eigen uren uit geaccepteerde offerte(s); resterende uren zijn gebaseerd op alle geboekte uren' : 'Dit project wordt niet vergeleken met begrote uren'}">${budgetHtml}</span><strong title="Geboekt in de geselecteerde periode">${formatHours(hours)} u</strong></div>`;
+        }).join('')}</div>` : '<div class="hours-insight-empty">Nog geen projecturen in deze periode.</div>'}
+      </section>
+
+      <section class="hours-insight-card">
+        <header><div><span class="hours-eyebrow">Overig</span><h3>Niet-declarabele tijd</h3></div><strong>${formatHours(nonBillable)} uur</strong></header>
+        ${categoryRows.length ? `<div class="hours-insight-rows">${categoryRows.map(([id, hours]) => {
+          const category = categoriesById.get(id);
+          const share = nonBillable ? hours / nonBillable * 100 : 0;
+          return `<div class="hours-insight-row"><span class="hours-project-dot internal"></span><span class="name">${escHtml(category?.name || 'Verwijderde categorie')}</span><span class="share">${Math.round(share)}%</span><strong>${formatHours(hours)} u</strong></div>`;
+        }).join('')}</div>` : '<div class="hours-insight-empty">Nog geen niet-declarabele uren in deze periode.</div>'}
+      </section>
+    </div>
+    ${!entries.length ? '<p class="hours-insight-footnote">Vul eerst uren in om inzicht voor deze periode op te bouwen.</p>' : '<p class="hours-insight-footnote">Declarabel = uren gekoppeld aan een klantproject. Overige categorieën tellen automatisch als niet declarabel.</p>'}
+  </div>`;
+
+  document.querySelectorAll('[data-hours-period]').forEach(button => {
+    button.onclick = () => { state.hoursInsightPeriod = button.dataset.hoursPeriod; renderHours(); };
+  });
+  document.getElementById('hours-insight-start')?.addEventListener('change', event => { state.hoursInsightStart = event.target.value; renderHours(); });
+  document.getElementById('hours-insight-end')?.addEventListener('change', event => { state.hoursInsightEnd = event.target.value; renderHours(); });
+  document.querySelectorAll('[data-hours-monitoring]').forEach(button => {
+    button.onclick = async () => {
+      const project = state.projects.find(item => Number(item.id) === Number(button.dataset.hoursMonitoring));
+      if (!project) return;
+      const enabled = project.hours_monitoring === 0 ? 1 : 0;
+      button.disabled = true;
+      try {
+        await remoteQuery({ action: 'update', table: 'projects', data: { hours_monitoring: enabled }, where: { id: project.id } });
+        project.hours_monitoring = enabled;
+        renderHours();
+        toast(`Urenbewaking ${enabled ? 'ingeschakeld' : 'uitgeschakeld'} voor ${project.name}`);
+      } catch (error) {
+        button.disabled = false;
+        toast(`Urenbewaking aanpassen mislukt: ${error.message}`, 'error', 5000);
+      }
+    };
+  });
+}
+
 function renderHours() {
+  document.getElementById('toolbar-controls').innerHTML = hoursViewControls();
+  wireHoursViewControls();
+  if (state.hoursView === 'insight') { renderHoursInsight(); return; }
   if (!state.hoursDate) state.hoursDate = toDateStr(state.today);
   const content = document.getElementById('content');
   const entries = state.timeEntries.filter(e => e.entry_date === state.hoursDate);
