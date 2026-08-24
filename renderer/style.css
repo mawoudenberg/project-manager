@@ -256,6 +256,7 @@ html[data-theme="dark"] .hours-date-nav input[type="date"] { color-scheme: dark;
 .hours-row + .hours-row { border-top: 1px solid var(--border); }
 .hours-project-dot { width: 8px; height: 8px; border-radius: 50%; }
 .hours-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hours-project-name small { display: block; margin-top: 2px; color: var(--text2); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
 .hours-row > strong { text-align: right; font-variant-numeric: tabular-nums; }
 .hours-row-action { border: 0; background: transparent; color: var(--text2); font-size: 11px; padding: 5px; }
 .hours-row-action:hover { color: var(--accent); }
@@ -2522,11 +2523,20 @@ tr.drag-over > td { border-top: 2px solid var(--accent) !important; }
 .catalog-header h2 { font-size: 16px; font-weight: 600; margin: 0; }
 .catalog-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 12px 24px 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.catalog-help, .catalog-empty-note { margin-bottom: 14px; padding: 10px 12px; border-radius: 7px; background: var(--bg3); color: var(--text2); font-size: 11px; line-height: 1.5; }
+.catalog-row-inactive { opacity: .58; }
+.catalog-order-actions { display: flex; gap: 3px; }
+.catalog-order-actions button { width: 24px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--bg2); color: var(--text2); cursor: pointer; }
+.catalog-order-actions button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.catalog-order-actions button:disabled { opacity: .3; cursor: default; }
+.catalog-active-toggle { display: flex; align-items: center; gap: 6px; color: var(--text2); font-size: 11px; cursor: pointer; }
+.catalog-active-toggle input { accent-color: var(--accent); }
 .catalog-tab {
   background: none;
   border: none;

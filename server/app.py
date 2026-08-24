@@ -16,7 +16,7 @@ ALLOWED_TABLES = {
     'tasks', 'todo_lists', 'todo_items', 'team_members',
     'projects', 'project_stages', 'stage_slots',
     'quotes', 'quote_items', 'presets', 'clients',
-    'time_entries',
+    'time_entries', 'time_categories',
 }
 
 # ── Static file serving ─────────────────────────────────────────────────────────
@@ -170,10 +170,19 @@ def init_db():
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 entry_date  TEXT NOT NULL,
                 hours       REAL NOT NULL CHECK (hours > 0 AND hours * 2 = CAST(hours * 2 AS INTEGER)),
-                project_id  INTEGER NOT NULL REFERENCES projects(id),
+                project_id  INTEGER REFERENCES projects(id),
+                category_id INTEGER REFERENCES time_categories(id),
                 employee    TEXT NOT NULL,
                 created_at  TEXT DEFAULT (datetime('now')),
-                updated_at  TEXT DEFAULT (datetime('now'))
+                updated_at  TEXT DEFAULT (datetime('now')),
+                CHECK ((project_id IS NOT NULL) != (category_id IS NOT NULL))
+            );
+            CREATE TABLE IF NOT EXISTS time_categories (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                active      INTEGER NOT NULL DEFAULT 1,
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(entry_date);
             CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id);
@@ -227,6 +236,41 @@ def init_db():
         db.execute("ALTER TABLE projects ADD COLUMN analysis_acknowledged INTEGER DEFAULT 0")
     if 'analysis_note' not in pcols:
         db.execute("ALTER TABLE projects ADD COLUMN analysis_note TEXT DEFAULT ''")
+    time_cols = db.execute("PRAGMA table_info(time_entries)").fetchall()
+    time_project_col = next((r for r in time_cols if r[1] == 'project_id'), None)
+    if not any(r[1] == 'category_id' for r in time_cols) or (time_project_col and time_project_col[3]):
+        db.commit()
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.executescript("""
+            BEGIN;
+            CREATE TABLE time_entries_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_date TEXT NOT NULL,
+                hours REAL NOT NULL CHECK (hours > 0 AND hours * 2 = CAST(hours * 2 AS INTEGER)),
+                project_id INTEGER REFERENCES projects(id),
+                category_id INTEGER REFERENCES time_categories(id),
+                employee TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                CHECK ((project_id IS NOT NULL) != (category_id IS NOT NULL))
+            );
+            INSERT INTO time_entries_new (id, entry_date, hours, project_id, employee, created_at, updated_at)
+                SELECT id, entry_date, hours, project_id, employee, created_at, updated_at FROM time_entries;
+            DROP TABLE time_entries;
+            ALTER TABLE time_entries_new RENAME TO time_entries;
+            CREATE INDEX idx_time_entries_date ON time_entries(entry_date);
+            CREATE INDEX idx_time_entries_project ON time_entries(project_id);
+            CREATE INDEX idx_time_entries_category ON time_entries(category_id);
+            COMMIT;
+        """)
+        db.execute("PRAGMA foreign_keys=ON")
+    if db.execute("SELECT COUNT(*) FROM time_categories").fetchone()[0] == 0:
+        db.executemany(
+            "INSERT INTO time_categories (name, active, sort_order) VALUES (?, 1, ?)",
+            [(name, index) for index, name in enumerate([
+                'Offertes maken', 'Administratie', 'Acquisitie', 'Werkplaats / Onderhoud', 'Overig'
+            ])]
+        )
 
     # One-time migration: consolidate duplicate stages by (project_id, name)
     # and move their date ranges into stage_slots.
@@ -277,6 +321,7 @@ def order_for(table):
         'quote_items':    'ORDER BY sort_order ASC, id ASC',
         'presets':        'ORDER BY sort_order ASC, id ASC',
         'time_entries':   'ORDER BY entry_date DESC, created_at ASC, id ASC',
+        'time_categories':'ORDER BY sort_order ASC, id ASC',
     }.get(table, '')
 
 

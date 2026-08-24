@@ -146,14 +146,24 @@ function createSchema() {
       created_at  TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS time_categories (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL,
+      active      INTEGER NOT NULL DEFAULT 1,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS time_entries (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       entry_date  TEXT NOT NULL,
       hours       REAL NOT NULL CHECK (hours > 0 AND hours * 2 = CAST(hours * 2 AS INTEGER)),
-      project_id  INTEGER NOT NULL REFERENCES projects(id),
+      project_id  INTEGER REFERENCES projects(id),
+      category_id INTEGER REFERENCES time_categories(id),
       employee    TEXT NOT NULL,
       created_at  TEXT DEFAULT (datetime('now')),
-      updated_at  TEXT DEFAULT (datetime('now'))
+      updated_at  TEXT DEFAULT (datetime('now')),
+      CHECK ((project_id IS NOT NULL) != (category_id IS NOT NULL))
     );
 
     CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(entry_date);
@@ -177,6 +187,43 @@ function migrateSchema() {
   if (!itemCols.includes('sort_order')) {
     db.exec("ALTER TABLE todo_items ADD COLUMN sort_order INTEGER DEFAULT 0");
     db.exec("UPDATE todo_items SET sort_order = id");
+  }
+
+  // Uren konden oorspronkelijk alleen aan een project hangen. Maak project_id
+  // optioneel en voeg een stabiele categorie-koppeling toe voor niet-declarabele tijd.
+  const timeCols = db.pragma('table_info(time_entries)');
+  const timeProjectCol = timeCols.find(c => c.name === 'project_id');
+  if (!timeCols.some(c => c.name === 'category_id') || timeProjectCol?.notnull) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      BEGIN;
+      CREATE TABLE time_entries_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_date TEXT NOT NULL,
+        hours REAL NOT NULL CHECK (hours > 0 AND hours * 2 = CAST(hours * 2 AS INTEGER)),
+        project_id INTEGER REFERENCES projects(id),
+        category_id INTEGER REFERENCES time_categories(id),
+        employee TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        CHECK ((project_id IS NOT NULL) != (category_id IS NOT NULL))
+      );
+      INSERT INTO time_entries_new (id, entry_date, hours, project_id, employee, created_at, updated_at)
+        SELECT id, entry_date, hours, project_id, employee, created_at, updated_at FROM time_entries;
+      DROP TABLE time_entries;
+      ALTER TABLE time_entries_new RENAME TO time_entries;
+      CREATE INDEX idx_time_entries_date ON time_entries(entry_date);
+      CREATE INDEX idx_time_entries_project ON time_entries(project_id);
+      CREATE INDEX idx_time_entries_category ON time_entries(category_id);
+      COMMIT;
+    `);
+    db.pragma('foreign_keys = ON');
+  }
+  const categoryCount = db.prepare('SELECT COUNT(*) AS count FROM time_categories').get().count;
+  if (categoryCount === 0) {
+    const insertCategory = db.prepare('INSERT INTO time_categories (name, active, sort_order) VALUES (?, 1, ?)');
+    ['Offertes maken', 'Administratie', 'Acquisitie', 'Werkplaats / Onderhoud', 'Overig']
+      .forEach((name, index) => insertCategory.run(name, index));
   }
 
   const quoteCols = db.pragma('table_info(quotes)').map(c => c.name);
@@ -394,7 +441,7 @@ function saveQuote(payload) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages', 'stage_slots', 'clients', 'time_entries']);
+const ALLOWED_TABLES = new Set(['tasks', 'todo_lists', 'todo_items', 'quotes', 'quote_items', 'team_members', 'projects', 'project_stages', 'stage_slots', 'clients', 'time_entries', 'time_categories']);
 
 function validateTable(table) {
   if (!ALLOWED_TABLES.has(table)) throw new Error(`Table not allowed: ${table}`);
@@ -412,6 +459,7 @@ function orderFor(table) {
   if (table === 'clients')         return ' ORDER BY name ASC';
   if (table === 'stage_slots')     return ' ORDER BY start_date ASC, id ASC';
   if (table === 'time_entries')    return ' ORDER BY entry_date DESC, created_at ASC, id ASC';
+  if (table === 'time_categories') return ' ORDER BY sort_order ASC, id ASC';
   return '';
 }
 

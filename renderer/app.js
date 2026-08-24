@@ -46,7 +46,9 @@ let state = {
   clients: [],
   teamMembers: [],
   timeEntries: [],
+  timeCategories: [],
   timeTrackingAvailable: true,
+  timeCategoriesAvailable: true,
   hoursDate: '',
   hoursShowInactive: false,
   editingTimeEntry: null,
@@ -452,7 +454,7 @@ function startApiPolling() {
         .some(id => !document.getElementById(id)?.classList.contains('hidden'));
       if (modalOpen || calDragInProgress) return;
 
-      const [tasks, projects, stages, stageSlots, todoLists, clients, teamMembers, timeEntries] = await Promise.all([
+      const [tasks, projects, stages, stageSlots, todoLists, clients, teamMembers, timeEntries, timeCategories] = await Promise.all([
         remoteQuery({ action: 'select', table: 'tasks' }),
         remoteQuery({ action: 'select', table: 'projects' }),
         remoteQuery({ action: 'select', table: 'project_stages' }),
@@ -461,6 +463,7 @@ function startApiPolling() {
         remoteQuery({ action: 'select', table: 'clients' }),
         remoteQuery({ action: 'select', table: 'team_members' }),
         remoteQuery({ action: 'select', table: 'time_entries' }),
+        remoteQuery({ action: 'select', table: 'time_categories' }),
       ]);
 
       if (!Array.isArray(tasks) || !Array.isArray(projects)) return; // bad response
@@ -473,7 +476,8 @@ function startApiPolling() {
         JSON.stringify(todoLists)  !== JSON.stringify(state.todoLists)  ||
         JSON.stringify(clients)    !== JSON.stringify(state.clients)    ||
         JSON.stringify(teamMembers) !== JSON.stringify(state.teamMembers) ||
-        JSON.stringify(timeEntries) !== JSON.stringify(state.timeEntries);
+        JSON.stringify(timeEntries) !== JSON.stringify(state.timeEntries) ||
+        JSON.stringify(timeCategories) !== JSON.stringify(state.timeCategories);
 
       if (!changed) return;
 
@@ -485,6 +489,7 @@ function startApiPolling() {
       state.clients    = clients;
       state.teamMembers = teamMembers;
       state.timeEntries = timeEntries;
+      state.timeCategories = timeCategories;
       for (const list of state.todoLists) {
         state.todoItems[list.id] = await remoteQuery({
           action: 'select', table: 'todo_items', where: { list_id: list.id },
@@ -503,7 +508,7 @@ function startApiPolling() {
 
 /* ─── Data Loading ─────────────────────────────────────────────────────────── */
 async function loadAll() {
-  await Promise.all([loadTasks(), loadTodoLists(), loadProjects(), loadStages(), loadClients(), loadTeamMembers(), loadTimeEntries()]);
+  await Promise.all([loadTasks(), loadTodoLists(), loadProjects(), loadStages(), loadClients(), loadTeamMembers(), loadTimeEntries(), loadTimeCategories()]);
 }
 
 async function loadTeamMembers() {
@@ -518,6 +523,20 @@ async function loadTimeEntries() {
     if (String(error.message).includes('Table not allowed') || String(error.message).includes('no such table')) {
       state.timeEntries = [];
       state.timeTrackingAvailable = false;
+      return;
+    }
+    throw error;
+  }
+}
+
+async function loadTimeCategories() {
+  try {
+    state.timeCategories = await remoteQuery({ action: 'select', table: 'time_categories' });
+    state.timeCategoriesAvailable = true;
+  } catch (error) {
+    if (String(error.message).includes('Table not allowed') || String(error.message).includes('no such table')) {
+      state.timeCategories = [];
+      state.timeCategoriesAvailable = false;
       return;
     }
     throw error;
@@ -1366,7 +1385,7 @@ function renderWeekly() {
       const sbg = s.color || '#3ecf74';
       return `<div class="week-task-card cal-chip-stage cal-chip-stage-${s.stageEvent}" data-stage-id="${s.stage_id}"
            style="background:${sbg};color:${contrastColor(sbg)}">
-        <div class="wt-title">${icon} ${escHtml(s.displayTitle)}</div>
+        <div class="wt-title">${icon} ${escHtml(s.name)}</div>
         ${s.projName ? `<div class="wt-sub">${escHtml(s.projName)}</div>` : ''}
       </div>`;
     }).join('');
@@ -1497,7 +1516,7 @@ function renderDaily() {
     html += `<div class="daily-stage-row" data-stage-id="${s.stage_id}" style="border-left:4px solid ${s.color || '#3ecf74'}">
       <div class="daily-stage-flag">${icon}</div>
       <div class="daily-stage-info">
-        <div class="daily-stage-title">${escHtml(s.projName ? s.projName + ' · ' + s.displayTitle : s.displayTitle)}</div>
+        <div class="daily-stage-title">${escHtml(s.projName ? s.projName + ' · ' + s.name : s.name)}</div>
         <div class="daily-stage-sub">${sub}${s.start_date && s.end_date ? ` · ${s.start_date} → ${s.end_date}` : ''}</div>
       </div>
     </div>`;
@@ -3707,6 +3726,7 @@ let _catDragSrc = null;
 function wireCatalog() {
   document.getElementById('open-catalog-btn')?.addEventListener('click', () => {
     _catalogTab = 'mat';
+    document.querySelectorAll('.catalog-tab').forEach(button => button.classList.toggle('active', button.dataset.tab === 'mat'));
     document.getElementById('settings-modal').classList.add('hidden');
     document.getElementById('catalog-overlay').classList.remove('hidden');
     renderCatalogTab('mat');
@@ -3730,6 +3750,7 @@ function wireCatalog() {
 
 function renderCatalogTab(type) {
   const body = document.getElementById('catalog-body');
+  if (type === 'hours') { renderTimeCategorySettings(body); return; }
   if (type === 'excl')  { renderCatalogSimpleList(body, PRESET_EXCLUSIONS, 'excl',  'Omschrijving'); return; }
   if (type === 'check') { renderCatalogSimpleList(body, PRESET_CHECKLIST,  'check', 'Checklistpunt'); return; }
 
@@ -4084,6 +4105,65 @@ function formatHours(value) {
   return Number(value).toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 }
 
+function renderTimeCategorySettings(body) {
+  if (!state.timeCategoriesAvailable) {
+    body.innerHTML = `<div class="catalog-empty-note"><strong>Urencategorieën zijn nog niet beschikbaar op de server.</strong><br>Werk eerst de Raspberry Pi-server bij.</div>`;
+    return;
+  }
+  const categories = state.timeCategories;
+  body.innerHTML = `
+    <div class="catalog-help">Deze categorieën verschijnen onder <strong>Overig — niet declarabel</strong> bij de ureninvoer. Deactiveren bewaart bestaande boekingen.</div>
+    <table class="catalog-table time-category-table">
+      <thead><tr><th style="width:72px">Volgorde</th><th>Naam</th><th style="width:100px">Beschikbaar</th></tr></thead>
+      <tbody>${categories.map((category, index) => `
+        <tr data-category-id="${category.id}" class="${category.active ? '' : 'catalog-row-inactive'}">
+          <td><div class="catalog-order-actions"><button data-category-up="${category.id}" ${index === 0 ? 'disabled' : ''}>↑</button><button data-category-down="${category.id}" ${index === categories.length - 1 ? 'disabled' : ''}>↓</button></div></td>
+          <td><input class="catalog-input" data-category-name="${category.id}" value="${escHtml(category.name)}" placeholder="Categorienaam" /></td>
+          <td><label class="catalog-active-toggle"><input type="checkbox" data-category-active="${category.id}" ${category.active ? 'checked' : ''} /><span>${category.active ? 'Actief' : 'Inactief'}</span></label></td>
+        </tr>`).join('')}</tbody>
+    </table>
+    <button class="catalog-add-btn" id="time-category-add">＋ Categorie toevoegen</button>`;
+
+  const saveCategory = async (id, data) => {
+    await remoteQuery({ action: 'update', table: 'time_categories', data, where: { id } });
+    await loadTimeCategories();
+  };
+  body.querySelectorAll('[data-category-name]').forEach(input => {
+    input.onchange = async () => {
+      const name = input.value.trim();
+      if (!name) { toast('Een categorie heeft een naam nodig', 'warn'); renderTimeCategorySettings(body); return; }
+      await saveCategory(Number(input.dataset.categoryName), { name });
+      toast('Urencategorie bijgewerkt');
+    };
+  });
+  body.querySelectorAll('[data-category-active]').forEach(input => {
+    input.onchange = async () => {
+      await saveCategory(Number(input.dataset.categoryActive), { active: input.checked ? 1 : 0 });
+      renderTimeCategorySettings(body);
+      toast(input.checked ? 'Categorie geactiveerd' : 'Categorie gedeactiveerd');
+    };
+  });
+  const moveCategory = async (id, direction) => {
+    const index = categories.findIndex(category => Number(category.id) === Number(id));
+    const other = categories[index + direction];
+    if (index < 0 || !other) return;
+    await Promise.all([
+      remoteQuery({ action: 'update', table: 'time_categories', data: { sort_order: other.sort_order }, where: { id: categories[index].id } }),
+      remoteQuery({ action: 'update', table: 'time_categories', data: { sort_order: categories[index].sort_order }, where: { id: other.id } }),
+    ]);
+    await loadTimeCategories();
+    renderTimeCategorySettings(body);
+  };
+  body.querySelectorAll('[data-category-up]').forEach(button => { button.onclick = () => moveCategory(button.dataset.categoryUp, -1); });
+  body.querySelectorAll('[data-category-down]').forEach(button => { button.onclick = () => moveCategory(button.dataset.categoryDown, 1); });
+  document.getElementById('time-category-add').onclick = async () => {
+    const result = await remoteQuery({ action: 'insert', table: 'time_categories', data: { name: 'Nieuwe categorie', active: 1, sort_order: categories.length } });
+    await loadTimeCategories();
+    renderTimeCategorySettings(body);
+    body.querySelector(`[data-category-name="${result.id}"]`)?.select();
+  };
+}
+
 function hoursDateLabel(dateStr) {
   return new Date(`${dateStr}T12:00:00`).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
@@ -4093,12 +4173,16 @@ function renderHours() {
   const content = document.getElementById('content');
   const entries = state.timeEntries.filter(e => e.entry_date === state.hoursDate);
   const projectsById = new Map(state.projects.map(p => [Number(p.id), p]));
+  const categoriesById = new Map(state.timeCategories.map(category => [Number(category.id), category]));
   const activeProjects = state.projects.filter(p => p.status === 'active');
   const editing = state.editingTimeEntry;
   const editProject = editing ? projectsById.get(Number(editing.project_id)) : null;
   const inactiveProjects = state.projects.filter(p => p.status !== 'active');
   let availableProjects = state.hoursShowInactive ? [...activeProjects, ...inactiveProjects] : [...activeProjects];
   if (editProject && !availableProjects.some(p => Number(p.id) === Number(editProject.id))) availableProjects.unshift(editProject);
+  const editCategory = editing?.category_id ? categoriesById.get(Number(editing.category_id)) : null;
+  const availableCategories = state.timeCategories.filter(category => category.active || Number(category.id) === Number(editCategory?.id));
+  const editingDestination = editing?.category_id ? `category:${editing.category_id}` : (editing?.project_id ? `project:${editing.project_id}` : '');
   const statusLabels = { done: 'afgerond', on_hold: 'in de wacht', rejected: 'afgewezen' };
   const dayTotal = entries.reduce((sum, e) => sum + Number(e.hours), 0);
   const myName = state.config?.name || '';
@@ -4114,7 +4198,7 @@ function renderHours() {
 
   content.innerHTML = `
     <div class="hours-page">
-      ${state.timeTrackingAvailable ? '' : '<div class="hours-server-warning"><strong>Urenregistratie is nog niet beschikbaar op deze server.</strong><span>Werk eerst de Raspberry Pi-server bij en klik daarna op Refresh.</span></div>'}
+      ${state.timeTrackingAvailable && state.timeCategoriesAvailable ? '' : '<div class="hours-server-warning"><strong>De nieuwste urenregistratie is nog niet beschikbaar op deze server.</strong><span>Werk eerst de Raspberry Pi-server bij en klik daarna op Refresh.</span></div>'}
       <section class="hours-entry-card">
         <div class="hours-date-nav">
           <button class="hours-date-step" id="hours-prev" aria-label="Vorige dag">←</button>
@@ -4124,12 +4208,12 @@ function renderHours() {
           <button class="btn btn-ghost btn-sm" id="hours-today">Vandaag</button>
         </div>
         <div class="hours-total-strip"><div><span>Jij</span><strong>${formatHours(myTotal)} uur</strong></div><div><span>Team vandaag</span><strong>${formatHours(dayTotal)} uur</strong></div></div>
-        <form id="hours-form" class="hours-form"${state.timeTrackingAvailable ? '' : ' aria-disabled="true"'}>
+        <form id="hours-form" class="hours-form"${state.timeTrackingAvailable && state.timeCategoriesAvailable ? '' : ' aria-disabled="true"'}>
           <div class="hours-form-heading">${editing ? 'Boeking aanpassen' : 'Nieuwe boeking'}</div>
           <div class="hours-field"><label for="hours-employee">Medewerker</label><select id="hours-employee" required>${employeeNames.map(name => `<option value="${escHtml(name)}"${name === selectedEmployee ? ' selected' : ''}>${escHtml(name)}${name === myName ? ' (jij)' : ''}</option>`).join('')}</select></div>
-          <div class="hours-field hours-project-field"><label for="hours-project">Project</label><select id="hours-project" required><option value="">Kies een project…</option>${availableProjects.map(p => `<option value="${p.id}"${Number(editing?.project_id) === Number(p.id) ? ' selected' : ''}>${escHtml(p.name)}${p.status !== 'active' ? ` — ${statusLabels[p.status] || 'niet actief'}` : ''}</option>`).join('')}</select><label class="hours-inactive-toggle"><input id="hours-show-inactive" type="checkbox"${state.hoursShowInactive ? ' checked' : ''} /> Toon ook niet-actieve projecten</label></div>
+          <div class="hours-field hours-project-field"><label for="hours-project">Project / overig</label><select id="hours-project" required><option value="">Maak een keuze…</option><optgroup label="ACTIEVE PROJECTEN">${availableProjects.map(p => `<option value="project:${p.id}"${editingDestination === `project:${p.id}` ? ' selected' : ''}>${escHtml(p.name)}${p.status !== 'active' ? ` — ${statusLabels[p.status] || 'niet actief'}` : ''}</option>`).join('')}</optgroup><optgroup label="OVERIG — NIET DECLARABEL">${availableCategories.map(category => `<option value="category:${category.id}"${editingDestination === `category:${category.id}` ? ' selected' : ''}>${escHtml(category.name)}${category.active ? '' : ' — inactief'}</option>`).join('')}</optgroup></select><label class="hours-inactive-toggle"><input id="hours-show-inactive" type="checkbox"${state.hoursShowInactive ? ' checked' : ''} /> Toon ook niet-actieve projecten</label></div>
           <div class="hours-field"><label for="hours-amount">Aantal uren</label><input id="hours-amount" type="number" min="0.5" step="0.5" inputmode="decimal" placeholder="0" value="${editing ? Number(editing.hours) : ''}" required /></div>
-          <button class="btn btn-primary hours-save" type="submit"${state.timeTrackingAvailable ? '' : ' disabled'}>${editing ? 'Wijziging opslaan' : 'Uren opslaan'}</button>
+          <button class="btn btn-primary hours-save" type="submit"${state.timeTrackingAvailable && state.timeCategoriesAvailable ? '' : ' disabled'}>${editing ? 'Wijziging opslaan' : 'Uren opslaan'}</button>
           ${editing ? '<button class="btn btn-ghost" type="button" id="hours-cancel">Annuleren</button>' : ''}
         </form>
       </section>
@@ -4139,8 +4223,10 @@ function renderHours() {
           const employeeTotal = employeeEntries.reduce((sum, e) => sum + Number(e.hours), 0);
           return `<div class="hours-person-group"><div class="hours-person-heading"><span>${escHtml(employee)}</span><strong>${formatHours(employeeTotal)} uur</strong></div>${employeeEntries.map(entry => {
             const project = projectsById.get(Number(entry.project_id));
-            const color = /^#[0-9a-f]{6}$/i.test(project?.color || '') ? project.color : '#13ABBD';
-            return `<div class="hours-row"><span class="hours-project-dot" style="background:${color}"></span><span class="hours-project-name">${escHtml(project?.name || 'Verwijderd project')}</span><strong>${formatHours(entry.hours)} uur</strong><button class="hours-row-action" data-hours-edit="${entry.id}">Wijzig</button><button class="hours-row-action danger" data-hours-delete="${entry.id}">Verwijder</button></div>`;
+            const category = categoriesById.get(Number(entry.category_id));
+            const color = project && /^#[0-9a-f]{6}$/i.test(project.color || '') ? project.color : '#9a8f83';
+            const destination = project?.name || category?.name || (entry.category_id ? 'Verwijderde categorie' : 'Verwijderd project');
+            return `<div class="hours-row"><span class="hours-project-dot" style="background:${color}"></span><span class="hours-project-name">${escHtml(destination)}${category ? '<small>Niet declarabel</small>' : ''}</span><strong>${formatHours(entry.hours)} uur</strong><button class="hours-row-action" data-hours-edit="${entry.id}">Wijzig</button><button class="hours-row-action danger" data-hours-delete="${entry.id}">Verwijder</button></div>`;
           }).join('')}</div>`;
         }).join('') : '<div class="hours-empty">Kies een project en vul je eerste uren van deze dag in.</div>'}</div>
       </section>
@@ -4169,14 +4255,16 @@ function renderHours() {
   };
   document.getElementById('hours-form').onsubmit = async event => {
     event.preventDefault();
-    if (!state.timeTrackingAvailable) return;
-    const projectId = Number(document.getElementById('hours-project').value);
+    if (!state.timeTrackingAvailable || !state.timeCategoriesAvailable) return;
+    const destination = document.getElementById('hours-project').value;
+    const [destinationType, destinationIdRaw] = destination.split(':');
+    const destinationId = Number(destinationIdRaw);
     const hours = Number(document.getElementById('hours-amount').value);
-    if (!projectId || !Number.isFinite(hours) || hours <= 0 || !Number.isInteger(hours * 2)) { toast('Kies een project en vul uren in per half uur', 'warn', 3500); return; }
+    if (!['project', 'category'].includes(destinationType) || !destinationId || !Number.isFinite(hours) || hours <= 0 || !Number.isInteger(hours * 2)) { toast('Maak een keuze en vul uren in per half uur', 'warn', 3500); return; }
     const employee = document.getElementById('hours-employee').value;
     const otherHours = entries.filter(e => e.employee === employee && Number(e.id) !== Number(editing?.id)).reduce((sum, e) => sum + Number(e.hours), 0);
     if (otherHours + hours > 12 && !window.confirm(`${employee} komt hiermee op ${formatHours(otherHours + hours)} uur voor deze dag. Toch opslaan?`)) return;
-    const data = { entry_date: state.hoursDate, hours, project_id: projectId, employee, updated_at: new Date().toISOString() };
+    const data = { entry_date: state.hoursDate, hours, project_id: destinationType === 'project' ? destinationId : null, category_id: destinationType === 'category' ? destinationId : null, employee, updated_at: new Date().toISOString() };
     try {
       if (editing) await remoteQuery({ action: 'update', table: 'time_entries', data, where: { id: editing.id } });
       else await remoteQuery({ action: 'insert', table: 'time_entries', data });
@@ -6307,9 +6395,11 @@ function renderQuoteEditorView() {
   // Geaccepteerde offertes blijven bewerkbaar, maar nooit per ongeluk: de eerste
   // interactie met een bewerkbaar element wordt afgevangen en vraagt bevestiging.
   if (qe.status === 'accepted' && !_qeAcceptedEditConfirmed) {
-    const editableSelector = 'input, textarea, select, .qe-add-btn, .qe-img-btn, .qe-extra-del, .qe-extra-add-btn, #qe-ai-gen-btn, #qe-project-link-clear, #qe-save-as-client';
+    const editableSelector = 'input, textarea, select, button';
     const guardAcceptedEdit = e => {
       if (_qeAcceptedEditConfirmed || !e.target.closest?.(editableSelector)) return;
+      if (e.target.closest('.preset-search, .excl-new-input, .qe-add-btn')) return;
+      if (e.type === 'pointerdown' && e.target.matches('textarea, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="date"])')) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       if (confirm('Deze offerte is al geaccepteerd. Weet je zeker dat je haar wilt wijzigen?')) {
