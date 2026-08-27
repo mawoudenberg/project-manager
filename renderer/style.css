@@ -1852,6 +1852,33 @@ tr:hover .qi-del { opacity: 1; }
 .gmt-btn:hover { background: var(--bg3); color: var(--text); }
 .gmt-btn.active { background: var(--accent); color: #fff; }
 
+.gantt-zoom {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.gantt-zoom button {
+  min-height: 0;
+  border: 0;
+  background: none;
+  color: var(--text2);
+  cursor: pointer;
+}
+.gantt-zoom button:hover:not(:disabled) { background: var(--bg3); color: var(--text); }
+.gantt-zoom button:disabled { opacity: .35; cursor: default; }
+.gantt-zoom-btn { width: 28px; padding: 0; font-size: 17px; line-height: 1; }
+.gantt-zoom-value {
+  min-width: 48px;
+  padding: 5px 7px;
+  border-left: 1px solid var(--border) !important;
+  border-right: 1px solid var(--border) !important;
+  font-size: 11px;
+  font-weight: 600;
+}
+
 /* ─── Gantt project filter panel ──────────────────────────────────────────── */
 .gantt-proj-filter-wrap { position: relative; }
 .gantt-proj-panel {
@@ -2409,6 +2436,7 @@ tr:hover .qi-del { opacity: 1; }
   .cal-nav { gap: 6px; flex-wrap: nowrap; }
   .cal-nav > span { min-width: 0; font-size: 13px; white-space: nowrap; }
   .gantt-mode-toggle .gmt-btn { padding: 4px 8px; font-size: 11px; }
+  .gantt-zoom-value { min-width: 42px; padding: 4px 5px; }
   .mt-toolbar { gap: 6px; }
 
   /* ── Cal filter bar: collapsible ── */

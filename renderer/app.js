@@ -25,6 +25,7 @@ const MONTHS = [
   'January','February','March','April','May','June',
   'July','August','September','October','November','December',
 ];
+const GANTT_ZOOM_LEVELS = [50, 75, 100, 150, 200];
 
 /* ─── State ────────────────────────────────────────────────────────────────── */
 let state = {
@@ -61,6 +62,8 @@ let state = {
   activeProject: null,
   expandedProjects: new Set(),
   ganttMode: 'week',   // 'week' | 'day'
+  ganttZoom: GANTT_ZOOM_LEVELS.includes(Number(localStorage.getItem('ganttZoom')))
+    ? Number(localStorage.getItem('ganttZoom')) : 100,
   ganttHideInactive: true,
   ganttHideWeekends: false,
   ganttHiddenProjects: new Set(), // project IDs explicitly hidden by user
@@ -1588,6 +1591,15 @@ function renderGantt() {
   else renderGanttWeek();
 }
 
+function setGanttZoom(direction) {
+  const currentIndex = Math.max(0, GANTT_ZOOM_LEVELS.indexOf(state.ganttZoom));
+  const nextIndex = Math.max(0, Math.min(GANTT_ZOOM_LEVELS.length - 1, currentIndex + direction));
+  if (nextIndex === currentIndex) return;
+  state.ganttZoom = GANTT_ZOOM_LEVELS[nextIndex];
+  localStorage.setItem('ganttZoom', String(state.ganttZoom));
+  renderGantt();
+}
+
 function ganttToolbarNav(label, prevFn, nextFn) {
   const ctrl = document.getElementById('toolbar-controls');
   ctrl.innerHTML = `
@@ -1599,6 +1611,11 @@ function ganttToolbarNav(label, prevFn, nextFn) {
       <div class="gantt-mode-toggle">
         <button class="gmt-btn${state.ganttMode==='week'?' active':''}" id="gmt-week">Weken</button>
         <button class="gmt-btn${state.ganttMode==='day'?' active':''}" id="gmt-day">Dagen</button>
+      </div>
+      <div class="gantt-zoom" aria-label="Zoomniveau Gantt">
+        <button class="gantt-zoom-btn" id="gnt-zoom-out" title="Uitzoomen" aria-label="Uitzoomen" ${state.ganttZoom === GANTT_ZOOM_LEVELS[0] ? 'disabled' : ''}>−</button>
+        <button class="gantt-zoom-value" id="gnt-zoom-reset" title="Zoom herstellen naar 100%">${state.ganttZoom}%</button>
+        <button class="gantt-zoom-btn" id="gnt-zoom-in" title="Inzoomen" aria-label="Inzoomen" ${state.ganttZoom === GANTT_ZOOM_LEVELS[GANTT_ZOOM_LEVELS.length - 1] ? 'disabled' : ''}>+</button>
       </div>
       <button class="btn btn-sm${state.ganttHideInactive?' btn-primary':' btn-ghost'}" id="gnt-filter-btn">
         ${state.ganttHideInactive ? 'Toon alles' : 'Alleen actief'}
@@ -1618,6 +1635,13 @@ function ganttToolbarNav(label, prevFn, nextFn) {
   document.getElementById('gnt-next').onclick = nextFn;
   document.getElementById('gmt-week').onclick = () => { state.ganttMode = 'week'; renderGantt(); };
   document.getElementById('gmt-day').onclick  = () => { state.ganttMode = 'day';  renderGantt(); };
+  document.getElementById('gnt-zoom-out').onclick = () => setGanttZoom(-1);
+  document.getElementById('gnt-zoom-in').onclick = () => setGanttZoom(1);
+  document.getElementById('gnt-zoom-reset').onclick = () => {
+    state.ganttZoom = 100;
+    localStorage.setItem('ganttZoom', '100');
+    renderGantt();
+  };
   document.getElementById('gnt-filter-btn').onclick = () => { state.ganttHideInactive = !state.ganttHideInactive; renderGantt(); };
   document.getElementById('gnt-we-btn')?.addEventListener('click', () => { state.ganttHideWeekends = !state.ganttHideWeekends; renderGantt(); });
 
@@ -1686,8 +1710,8 @@ function renderGanttProjPanel(panel) {
 
 /* ─── Gantt Week View (Projects, multi-week overview) ──────────────────────── */
 function renderGanttWeek() {
-  const N_WEEKS  = 12;   // columns visible at once
-  const NAV_STEP = 4;    // weeks to jump per prev/next click
+  const N_WEEKS  = Math.round(12 * 100 / state.ganttZoom);
+  const NAV_STEP = Math.max(1, Math.round(N_WEEKS / 3));
   const content  = document.getElementById('content');
   // Clear workday globals (only used in day-view no-weekends mode)
   ganttWorkdays = null;
@@ -2065,6 +2089,15 @@ function wireGanttInteractions(rangeStart, totalDays) {
   // Attach wheel to full content area so it works even when cursor is below the gantt rows
   let wheelAccum = 0;
   content.addEventListener('wheel', e => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      wheelAccum += e.deltaY;
+      if (Math.abs(wheelAccum) < 40) return;
+      const direction = wheelAccum < 0 ? 1 : -1;
+      wheelAccum = 0;
+      setGanttZoom(direction);
+      return;
+    }
     const isHorizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
     const isShift = e.shiftKey;
     if (!isHorizontal && !isShift) return; // let vertical scroll through naturally
@@ -2148,8 +2181,8 @@ function wireGanttInteractions(rangeStart, totalDays) {
 
 /* ─── Gantt Day View (30-day, day-level precision) ─────────────────────────── */
 function renderGanttDay() {
-  const N_DAYS    = 30;
-  const NAV_STEP  = 7;
+  const N_DAYS    = Math.round(30 * 100 / state.ganttZoom);
+  const NAV_STEP  = Math.max(1, Math.round(N_DAYS / 4));
   const content   = document.getElementById('content');
   const todayStr  = toDateStr(state.today);
 
@@ -2158,10 +2191,10 @@ function renderGanttDay() {
   anchor.setHours(0, 0, 0, 0);
   const hideWE = state.ganttHideWeekends;
 
-  // Generate days: 30 calendar days, or 22 working days (Mon–Fri) when hiding weekends
+  // Generate the zoom-dependent number of calendar or working days.
   const days = [];
   { let cur = new Date(anchor);
-    const target = hideWE ? 22 : N_DAYS;
+    const target = hideWE ? Math.max(5, Math.round(N_DAYS * 22 / 30)) : N_DAYS;
     while (days.length < target) {
       const dow = cur.getDay();
       if (!hideWE || (dow !== 0 && dow !== 6)) days.push(new Date(cur));
