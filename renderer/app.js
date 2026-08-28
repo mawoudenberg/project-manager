@@ -58,6 +58,7 @@ let state = {
   hoursInsightEnd: '',
   hoursBudgetByProject: null,
   hoursBudgetLoading: false,
+  hoursBudgetLoadedAt: 0,
   editingTimeEntry: null,
   activeProject: null,
   expandedProjects: new Set(),
@@ -340,6 +341,7 @@ async function changeQuoteStatus(quote, newStatus) {
   }
   Object.assign(quote, data);
   await remoteQuery({ action: 'update', table: 'quotes', data, where: { id: quote.id } });
+  invalidateHoursBudgets();
   const linkName = (quote.project_name || quote.name || '').trim();
   if (!linkName) return;
   if (newStatus === 'sent' || newStatus === 'accepted') {
@@ -488,7 +490,16 @@ function startApiPolling() {
         JSON.stringify(timeEntries) !== JSON.stringify(state.timeEntries) ||
         JSON.stringify(timeCategories) !== JSON.stringify(state.timeCategories);
 
-      if (!changed) return;
+      if (!changed) {
+        // Quotes zijn geen onderdeel van de algemene poll. Ververs de aparte
+        // urenbegroting wel zolang het inzichtscherm openstaat, zodat een offerte
+        // die op een ander apparaat is aangepast binnen enkele seconden meetelt.
+        if (state.view === 'hours' && state.hoursView === 'insight' && Date.now() - state.hoursBudgetLoadedAt >= 30000) {
+          invalidateHoursBudgets();
+          renderHours();
+        }
+        return;
+      }
 
       state.tasks      = tasks;
       state.projects   = projects;
@@ -4252,8 +4263,8 @@ async function loadHoursBudgets() {
   state.hoursBudgetLoading = true;
   try {
     const [quotes, items] = await Promise.all([
-      remoteQuery({ action: 'select', table: 'quotes', where: { status: 'accepted' } }),
-      remoteQuery({ action: 'select', table: 'quote_items' }),
+      remoteQuery({ action: 'select', table: 'quotes', where: { status: 'accepted' }, columns: ['id', 'name', 'project_name'] }),
+      remoteQuery({ action: 'select', table: 'quote_items', columns: ['quote_id', 'type', 'quantity', 'enabled', 'is_outsourced'] }),
     ]);
     const quoteProjectNames = new Map((quotes || []).map(quote => [
       Number(quote.id),
@@ -4268,14 +4279,24 @@ async function loadHoursBudgets() {
       budgets.set(projectName, (budgets.get(projectName) || 0) + hours);
     });
     state.hoursBudgetByProject = budgets;
+    state.hoursBudgetLoadedAt = Date.now();
   } catch (error) {
     console.warn('Begrote projecturen laden mislukt:', error);
     state.hoursBudgetByProject = new Map();
+    state.hoursBudgetLoadedAt = Date.now();
     toast('Begrote projecturen konden niet worden geladen', 'warn', 4000);
   } finally {
     state.hoursBudgetLoading = false;
     if (state.view === 'hours' && state.hoursView === 'insight') renderHours();
   }
+}
+
+// Offerte-uren worden apart opgehaald en gecachet. Maak die cache leeg zodra een
+// offerte lokaal verandert, of periodiek in API-modus zodat wijzigingen vanaf de
+// mobiele/webversie ook vanzelf in de urenbewaking verschijnen.
+function invalidateHoursBudgets() {
+  state.hoursBudgetByProject = null;
+  state.hoursBudgetLoadedAt = 0;
 }
 
 function renderHoursInsight() {
@@ -5757,6 +5778,7 @@ function _renderQuoteTable() {
       if (!confirm(`Verwijder offerte "${quote.name}"?`)) return;
       await cleanupVariantGroup(quote.id, quote.variant_group);
       await remoteQuery({ action: 'delete', table: 'quotes', where: { id: quote.id } });
+      invalidateHoursBudgets();
       _allQuotes = _allQuotes.filter(q => q.id !== quote.id);
       toast(`Offerte "${quote.name}" verwijderd`);
       _renderQuoteTable();
@@ -7571,6 +7593,7 @@ async function performSave() {
     });
     quoteId = saved.id;
     qe.id = quoteId;
+    invalidateHoursBudgets();
 
     // Cleanup legacy localStorage entries (now stored in DB)
     if (quoteId) {
@@ -7615,6 +7638,7 @@ async function deleteQuote() {
   if (!confirm(`Offerte "${qe.name}" verwijderen?`)) return;
   await cleanupVariantGroup(qe.id, qe.variant_group);
   await remoteQuery({ action: 'delete', table: 'quotes', where: { id: qe.id } });
+  invalidateHoursBudgets();
   qe = null;
   toast('Offerte verwijderd');
   setView('quotes');
@@ -9640,6 +9664,7 @@ function updateSyncPill(text, type) {
 
 function initListeners() {
   api.onDbChanged(async () => {
+    invalidateHoursBudgets();
     await loadAll();
     renderView();
   });
