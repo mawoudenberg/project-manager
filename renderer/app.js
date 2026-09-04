@@ -239,6 +239,9 @@ async function createProjectFromQuote(quoteName, askFirst = true, initialStatus 
   if (!name) return;
   const existing = state.projects.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
   if (existing) {
+    // Also repair an existing but incomplete folder. A PDF may have created
+    // only its Offertes subfolder before the template copy had completed.
+    await createProjectFolder(name);
     // A project may have been prepared while the quote was still pending. Once
     // accepted, promote that same project instead of leaving it hidden on hold.
     if (initialStatus === 'active' && existing.status === 'on_hold') {
@@ -258,7 +261,9 @@ async function createProjectFromQuote(quoteName, askFirst = true, initialStatus 
       description: '',
     }});
     state.projects = await remoteQuery({ action: 'select', table: 'projects' });
-    createProjectFolder(name); // fire-and-forget
+    // Wait until the template structure exists before another action (notably
+    // PDF export) is allowed to create a partial project folder.
+    await createProjectFolder(name);
     toast(initialStatus === 'on_hold'
       ? `📁 Project "${name}" aangemaakt — in de wacht tot acceptatie`
       : `📁 Project "${name}" aangemaakt`);
@@ -697,7 +702,11 @@ function setView(view) {
     });
     return;
   }
-  if (state.view === 'quote-editor') { qe = null; _qeDirty = false; }
+  if (state.view === 'quote-editor') {
+    clearAcceptedQuoteEditGuard();
+    qe = null;
+    _qeDirty = false;
+  }
   state.view = view;
   state.activeProject = null;
   document.querySelectorAll('.nav-btn[data-view]').forEach(b => {
@@ -2844,7 +2853,7 @@ function wireProjectModal() {
       await remoteQuery({ action: 'update', table: 'projects', data, where: { id: state.editingProject.id } });
     } else {
       await remoteQuery({ action: 'insert', table: 'projects', data });
-      createProjectFolder(data.name); // fire-and-forget
+      await createProjectFolder(data.name);
     }
     moveProjectFolder(data.name, data.status); // fire-and-forget: sync folder location to status
     await Promise.all([loadProjects(), loadStages()]);
@@ -4264,7 +4273,7 @@ async function loadHoursBudgets() {
   try {
     const [quotes, items] = await Promise.all([
       remoteQuery({ action: 'select', table: 'quotes', where: { status: 'accepted' }, columns: ['id', 'name', 'project_name'] }),
-      remoteQuery({ action: 'select', table: 'quote_items', columns: ['quote_id', 'type', 'quantity', 'enabled', 'is_outsourced'] }),
+      remoteQuery({ action: 'select', table: 'quote_items', columns: ['quote_id', 'type', 'name', 'quantity', 'enabled', 'is_outsourced'] }),
     ]);
     const quoteProjectNames = new Map((quotes || []).map(quote => [
       Number(quote.id),
@@ -4274,6 +4283,9 @@ async function loadHoursBudgets() {
     (items || []).forEach(item => {
       const projectName = quoteProjectNames.get(Number(item.quote_id));
       if (!projectName || item.type !== 'service' || item.enabled === 0 || item.is_outsourced) return;
+      // 3D-printtijd is machinecapaciteit, geen menselijke arbeid. De regel en
+      // prijs blijven in de offerte staan, maar tellen niet mee in het urenbudget.
+      if (/^3d[\s-]*print/i.test(String(item.name || '').trim())) return;
       const hours = Number(item.quantity);
       if (!Number.isFinite(hours)) return;
       budgets.set(projectName, (budgets.get(projectName) || 0) + hours);
@@ -5445,7 +5457,13 @@ let qe = null;
 let _qeDirty = false;
 let _quoteBundle = null;
 let _qeAcceptedEditConfirmed = false;
+let _qeAcceptedGuardCleanup = null;
 function markQEDirty() { _qeDirty = true; }
+
+function clearAcceptedQuoteEditGuard() {
+  _qeAcceptedGuardCleanup?.();
+  _qeAcceptedGuardCleanup = null;
+}
 
 // Vaste-stuksprijs-regels uit extras_json, met terugval op het oude formaat (één
 // fixed_price/fixed_qty) voor offertes die zijn opgeslagen vóórdat meerdere regels
@@ -6360,6 +6378,10 @@ async function saveQuoteBundlePoNumber() {
 }
 
 function renderQuoteEditorView() {
+  // `#content` is shared by every app view. Remove a guard installed by an
+  // earlier editor render before wiring this one, otherwise it would keep
+  // intercepting clicks in e.g. the calendar and task views.
+  clearAcceptedQuoteEditGuard();
   const ctrl = document.getElementById('toolbar-controls');
   ctrl.innerHTML = `
     <button class="btn btn-ghost btn-sm" id="qe-back">← Offertes</button>
@@ -6629,8 +6651,12 @@ function renderQuoteEditorView() {
   // Geaccepteerde offertes blijven bewerkbaar, maar nooit per ongeluk: de eerste
   // interactie met een bewerkbaar element wordt afgevangen en vraagt bevestiging.
   if (qe.status === 'accepted' && !_qeAcceptedEditConfirmed) {
+    const guardedQuote = qe;
     const editableSelector = 'input, textarea, select, button';
     const guardAcceptedEdit = e => {
+      // The content container is reused across views. This identity check is a
+      // second line of defence in case navigation happens outside setView().
+      if (state.view !== 'quote-editor' || qe !== guardedQuote) return;
       if (_qeAcceptedEditConfirmed || !e.target.closest?.(editableSelector)) return;
       if (e.target.closest('.preset-search, .excl-new-input, .qe-add-btn')) return;
       if (e.type === 'pointerdown' && e.target.matches('textarea, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="date"])')) return;
@@ -6644,6 +6670,10 @@ function renderQuoteEditorView() {
     };
     content.addEventListener('pointerdown', guardAcceptedEdit, true);
     content.addEventListener('beforeinput', guardAcceptedEdit, true);
+    _qeAcceptedGuardCleanup = () => {
+      content.removeEventListener('pointerdown', guardAcceptedEdit, true);
+      content.removeEventListener('beforeinput', guardAcceptedEdit, true);
+    };
   }
 
   // Wire preset dropdown menus
@@ -9507,6 +9537,10 @@ ${extraImagesPage}
 
     const projectName = quoteProjectName();
     if (!projectName) { toast('Geen projectnaam — sla de offerte eerst op', 'error'); return; }
+
+    // PDF export can also be the first filesystem action for an older quote.
+    // Ensure/repair the complete template structure before writing Offertes.
+    await createProjectFolder(projectName);
 
     const localDir = state.config?.localProjectsDir;
     if (localDir && api.savePdfLocal) {

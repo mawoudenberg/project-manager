@@ -519,13 +519,32 @@ def create_project_folder():
         safe_name = re.sub(r'[\\/:*?"<>|]', '', name).strip()
         if not safe_name:
             return jsonify({'error': 'invalid project name'}), 400
-        dest = os.path.join(PROJECTEN_DIR, safe_name)
-        if os.path.exists(dest):
-            return jsonify({'ok': True, 'created': False, 'path': dest, 'msg': 'folder already exists'})
         if not os.path.isdir(VOORBEELD_MAP):
             return jsonify({'error': 'Voorbeeld map not found', 'path': VOORBEELD_MAP}), 500
-        shutil.copytree(VOORBEELD_MAP, dest)
-        return jsonify({'ok': True, 'created': True, 'path': dest})
+        dest = os.path.join(PROJECTEN_DIR, safe_name)
+        created = not os.path.exists(dest)
+        os.makedirs(dest, exist_ok=True)
+
+        # Merge the template into an existing project as well. This repairs the
+        # partial-folder case where saving a PDF created Project/Offertes before
+        # this endpoint ran. Existing project files are deliberately preserved.
+        added = []
+        for root, dirs, files in os.walk(VOORBEELD_MAP):
+            relative = os.path.relpath(root, VOORBEELD_MAP)
+            target_root = dest if relative == '.' else os.path.join(dest, relative)
+            os.makedirs(target_root, exist_ok=True)
+            for directory in dirs:
+                target_dir = os.path.join(target_root, directory)
+                if not os.path.exists(target_dir):
+                    os.makedirs(target_dir)
+                    added.append(os.path.relpath(target_dir, dest))
+            for filename in files:
+                source_file = os.path.join(root, filename)
+                target_file = os.path.join(target_root, filename)
+                if not os.path.exists(target_file):
+                    shutil.copy2(source_file, target_file)
+                    added.append(os.path.relpath(target_file, dest))
+        return jsonify({'ok': True, 'created': created, 'updated': bool(added), 'added': added, 'path': dest})
     except Exception as e:
         import traceback
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
